@@ -26,6 +26,7 @@ set(APP_SOURCES
     src/app/TrayIcon.cpp
     src/ui/Renderer.cpp
     src/ui/MainWindow.cpp
+    src/ui/PopupWindow.cpp
     # Milestone 2 — clipboard core
     src/clipboard/ClipboardItem.cpp
     src/clipboard/ClipboardHistory.cpp

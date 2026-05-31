@@ -1,6 +1,7 @@
 #include "Application.h"
 #include "TrayIcon.h"
 #include "../ui/MainWindow.h"
+#include "../ui/PopupWindow.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardMonitor.h"
 
@@ -59,6 +60,10 @@ void Application::HideMainWindow() {
     ShowWindow(m_hwnd, SW_HIDE);
 }
 
+void Application::ShowPopup() {
+    if (m_popup) m_popup->Show();
+}
+
 // ── Private: initialisation ───────────────────────────────────────────────────
 
 bool Application::Init() {
@@ -102,6 +107,8 @@ bool Application::Init() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    io.ConfigViewportsNoTaskBarIcon = true;  // popup shouldn't appear in taskbar
     io.IniFilename  = nullptr;
 
     // Dark base style — ThemeManager replaces this in Milestone 8
@@ -138,6 +145,8 @@ bool Application::Init() {
         m_history->Push(std::move(item));
     });
 
+    m_popup = std::make_unique<PopupWindow>();
+
     // TODO (Milestone 5): only show on first launch
     ShowMainWindow();
 
@@ -172,6 +181,9 @@ void Application::RenderFrame() {
     if (m_mainVisible)
         MainWindow::Draw(m_mainVisible);
 
+    if (m_popup)
+        m_popup->Draw();
+
     ImGui::Render();
 
     constexpr float bg[4] = {0.118f, 0.118f, 0.118f, 1.0f}; // #1e1e1e
@@ -179,6 +191,10 @@ void Application::RenderFrame() {
     m_d3dContext->ClearRenderTargetView(m_renderTarget, bg);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     m_swapChain->Present(1, 0);
+
+    // Render any additional viewport windows (popup lives here)
+    ImGui::UpdatePlatformWindows();
+    ImGui::RenderPlatformWindowsDefault();
 }
 
 // ── Private: D3D11 ───────────────────────────────────────────────────────────
@@ -335,6 +351,10 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     case WM_SHOWCPP_MAIN:
         if (app) app->ShowMainWindow();
+        return 0;
+
+    case WM_SHOWPOPUP:
+        if (app) app->ShowPopup();
         return 0;
 
     case WM_DESTROY:

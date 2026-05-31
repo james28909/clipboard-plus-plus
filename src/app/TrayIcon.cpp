@@ -84,7 +84,7 @@ void TrayIcon::ShowContextMenu() {
         if (app) app->ShowMainWindow();
         break;
     case TRAY_CMD_POPUP:
-        // TODO (Milestone 3): show popup window
+        PostMessageW(m_hwnd, WM_SHOWPOPUP, 0, 0);
         break;
     case TRAY_CMD_INCOGNITO:
         SetIncognito(!m_incognito);
