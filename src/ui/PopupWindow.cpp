@@ -314,6 +314,12 @@ void PopupWindow::DrawItemList() {
 
 // ── Paste ─────────────────────────────────────────────────────────────────────
 
+void PopupWindow::PasteDirect(const ClipboardItem& item, HWND targetWindow) {
+    m_prevForeground = targetWindow;
+    WriteToClipboard(item);
+    RestoreFocusAndPaste();
+}
+
 void PopupWindow::PasteItem(const ClipboardItem& item) {
     WriteToClipboard(item);
     Hide();
@@ -465,9 +471,6 @@ void PopupWindow::ApplyOpacity() {
 
 LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
                                        WPARAM wParam, LPARAM lParam) {
-    if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
-        return TRUE;
-
     if (msg == WM_CREATE) {
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA,
@@ -478,6 +481,19 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
     auto* pw = reinterpret_cast<PopupWindow*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
+    // Switch to the popup's own ImGui context so WM_CHAR / WM_KEYDOWN from
+    // the keyboard hook land in the right input queue (search bar).
+    ImGuiContext* prevCtx = ImGui::GetCurrentContext();
+    if (pw && pw->m_imguiCtx)
+        ImGui::SetCurrentContext(pw->m_imguiCtx);
+
+    bool imgHandled = ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam) != 0;
+
+    if (pw && pw->m_imguiCtx)
+        ImGui::SetCurrentContext(prevCtx);
+
+    if (imgHandled) return TRUE;
+
     if (msg == WM_SIZE && pw && pw->m_swapChain) {
         pw->DestroyRenderTarget();
         pw->m_swapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam),
@@ -485,7 +501,6 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
         pw->CreateRenderTarget();
     }
 
-    // Clicking outside closes the popup
     if (msg == WM_KILLFOCUS && pw)
         pw->Hide();
 

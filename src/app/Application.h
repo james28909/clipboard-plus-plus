@@ -7,11 +7,14 @@ class TrayIcon;
 class ClipboardHistory;
 class ClipboardMonitor;
 class PopupWindow;
+class HotkeyManager;
+enum class HotkeyAction : WPARAM;
 
 // Message IDs used across the app
 constexpr UINT WM_TRAYICON     = WM_APP + 1;
 constexpr UINT WM_SHOWCPP_MAIN = WM_APP + 2;
 constexpr UINT WM_SHOWPOPUP    = WM_APP + 3;
+constexpr UINT WM_HOTKEYACTION = WM_APP + 4;
 
 class Application {
 public:
@@ -29,6 +32,7 @@ public:
     ID3D11DeviceContext* GetContext() const { return m_d3dContext; }
     ClipboardHistory*    GetHistory() const { return m_history.get(); }
     ClipboardMonitor*    GetMonitor() const { return m_monitor.get(); }
+    PopupWindow*         GetPopup()   const { return m_popup.get(); }
 
 private:
     bool Init();
@@ -54,6 +58,7 @@ private:
     std::unique_ptr<ClipboardHistory> m_history;
     std::unique_ptr<ClipboardMonitor> m_monitor;
     std::unique_ptr<PopupWindow>      m_popup;
+    std::unique_ptr<HotkeyManager>    m_hotkeys;
 
     bool m_running{false};
     bool m_mainVisible{false};

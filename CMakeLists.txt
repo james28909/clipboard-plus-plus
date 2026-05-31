@@ -27,6 +27,8 @@ set(APP_SOURCES
     src/ui/Renderer.cpp
     src/ui/MainWindow.cpp
     src/ui/PopupWindow.cpp
+    # Milestone 4 — hotkeys
+    src/hotkeys/HotkeyManager.cpp
     # Milestone 2 — clipboard core
     src/clipboard/ClipboardItem.cpp
     src/clipboard/ClipboardHistory.cpp

@@ -4,6 +4,7 @@
 #include "../ui/PopupWindow.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardMonitor.h"
+#include "../hotkeys/HotkeyManager.h"
 
 #include <imgui.h>
 #include <imgui_impl_win32.h>
@@ -147,6 +148,9 @@ bool Application::Init() {
     if (!m_popup->Create(m_hInstance, m_d3dDevice, m_d3dContext))
         return false;
 
+    m_hotkeys = std::make_unique<HotkeyManager>();
+    m_hotkeys->Install(m_hwnd);
+
     // TODO (Milestone 5): only show on first launch
     ShowMainWindow();
 
@@ -155,6 +159,7 @@ bool Application::Init() {
 }
 
 void Application::Shutdown() {
+    if (m_hotkeys) m_hotkeys->Uninstall();
     if (m_popup)   m_popup->Destroy();
     if (m_monitor) m_monitor->Stop();
     if (m_tray)    m_tray->Destroy();
@@ -353,6 +358,41 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     case WM_SHOWPOPUP:
         if (app) app->ShowPopup();
         return 0;
+
+    case WM_HOTKEYACTION: {
+        if (!app) return 0;
+        auto action = static_cast<HotkeyAction>(wParam);
+        int  data   = static_cast<int>(lParam);
+
+        switch (action) {
+        case HotkeyAction::TogglePopup:
+            if (app->m_popup) {
+                if (app->m_popup->IsVisible()) app->m_popup->Hide();
+                else                           app->m_popup->Show();
+            }
+            break;
+        case HotkeyAction::OpenSettings:
+            app->ShowMainWindow();
+            break;
+        case HotkeyAction::Incognito:
+            // TODO Milestone 9
+            break;
+        case HotkeyAction::PasteSlot: {
+            // Direct paste — no popup shown.
+            // Capture foreground window now, before any focus changes.
+            HWND target = GetForegroundWindow();
+            if (app->m_history && app->m_popup) {
+                const ClipboardItem* item =
+                    app->m_history->Get(static_cast<size_t>(data));
+                if (item)
+                    app->m_popup->PasteDirect(*item, target);
+            }
+            break;
+        }
+        default: break;
+        }
+        return 0;
+    }
 
     case WM_DESTROY:
         PostQuitMessage(0);

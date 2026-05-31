@@ -17,9 +17,14 @@ public:
     void Show();
     void Hide();
     bool IsVisible() const { return m_visible; }
+    HWND GetHwnd()   const { return m_hwnd; }
 
     // Called each frame from Application — renders the popup if visible.
     void Render();
+
+    // Paste a specific item without opening the popup (used by hotkey direct-paste).
+    // targetWindow is the HWND that should receive the Ctrl+V after we write to clipboard.
+    void PasteDirect(const ClipboardItem& item, HWND targetWindow);
 
     // Configurable
     float m_opacity{0.95f};
