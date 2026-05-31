@@ -1,0 +1,18 @@
+{
+  "name": "GitHub Light",
+  "background":     "#ffffff",
+  "background_alt": "#f6f8fa",
+  "foreground":     "#1f2328",
+  "text_secondary": "#656d76",
+  "accent":         "#0969da",
+  "accent_hover":   "#0550ae",
+  "selection":      "#ddf4ff",
+  "border":         "#d0d7de",
+  "item_hover":     "#f3f4f6",
+  "item_selected":  "#ddf4ff",
+  "scrollbar":      "#d0d7de",
+  "tag_url":        "#0550ae",
+  "tag_code":       "#116329",
+  "tag_image":      "#8250df",
+  "tag_secret":     "#cf222e"
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Solarized Dark",
+  "background":     "#002b36",
+  "background_alt": "#00212b",
+  "foreground":     "#839496",
+  "text_secondary": "#586e75",
+  "accent":         "#268bd2",
+  "accent_hover":   "#4aa3ea",
+  "selection":      "#073642",
+  "border":         "#586e75",
+  "item_hover":     "#073642",
+  "item_selected":  "#0d4a5a",
+  "scrollbar":      "#586e75",
+  "tag_url":        "#2aa198",
+  "tag_code":       "#859900",
+  "tag_image":      "#d33682",
+  "tag_secret":     "#dc322f"
+}

@@ -1,0 +1,18 @@
+{
+  "name": "GitHub Dark",
+  "background":     "#0d1117",
+  "background_alt": "#010409",
+  "foreground":     "#e6edf3",
+  "text_secondary": "#7d8590",
+  "accent":         "#2f81f7",
+  "accent_hover":   "#58a6ff",
+  "selection":      "#1f2937",
+  "border":         "#30363d",
+  "item_hover":     "#161b22",
+  "item_selected":  "#1f2937",
+  "scrollbar":      "#30363d",
+  "tag_url":        "#39c5cf",
+  "tag_code":       "#7ee787",
+  "tag_image":      "#d2a8ff",
+  "tag_secret":     "#ff7b72"
+}

@@ -1,0 +1,18 @@
+{
+  "name": "One Dark Pro",
+  "background":     "#282c34",
+  "background_alt": "#21252b",
+  "foreground":     "#abb2bf",
+  "text_secondary": "#5c6370",
+  "accent":         "#61afef",
+  "accent_hover":   "#7ec4ff",
+  "selection":      "#3e4451",
+  "border":         "#4b5263",
+  "item_hover":     "#2c313c",
+  "item_selected":  "#3e4451",
+  "scrollbar":      "#4b5263",
+  "tag_url":        "#56b6c2",
+  "tag_code":       "#98c379",
+  "tag_image":      "#c678dd",
+  "tag_secret":     "#e06c75"
+}

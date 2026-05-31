@@ -1,0 +1,18 @@
+{
+  "name": "Monokai",
+  "background":     "#272822",
+  "background_alt": "#1e1f1c",
+  "foreground":     "#f8f8f2",
+  "text_secondary": "#75715e",
+  "accent":         "#a6e22e",
+  "accent_hover":   "#c4f050",
+  "selection":      "#49483e",
+  "border":         "#75715e",
+  "item_hover":     "#3e3d32",
+  "item_selected":  "#49483e",
+  "scrollbar":      "#49483e",
+  "tag_url":        "#66d9e8",
+  "tag_code":       "#a6e22e",
+  "tag_image":      "#f92672",
+  "tag_secret":     "#f92672"
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Tokyo Night",
+  "background":     "#1a1b2e",
+  "background_alt": "#13141f",
+  "foreground":     "#a9b1d6",
+  "text_secondary": "#565f89",
+  "accent":         "#7aa2f7",
+  "accent_hover":   "#9ab8ff",
+  "selection":      "#283457",
+  "border":         "#3b4261",
+  "item_hover":     "#1f2335",
+  "item_selected":  "#283457",
+  "scrollbar":      "#3b4261",
+  "tag_url":        "#7dcfff",
+  "tag_code":       "#9ece6a",
+  "tag_image":      "#bb9af7",
+  "tag_secret":     "#f7768e"
+}

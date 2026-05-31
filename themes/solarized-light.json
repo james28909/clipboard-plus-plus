@@ -1,0 +1,18 @@
+{
+  "name": "Solarized Light",
+  "background":     "#fdf6e3",
+  "background_alt": "#eee8d5",
+  "foreground":     "#657b83",
+  "text_secondary": "#93a1a1",
+  "accent":         "#268bd2",
+  "accent_hover":   "#1a6aaa",
+  "selection":      "#eee8d5",
+  "border":         "#93a1a1",
+  "item_hover":     "#eee8d5",
+  "item_selected":  "#ddd6c1",
+  "scrollbar":      "#93a1a1",
+  "tag_url":        "#2aa198",
+  "tag_code":       "#859900",
+  "tag_image":      "#d33682",
+  "tag_secret":     "#dc322f"
+}

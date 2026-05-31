@@ -1,0 +1,27 @@
+# Build output
+build/
+out/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# VS2022
+.vs/
+*.vcxproj.user
+CMakeSettings.json
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# User data (never commit encrypted personal clipboard data)
+*.enc
+
+# OS
+Thumbs.db
+desktop.ini

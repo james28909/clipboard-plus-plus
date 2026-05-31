@@ -1,0 +1,18 @@
+{
+  "name": "Quiet Light",
+  "background":     "#f5f5f5",
+  "background_alt": "#ebebeb",
+  "foreground":     "#333333",
+  "text_secondary": "#aaaaaa",
+  "accent":         "#007acc",
+  "accent_hover":   "#005a9e",
+  "selection":      "#c9d0d9",
+  "border":         "#d4d4d4",
+  "item_hover":     "#e8e8e8",
+  "item_selected":  "#c9d0d9",
+  "scrollbar":      "#d4d4d4",
+  "tag_url":        "#4078f2",
+  "tag_code":       "#50a14f",
+  "tag_image":      "#a626a4",
+  "tag_secret":     "#e45649"
+}

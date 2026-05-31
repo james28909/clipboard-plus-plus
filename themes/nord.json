@@ -1,0 +1,18 @@
+{
+  "name": "Nord",
+  "background":     "#2e3440",
+  "background_alt": "#242933",
+  "foreground":     "#eceff4",
+  "text_secondary": "#7b88a1",
+  "accent":         "#88c0d0",
+  "accent_hover":   "#a3d3e0",
+  "selection":      "#3b4252",
+  "border":         "#4c566a",
+  "item_hover":     "#3b4252",
+  "item_selected":  "#434c5e",
+  "scrollbar":      "#4c566a",
+  "tag_url":        "#8fbcbb",
+  "tag_code":       "#a3be8c",
+  "tag_image":      "#b48ead",
+  "tag_secret":     "#bf616a"
+}
