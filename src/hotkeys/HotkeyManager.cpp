@@ -73,7 +73,7 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
     }
 
     // ── 2. Ctrl+Shift + slot key → direct paste (no popup needed) ───────────
-    if (ctrl && shift && !alt) {
+    if (ctrl && shift) {
         int slot = -1;
         if (vk >= '1' && vk <= '9') slot = static_cast<int>(vk - '1');        // 0-8
         if (vk >= 'A' && vk <= 'Z') slot = 9 + static_cast<int>(vk - 'A');   // 9-34
