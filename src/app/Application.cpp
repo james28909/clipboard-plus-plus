@@ -7,8 +7,9 @@
 #include <imgui_impl_dx11.h>
 #include <dxgi.h>
 #include <d3dcompiler.h>
+#include <dwmapi.h>
+#include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 
-// ImGui's Win32 message handler — must be forward-declared
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 Application* Application::s_instance = nullptr;
@@ -64,22 +65,28 @@ bool Application::Init() {
     wc.style         = CS_CLASSDC;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = m_hInstance;
-    wc.hIcon         = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));  // IDI_APPLICATION
+    wc.hIcon         = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));   // IDI_APPLICATION
     wc.hCursor       = LoadCursorW(nullptr, MAKEINTRESOURCEW(32514)); // IDC_ARROW
     wc.lpszClassName = L"ClipboardPlusPlus_Main";
     RegisterClassExW(&wc);
 
+    // WS_POPUP removes native chrome; WS_THICKFRAME keeps resize hit-testing.
+    // WS_EX_APPWINDOW ensures we still appear in the taskbar.
     m_hwnd = CreateWindowExW(
-        0,
+        WS_EX_APPWINDOW,
         L"ClipboardPlusPlus_Main",
         L"Clipboard++",
-        WS_OVERLAPPEDWINDOW,
+        WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT,
         1200, 750,
         nullptr, nullptr, m_hInstance, nullptr
     );
 
     if (!m_hwnd) return false;
+
+    // DWM drop-shadow for borderless window (1px inset on all sides is enough)
+    MARGINS shadow = {1, 1, 1, 1};
+    DwmExtendFrameIntoClientArea(m_hwnd, &shadow);
 
     if (!CreateD3D()) {
         DestroyD3D();
@@ -93,22 +100,23 @@ bool Application::Init() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.IniFilename  = nullptr; // we manage our own config
+    io.IniFilename  = nullptr;
 
-    // Default dark style — replaced by ThemeManager in Milestone 8
+    // Dark base style — ThemeManager replaces this in Milestone 8
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding   = 4.0f;
-    style.FrameRounding    = 3.0f;
+    style.WindowRounding    = 0.0f;  // flat edges for full-window layout
+    style.FrameRounding     = 3.0f;
     style.ScrollbarRounding = 3.0f;
-    style.GrabRounding     = 3.0f;
-    style.WindowBorderSize = 1.0f;
-    style.FrameBorderSize  = 0.0f;
+    style.GrabRounding      = 3.0f;
+    style.WindowBorderSize  = 0.0f;
+    style.FrameBorderSize   = 0.0f;
+    style.WindowPadding     = ImVec2(0, 0);
 
     ImGui_ImplWin32_Init(m_hwnd);
     ImGui_ImplDX11_Init(m_d3dDevice, m_d3dContext);
 
-    // Load Segoe UI from the Windows fonts directory for a clean system look
+    // Segoe UI for a clean Windows-native feel
     ImFontConfig fontCfg;
     fontCfg.OversampleH = 2;
     fontCfg.OversampleV = 2;
@@ -118,12 +126,10 @@ bool Application::Init() {
     else
         io.Fonts->AddFontDefault();
 
-    // Tray icon
     m_tray = std::make_unique<TrayIcon>(m_hwnd, m_hInstance);
     if (!m_tray->Create()) return false;
 
-    // TODO (Milestone 5): check config for first-launch flag
-    // For now, always show on startup
+    // TODO (Milestone 5): only show on first launch
     ShowMainWindow();
 
     m_running = true;
@@ -158,7 +164,7 @@ void Application::RenderFrame() {
 
     ImGui::Render();
 
-    constexpr float bg[4] = { 0.118f, 0.118f, 0.118f, 1.0f }; // #1e1e1e VSCode bg
+    constexpr float bg[4] = {0.118f, 0.118f, 0.118f, 1.0f}; // #1e1e1e
     m_d3dContext->OMSetRenderTargets(1, &m_renderTarget, nullptr);
     m_d3dContext->ClearRenderTargetView(m_renderTarget, bg);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -182,21 +188,18 @@ bool Application::CreateD3D() {
     sd.Windowed                           = TRUE;
     sd.SwapEffect                         = DXGI_SWAP_EFFECT_DISCARD;
 
-    const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
+    const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0};
     D3D_FEATURE_LEVEL level;
     HRESULT hr = D3D11CreateDeviceAndSwapChain(
         nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
         0, levels, 2, D3D11_SDK_VERSION,
-        &sd, &m_swapChain, &m_d3dDevice, &level, &m_d3dContext
-    );
+        &sd, &m_swapChain, &m_d3dDevice, &level, &m_d3dContext);
 
-    // Fall back to WARP software renderer if hardware fails
     if (FAILED(hr))
         hr = D3D11CreateDeviceAndSwapChain(
             nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
             0, levels, 2, D3D11_SDK_VERSION,
-            &sd, &m_swapChain, &m_d3dDevice, &level, &m_d3dContext
-        );
+            &sd, &m_swapChain, &m_d3dDevice, &level, &m_d3dContext);
 
     if (FAILED(hr)) return false;
 
@@ -206,9 +209,9 @@ bool Application::CreateD3D() {
 
 void Application::DestroyD3D() {
     DestroyRenderTarget();
-    if (m_swapChain)   { m_swapChain->Release();   m_swapChain   = nullptr; }
-    if (m_d3dContext)  { m_d3dContext->Release();  m_d3dContext  = nullptr; }
-    if (m_d3dDevice)   { m_d3dDevice->Release();   m_d3dDevice   = nullptr; }
+    if (m_swapChain)  { m_swapChain->Release();  m_swapChain  = nullptr; }
+    if (m_d3dContext) { m_d3dContext->Release(); m_d3dContext = nullptr; }
+    if (m_d3dDevice)  { m_d3dDevice->Release();  m_d3dDevice  = nullptr; }
 }
 
 void Application::CreateRenderTarget() {
@@ -233,6 +236,68 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     Application* app = Application::Get();
 
     switch (msg) {
+
+    // ── Remove all native non-client area so we own every pixel ──────────────
+    case WM_NCCALCSIZE:
+        if (wParam == TRUE) {
+            // When maximized, Windows inflates the window rect by the border
+            // thickness so it overlaps the taskbar. Compensate by shrinking
+            // the client rect back to the monitor work area.
+            if (IsZoomed(hwnd)) {
+                NCCALCSIZE_PARAMS* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+                int bx = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                int by = GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                p->rgrc[0].left   += bx;
+                p->rgrc[0].right  -= bx;
+                p->rgrc[0].top    += by;
+                p->rgrc[0].bottom -= by;
+            }
+            return 0;
+        }
+        break;
+
+    // ── Tell Windows which part of our window each pixel belongs to ──────────
+    case WM_NCHITTEST: {
+        POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        ScreenToClient(hwnd, &pt);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+
+        const bool maximized = IsZoomed(hwnd) != 0;
+        const int  border    = maximized ? 0 : 8;
+        const int  titleH    = MainWindow::kTitleBarHeight;
+        const int  btnZoneX  = rc.right - MainWindow::kTitleBtnWidth * 3;
+
+        if (!maximized) {
+            const bool onL = pt.x < border;
+            const bool onR = pt.x >= rc.right  - border;
+            const bool onT = pt.y < border;
+            const bool onB = pt.y >= rc.bottom - border;
+
+            if (onT && onL) return HTTOPLEFT;
+            if (onT && onR) return HTTOPRIGHT;
+            if (onB && onL) return HTBOTTOMLEFT;
+            if (onB && onR) return HTBOTTOMRIGHT;
+            if (onL)        return HTLEFT;
+            if (onR)        return HTRIGHT;
+            if (onT)        return HTTOP;
+            if (onB)        return HTBOTTOM;
+        }
+
+        // Title bar — drag region excludes the three button slots on the right
+        if (pt.y >= 0 && pt.y < titleH && pt.x < btnZoneX)
+            return HTCAPTION;
+
+        return HTCLIENT;
+    }
+
+    // ── Enforce a minimum window size ────────────────────────────────────────
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+        mmi->ptMinTrackSize = {800, 500};
+        return 0;
+    }
+
     case WM_SIZE:
         if (app && app->m_d3dDevice && wParam != SIZE_MINIMIZED) {
             app->DestroyRenderTarget();
@@ -243,7 +308,6 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
 
     case WM_SYSCOMMAND:
-        // Intercept minimize — hide to tray instead
         if ((wParam & 0xfff0) == SC_MINIMIZE) {
             if (app) app->HideMainWindow();
             return 0;
@@ -251,7 +315,6 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         break;
 
     case WM_CLOSE:
-        // Hide to tray instead of destroying
         if (app) app->HideMainWindow();
         return 0;
 

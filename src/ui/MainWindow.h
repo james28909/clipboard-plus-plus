@@ -1,13 +1,16 @@
 #pragma once
 
-// Static-method wrapper around the ImGui settings window.
-// Called once per frame from Application::RenderFrame() when the window is visible.
 class MainWindow {
 public:
-    // Draw all settings panels. Sets open=false if the user closes the window.
+    // Pixel dimensions shared with Application's WM_NCHITTEST handler
+    static constexpr int kTitleBarHeight = 32;
+    static constexpr int kTitleBtnWidth  = 46;
+
+    // Draw all panels. Called once per frame when the window is visible.
     static void Draw(bool& open);
 
 private:
+    static void DrawTitleBar();
     static void DrawSidebarNav(int& selectedSection);
     static void DrawGeneral();
     static void DrawHotkeys();
