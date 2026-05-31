@@ -353,8 +353,8 @@ void MainWindow::DrawHistory() {
 
                 // Inline tag badges
                 for (ContentTag t : kTagOrder) {
-                    if (!item->HasTag(t)) continue;
-                    ImVec4 col = (t == TAG_SECRET)
+                    if (!(item->tags & t)) continue;
+                    ImVec4 col = (item->tags & TAG_SECRET)
                         ? ImVec4(1.f, 0.34f, 0.34f, 1.f)
                         : ImVec4(0.4f, 0.7f, 1.0f, 1.f);
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
