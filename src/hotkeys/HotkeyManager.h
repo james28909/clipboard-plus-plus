@@ -21,7 +21,12 @@ struct KeyBinding {
     int          data{0};
 
     bool Matches(bool c, bool s, bool a, UINT vk) const {
-        return ctrl == c && shift == s && alt == a && vkey == vk;
+        // Only check modifiers that ARE required by this binding.
+        // Unset modifier fields mean "don't care" — not "must not be pressed".
+        if (ctrl  && !c) return false;
+        if (shift && !s) return false;
+        if (alt   && !a) return false;
+        return vkey == vk;
     }
 };
 
