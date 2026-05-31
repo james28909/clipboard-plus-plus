@@ -395,12 +395,28 @@ void PopupWindow::RestoreFocusAndPaste() {
         SetForegroundWindow(m_prevForeground);
         Sleep(25);
     }
-    INPUT in[4]{};
-    in[0].type   = INPUT_KEYBOARD; in[0].ki.wVk = VK_CONTROL;
-    in[1].type   = INPUT_KEYBOARD; in[1].ki.wVk = 'V';
-    in[2]        = in[1]; in[2].ki.dwFlags = KEYEVENTF_KEYUP;
-    in[3]        = in[0]; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(4, in, sizeof(INPUT));
+
+    // If Shift is physically held (e.g. the user triggered this via Ctrl+Shift+<slot>),
+    // our injected Ctrl+V would look like Ctrl+Shift+V to our own LL hook and
+    // re-open the popup. Release Shift first so the injected V is plain Ctrl+V.
+    const bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+
+    INPUT in[5]{};
+    int   n = 0;
+
+    if (shiftHeld) {
+        in[n].type         = INPUT_KEYBOARD;
+        in[n].ki.wVk       = VK_SHIFT;
+        in[n].ki.dwFlags   = KEYEVENTF_KEYUP;
+        ++n;
+    }
+
+    in[n].type = INPUT_KEYBOARD; in[n].ki.wVk = VK_CONTROL;             ++n;
+    in[n].type = INPUT_KEYBOARD; in[n].ki.wVk = 'V';                    ++n;
+    in[n]      = in[n-1]; in[n].ki.dwFlags    = KEYEVENTF_KEYUP;        ++n;
+    in[n]      = in[0];   in[n].ki.dwFlags    = KEYEVENTF_KEYUP;        ++n;
+
+    SendInput(static_cast<UINT>(n), in, sizeof(INPUT));
 }
 
 // ── D3D11 swap chain ──────────────────────────────────────────────────────────
