@@ -35,9 +35,15 @@ std::vector<KeyBinding> HotkeyManager::DefaultBindings() {
 
 LRESULT CALLBACK HotkeyManager::LLProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && s_instance) {
+        auto* kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+
+        // Events we injected via SendInput carry kClipboardPasteMagic.
+        // Pass them straight through — never process our own paste inputs.
+        if (kb->dwExtraInfo == kClipboardPasteMagic)
+            return CallNextHookEx(nullptr, nCode, wParam, lParam);
+
         const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
         if (isDown) {
-            auto* kb   = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
             bool ctrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
             bool shift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
             bool alt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;

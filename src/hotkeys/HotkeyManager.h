@@ -2,6 +2,11 @@
 #include <windows.h>
 #include <vector>
 
+// Tag every INPUT event we inject ourselves with this value in dwExtraInfo.
+// The LL hook checks for it and passes our own events straight through,
+// preventing us from re-triggering our own hotkeys during paste.
+static constexpr ULONG_PTR kClipboardPasteMagic = 0xCB00CB00UL;
+
 // Action IDs sent via WM_HOTKEYACTION (WM_APP+4) to the main HWND.
 // wParam = HotkeyAction, lParam = slot index (for PasteSlot only).
 enum class HotkeyAction : WPARAM {
