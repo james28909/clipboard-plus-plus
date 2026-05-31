@@ -3,6 +3,7 @@
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ContentDetector.h"
 #include <imgui.h>
+#include <imgui_internal.h>   // ImGuiWindow, GetCurrentWindow()
 #include <algorithm>
 #include <cstring>
 
