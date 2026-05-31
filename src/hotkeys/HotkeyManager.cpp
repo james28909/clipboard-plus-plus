@@ -2,9 +2,6 @@
 #include "../app/Application.h"
 #include "../ui/PopupWindow.h"
 
-// WM_HOTKEYACTION is defined in Application.h
-constexpr UINT WM_HOTKEYACTION = WM_APP + 4;
-
 HotkeyManager* HotkeyManager::s_instance = nullptr;
 
 // ── Public ────────────────────────────────────────────────────────────────────
