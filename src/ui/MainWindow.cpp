@@ -2,6 +2,7 @@
 #include "../app/Application.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ContentDetector.h"
+#include "PopupWindow.h"
 #include <imgui.h>
 #include <windows.h>
 
@@ -208,7 +209,10 @@ void MainWindow::DrawGeneral() {
 
     ImGui::Checkbox("Start with Windows", &startWithWindows);
     ImGui::Spacing();
-    ImGui::Checkbox("New items added to top of list", &newItemsAtTop);
+    if (ImGui::Checkbox("New items added to top of list", &newItemsAtTop)) {
+        if (auto* hist = Application::Get()->GetHistory())
+            hist->SetNewItemsAtTop(newItemsAtTop);
+    }
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("When off, new items are added to the bottom.");
@@ -249,6 +253,30 @@ void MainWindow::DrawHotkeys() {
         }
         ImGui::EndTable();
     }
+    ImGui::Spacing();
+    if (PopupWindow* popup = Application::Get()->GetPopup()) {
+        bool newline = popup->GetAppendNewlineAfterPaste();
+        if (ImGui::Checkbox("Append newline after paste", &newline))
+            popup->SetAppendNewlineAfterPaste(newline);
+
+        int moveMode = 0;
+        switch (popup->GetPasteMoveTarget()) {
+        case ClipboardHistory::MoveTarget::Top:    moveMode = 1; break;
+        case ClipboardHistory::MoveTarget::Bottom: moveMode = 2; break;
+        default:                                   moveMode = 0; break;
+        }
+
+        const char* modes[] = { "Keep item in place", "Move pasted item to top", "Move pasted item to bottom" };
+        ImGui::Text("After paste");
+        ImGui::SetNextItemWidth(240.0f);
+        if (ImGui::Combo("##pasteMove", &moveMode, modes, IM_ARRAYSIZE(modes))) {
+            ClipboardHistory::MoveTarget target = ClipboardHistory::MoveTarget::None;
+            if (moveMode == 1) target = ClipboardHistory::MoveTarget::Top;
+            if (moveMode == 2) target = ClipboardHistory::MoveTarget::Bottom;
+            popup->SetPasteMoveTarget(target);
+        }
+    }
+
     ImGui::Spacing();
     ImGui::TextDisabled("Live hotkey capture wired in Milestone 4.");
 }

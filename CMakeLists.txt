@@ -3,6 +3,7 @@ project(clipboardpp VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(CLIPBOARDPP_RESTART_AFTER_BUILD "Stop running clipboardpp.exe before build and launch the new build afterward" ON)
 
 # ── Third-party paths ─────────────────────────────────────────────────────────
 set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")
@@ -62,6 +63,20 @@ target_link_libraries(clipboardpp PRIVATE
     gdi32.lib
     psapi.lib
 )
+
+if(WIN32 AND CLIPBOARDPP_RESTART_AFTER_BUILD)
+    add_custom_command(TARGET clipboardpp PRE_BUILD
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
+                "Get-Process -Name clipboardpp -ErrorAction SilentlyContinue | Stop-Process -Force"
+        COMMENT "Stopping running clipboardpp.exe before build"
+    )
+
+    add_custom_command(TARGET clipboardpp POST_BUILD
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
+                "Start-Process -FilePath '$<TARGET_FILE:clipboardpp>' -WorkingDirectory '$<TARGET_FILE_DIR:clipboardpp>'"
+        COMMENT "Launching clipboardpp.exe after build"
+    )
+endif()
 
 # ── Static runtime (no MSVC redist needed) ────────────────────────────────────
 set_property(TARGET clipboardpp PROPERTY

@@ -1,6 +1,9 @@
 #include "ClipboardHistory.h"
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
+#include <iterator>
+#include <utility>
 
 ClipboardHistory::ClipboardHistory(int maxItems)
     : m_maxItems(maxItems)
@@ -59,6 +62,22 @@ const ClipboardItem* ClipboardHistory::GetById(uint64_t id) const {
     return it != m_items.end() ? &(*it) : nullptr;
 }
 
+bool ClipboardHistory::GetCopy(size_t index, ClipboardItem& out) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (index >= m_items.size()) return false;
+    out = m_items[index];
+    return true;
+}
+
+bool ClipboardHistory::GetByIdCopy(uint64_t id, ClipboardItem& out) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = std::find_if(m_items.begin(), m_items.end(),
+        [id](const ClipboardItem& e) { return e.id == id; });
+    if (it == m_items.end()) return false;
+    out = *it;
+    return true;
+}
+
 std::vector<size_t> ClipboardHistory::Search(const std::string& query) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     std::vector<size_t> results;
@@ -82,6 +101,80 @@ std::vector<size_t> ClipboardHistory::Search(const std::string& query) const {
 void ClipboardHistory::Clear() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_items.clear();
+}
+
+bool ClipboardHistory::MoveItem(size_t index, MoveTarget target) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (index >= m_items.size() || target == MoveTarget::None)
+        return index < m_items.size();
+
+    if ((target == MoveTarget::Top && index == 0) ||
+        (target == MoveTarget::Bottom && index + 1 == m_items.size()))
+        return true;
+
+    ClipboardItem item = std::move(m_items[index]);
+    m_items.erase(m_items.begin() + static_cast<std::ptrdiff_t>(index));
+
+    if (target == MoveTarget::Top)
+        m_items.insert(m_items.begin(), std::move(item));
+    else
+        m_items.push_back(std::move(item));
+
+    return true;
+}
+
+bool ClipboardHistory::MoveItemById(uint64_t id, MoveTarget target) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (target == MoveTarget::None) return true;
+
+    auto it = std::find_if(m_items.begin(), m_items.end(),
+        [id](const ClipboardItem& e) { return e.id == id; });
+    if (it == m_items.end()) return false;
+
+    const size_t index = static_cast<size_t>(std::distance(m_items.begin(), it));
+    if ((target == MoveTarget::Top && index == 0) ||
+        (target == MoveTarget::Bottom && index + 1 == m_items.size()))
+        return true;
+
+    ClipboardItem item = std::move(*it);
+    m_items.erase(it);
+
+    if (target == MoveTarget::Top)
+        m_items.insert(m_items.begin(), std::move(item));
+    else
+        m_items.push_back(std::move(item));
+
+    return true;
+}
+
+bool ClipboardHistory::MoveItemsByIdBefore(const std::vector<uint64_t>& ids, uint64_t beforeId) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (ids.empty()) return true;
+    if (std::find(ids.begin(), ids.end(), beforeId) != ids.end())
+        return true;
+
+    std::vector<ClipboardItem> moving;
+    moving.reserve(ids.size());
+
+    for (uint64_t id : ids) {
+        auto it = std::find_if(m_items.begin(), m_items.end(),
+            [id](const ClipboardItem& e) { return e.id == id; });
+        if (it == m_items.end()) continue;
+
+        moving.push_back(std::move(*it));
+        m_items.erase(it);
+    }
+
+    if (moving.empty()) return false;
+
+    auto before = std::find_if(m_items.begin(), m_items.end(),
+        [beforeId](const ClipboardItem& e) { return e.id == beforeId; });
+    auto insertAt = (before == m_items.end()) ? m_items.end() : before;
+
+    m_items.insert(insertAt,
+                   std::make_move_iterator(moving.begin()),
+                   std::make_move_iterator(moving.end()));
+    return true;
 }
 
 void ClipboardHistory::SetMaxItems(int n) {

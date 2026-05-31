@@ -17,8 +17,8 @@ public:
 
     bool IsRunning() const { return m_hwnd != nullptr; }
 
-    // Call this before writing to the clipboard yourself to suppress the echo
-    void SuppressNextUpdate() { m_ignoreNext = true; }
+    // Call this before writing to the clipboard yourself to suppress echo updates.
+    void SuppressNextUpdate();
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -31,6 +31,6 @@ private:
     HWND         m_hwnd{};
     HINSTANCE    m_hInstance{};
     ItemCallback m_callback;
-    bool         m_ignoreNext{false};
+    ULONGLONG    m_ignoreUntilTick{};
     DWORD        m_lastSeq{};   // suppress duplicate WM_CLIPBOARDUPDATE
 };

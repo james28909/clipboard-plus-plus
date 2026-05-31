@@ -52,6 +52,10 @@ void ClipboardMonitor::Stop() {
     UnregisterClassW(kMonitorClass, m_hInstance);
 }
 
+void ClipboardMonitor::SuppressNextUpdate() {
+    m_ignoreUntilTick = GetTickCount64() + 250;
+}
+
 // ── Private: Win32 message handler ───────────────────────────────────────────
 
 LRESULT CALLBACK ClipboardMonitor::WndProc(HWND hwnd, UINT msg,
@@ -79,10 +83,10 @@ void ClipboardMonitor::OnClipboardUpdate() {
     if (seq == m_lastSeq) return;
     m_lastSeq = seq;
 
-    if (m_ignoreNext) {
-        m_ignoreNext = false;
+    if (m_ignoreUntilTick && GetTickCount64() <= m_ignoreUntilTick) {
         return;
     }
+    m_ignoreUntilTick = 0;
 
     ClipboardItem item = ReadClipboard();
     if (item.IsEmpty()) return;

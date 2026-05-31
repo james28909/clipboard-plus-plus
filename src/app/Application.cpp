@@ -407,12 +407,8 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             // Direct paste — no popup shown.
             // Capture foreground window now, before any focus changes.
             HWND target = GetForegroundWindow();
-            if (app->m_history && app->m_popup) {
-                const ClipboardItem* item =
-                    app->m_history->Get(static_cast<size_t>(data));
-                if (item)
-                    app->m_popup->PasteDirect(*item, target);
-            }
+            if (app->m_popup)
+                app->m_popup->PasteHistorySlot(data, target);
             break;
         }
         case HotkeyAction::PasteVisibleSlot:

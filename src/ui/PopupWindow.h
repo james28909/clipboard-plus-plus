@@ -1,5 +1,6 @@
 #pragma once
 #include "../clipboard/ClipboardItem.h"
+#include "../clipboard/ClipboardHistory.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <vector>
@@ -17,17 +18,19 @@ public:
     void Show(bool focusSearch = false);
     void Hide();
     bool IsVisible() const { return m_visible; }
-    bool IsSearchActive() const { return m_searchActive || m_focusSearchOnOpen; }
+    bool IsSearchActive() const { return m_searchActive || m_searchCapture || m_focusSearchOnOpen; }
     HWND GetHwnd()   const { return m_hwnd; }
 
     // Called each frame from Application — renders the popup if visible.
     void Render();
 
-    // Paste a specific item without opening the popup (used by hotkey direct-paste).
-    // targetWindow is the HWND that should receive the Ctrl+V after we write to clipboard.
-    void PasteDirect(const ClipboardItem& item, HWND targetWindow);
+    void PasteHistorySlot(int slot, HWND targetWindow);
     void PasteVisibleSlot(int slot);
     void RequestSearchFocus();
+    bool GetAppendNewlineAfterPaste() const { return m_appendNewlineAfterPaste; }
+    void SetAppendNewlineAfterPaste(bool value) { m_appendNewlineAfterPaste = value; }
+    ClipboardHistory::MoveTarget GetPasteMoveTarget() const { return m_pasteMoveTarget; }
+    void SetPasteMoveTarget(ClipboardHistory::MoveTarget target) { m_pasteMoveTarget = target; }
 
     // Configurable
     float m_opacity{0.95f};
@@ -51,6 +54,7 @@ private:
     void DrawItemList();
     bool ItemPassesFilter(const ClipboardItem& item) const;
     std::vector<size_t> BuildVisibleHistoryIndices() const;
+    void DrawItemDragDrop(uint64_t itemId, int qpos);
 
     // ── Paste ─────────────────────────────────────────────────────────────────
     void PasteItemKeepOpen(const ClipboardItem& item);
@@ -76,10 +80,17 @@ private:
     bool  m_justOpened{false};
     bool  m_focusSearchOnOpen{false};
     bool  m_searchActive{false};
+    bool  m_searchCapture{false};
     bool  m_queueMode{false};
     bool  m_appendNewlineAfterPaste{false};
+    ClipboardHistory::MoveTarget m_pasteMoveTarget{ClipboardHistory::MoveTarget::None};
     int   m_filterMode{0};      // 0=All 1=Text 2=Image 3=URL
     char  m_searchBuf[256]{};
+    char  m_searchDebug[192]{};
+    bool  m_lastSearchActive{false};
+    bool  m_lastWantTextInput{false};
+    size_t m_lastSearchLen{};
     HWND  m_prevForeground{};
-    std::vector<size_t> m_queue;
+    std::vector<uint64_t> m_queue;
+    std::vector<uint64_t> m_dragIds;
 };
