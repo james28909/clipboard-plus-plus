@@ -29,17 +29,21 @@ static int s_activeSection = SEC_GENERAL;
 
 void MainWindow::Draw(bool& open) {
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowSize(ImVec2(1100, 700), ImGuiCond_Once);
-    ImGui::SetNextWindowPos(
-        ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-        ImGuiCond_Once, ImVec2(0.5f, 0.5f));
+
+    // Fill the entire Win32 window — no inner ImGui chrome
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
 
     ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoScrollWithMouse;
+        ImGuiWindowFlags_NoTitleBar        |
+        ImGuiWindowFlags_NoResize          |
+        ImGuiWindowFlags_NoMove            |
+        ImGuiWindowFlags_NoScrollbar       |
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoSavedSettings   |
+        ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    if (!ImGui::Begin("Clipboard++ Settings", &open, flags)) {
+    if (!ImGui::Begin("##main", nullptr, flags)) {
         ImGui::End();
         return;
     }
@@ -48,15 +52,15 @@ void MainWindow::Draw(bool& open) {
     const float sidebarW = 160.0f;
     const float contentW = ImGui::GetContentRegionAvail().x - sidebarW - 8.0f;
 
-    // Sidebar
-    ImGui::BeginChild("##sidebar", ImVec2(sidebarW, 0), true);
+    // Sidebar — bordered so it reads as a separate panel
+    ImGui::BeginChild("##sidebar", ImVec2(sidebarW, 0), ImGuiChildFlags_Border);
     DrawSidebarNav(s_activeSection);
     ImGui::EndChild();
 
     ImGui::SameLine();
 
-    // Content panel
-    ImGui::BeginChild("##content", ImVec2(contentW, 0), false);
+    // Content panel — no border, scrollable
+    ImGui::BeginChild("##content", ImVec2(contentW, 0), ImGuiChildFlags_None);
     switch (s_activeSection) {
     case SEC_GENERAL:    DrawGeneral();    break;
     case SEC_HOTKEYS:    DrawHotkeys();    break;
