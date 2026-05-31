@@ -42,7 +42,6 @@ struct ClipboardItem {
     std::chrono::system_clock::time_point timestamp;
     bool pinned{false};
 
-    bool HasTag(ContentTag t) const { return (tags & t) != 0; }
     bool IsText()  const { return type == ContentType::Text
                                || type == ContentType::Html
                                || type == ContentType::RichText; }
