@@ -107,8 +107,6 @@ bool Application::Init() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
-    io.ConfigViewportsNoTaskBarIcon = true;  // popup shouldn't appear in taskbar
     io.IniFilename  = nullptr;
 
     // Dark base style — ThemeManager replaces this in Milestone 8
@@ -146,6 +144,8 @@ bool Application::Init() {
     });
 
     m_popup = std::make_unique<PopupWindow>();
+    if (!m_popup->Create(m_hInstance, m_d3dDevice, m_d3dContext))
+        return false;
 
     // TODO (Milestone 5): only show on first launch
     ShowMainWindow();
@@ -155,6 +155,7 @@ bool Application::Init() {
 }
 
 void Application::Shutdown() {
+    if (m_popup)   m_popup->Destroy();
     if (m_monitor) m_monitor->Stop();
     if (m_tray)    m_tray->Destroy();
 
@@ -181,9 +182,6 @@ void Application::RenderFrame() {
     if (m_mainVisible)
         MainWindow::Draw(m_mainVisible);
 
-    if (m_popup)
-        m_popup->Draw();
-
     ImGui::Render();
 
     constexpr float bg[4] = {0.118f, 0.118f, 0.118f, 1.0f}; // #1e1e1e
@@ -192,9 +190,8 @@ void Application::RenderFrame() {
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     m_swapChain->Present(1, 0);
 
-    // Render any additional viewport windows (popup lives here)
-    ImGui::UpdatePlatformWindows();
-    ImGui::RenderPlatformWindowsDefault();
+    // Popup has its own context + swap chain — rendered separately
+    if (m_popup) m_popup->Render();
 }
 
 // ── Private: D3D11 ───────────────────────────────────────────────────────────
