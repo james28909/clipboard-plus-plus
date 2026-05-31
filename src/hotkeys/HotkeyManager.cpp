@@ -30,12 +30,14 @@ void HotkeyManager::SetBindings(std::vector<KeyBinding> bindings) {
 
 std::vector<KeyBinding> HotkeyManager::DefaultBindings() {
     return {
-        // Ctrl+Shift+V → toggle popup
-        {true,  true,  false, 'V',          HotkeyAction::TogglePopup,  0},
-        // Ctrl+Shift+I → toggle incognito
-        {true,  true,  false, 'I',          HotkeyAction::Incognito,    0},
-        // Ctrl+Shift+, → open settings
-        {true,  true,  false, VK_OEM_COMMA, HotkeyAction::OpenSettings, 0},
+        // Ctrl+Shift+V  → toggle popup
+        {true, true,  false, 'V',          HotkeyAction::TogglePopup,  0},
+        // Ctrl+Shift+I  → toggle incognito
+        {true, true,  false, 'I',          HotkeyAction::Incognito,    0},
+        // Ctrl+Shift+,  → open settings
+        {true, true,  false, VK_OEM_COMMA, HotkeyAction::OpenSettings, 0},
+        // Note: Ctrl+Shift+1-9/A-Z direct paste is handled as a special case
+        // in HandleKeyDown, not as individual bindings (35 combos).
     };
 }
 
@@ -70,8 +72,8 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         }
     }
 
-    // ── 2. Ctrl+Alt + slot key → direct paste (no popup needed) ──────────────
-    if (ctrl && alt && !shift) {
+    // ── 2. Ctrl+Shift + slot key → direct paste (no popup needed) ───────────
+    if (ctrl && shift && !alt) {
         int slot = -1;
         if (vk >= '1' && vk <= '9') slot = static_cast<int>(vk - '1');        // 0-8
         if (vk >= 'A' && vk <= 'Z') slot = 9 + static_cast<int>(vk - 'A');   // 9-34
@@ -122,16 +124,22 @@ void HotkeyManager::ForwardKeyToPopup(UINT vk, bool shift) const {
     default: break;
     }
 
-    // Translate virtual key → character using current keyboard layout
+    // Build a CLEAN key state — only reflect the shift parameter.
+    // Do NOT call GetKeyboardState here: in the LL hook callback the system
+    // state still shows Ctrl/Shift from the combo that opened the popup
+    // (e.g. Ctrl+Shift+V), causing ToUnicode to generate control characters
+    // (Ctrl+A = 0x01 = select-all) instead of the intended printable chars.
     BYTE keyState[256]{};
-    GetKeyboardState(keyState);
-    // Reflect shift state into keyState so ToUnicode produces the right case/symbol
-    keyState[VK_SHIFT]   = shift ? 0x80 : 0x00;
-    keyState[VK_CAPITAL] = 0x00; // ignore CapsLock for predictability
+    keyState[VK_SHIFT] = shift ? 0x80 : 0x00;
 
     wchar_t chars[4]{};
-    int n = ToUnicode(vk, MapVirtualKeyW(vk, MAPVK_VK_TO_VSC),
-                       keyState, chars, 4, 0);
+    UINT    scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    int     n    = ToUnicode(vk, scan, keyState, chars, 4, 0);
+
+    // n == -1 means a dead key was consumed; call again to flush internal state
+    if (n < 0)
+        n = ToUnicode(vk, scan, keyState, chars, 4, 0);
+
     for (int i = 0; i < n; ++i)
         PostMessageW(hw, WM_CHAR, static_cast<WPARAM>(chars[i]), 0);
 }

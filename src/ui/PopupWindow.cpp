@@ -30,6 +30,7 @@ bool PopupWindow::Create(HINSTANCE hInstance,
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    wc.hbrBackground = nullptr;  // D3D owns the background — prevents white flash on resize
     wc.lpszClassName = kPopupClass;
     RegisterClassExW(&wc);
 
@@ -290,7 +291,25 @@ void PopupWindow::DrawItemList() {
 
         if (ImGui::Selectable(label, qpos >= 0,
                                ImGuiSelectableFlags_SpanAllColumns)) {
-            if (m_queueMode) {
+            // Check physical Ctrl state — ImGui's KeyCtrl is unreliable since
+            // the popup has WS_EX_NOACTIVATE and never receives raw key events.
+            const bool ctrlHeld = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+
+            if (ctrlHeld) {
+                // Ctrl+click: paste immediately and KEEP popup open so the
+                // user can keep clicking items one after another.
+                // The background window already has focus (WS_EX_NOACTIVATE),
+                // so we just write to clipboard and send V — Ctrl is already
+                // physically held, so the background app sees Ctrl+V.
+                if (isSecret) ImGui::PopStyleColor();
+                WriteToClipboard(*item);
+                INPUT in[2]{};
+                in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = 'V';
+                in[1] = in[0]; in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(2, in, sizeof(INPUT));
+                ImGui::EndChild();
+                return;
+            } else if (m_queueMode) {
                 if (qpos >= 0)
                     m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), i),
                                    m_queue.end());
@@ -300,7 +319,7 @@ void PopupWindow::DrawItemList() {
                 if (isSecret) ImGui::PopStyleColor();
                 PasteItem(*item);
                 ImGui::EndChild();
-                return; // popup is now hidden; don't touch ImGui state
+                return;
             }
         }
         if (isSecret) ImGui::PopStyleColor();
@@ -494,15 +513,29 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     if (imgHandled) return TRUE;
 
-    if (msg == WM_SIZE && pw && pw->m_swapChain) {
-        pw->DestroyRenderTarget();
-        pw->m_swapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam),
-                                        DXGI_FORMAT_UNKNOWN, 0);
-        pw->CreateRenderTarget();
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return TRUE; // tell Windows we handled it — prevents white fill on resize
+
+    case WM_GETMINMAXINFO: {
+        auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+        mmi->ptMinTrackSize = {280, 180};
+        return 0;
     }
 
-    if (msg == WM_KILLFOCUS && pw)
-        pw->Hide();
+    case WM_SIZE:
+        if (pw && pw->m_swapChain && wParam != SIZE_MINIMIZED) {
+            pw->DestroyRenderTarget();
+            pw->m_swapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam),
+                                            DXGI_FORMAT_UNKNOWN, 0);
+            pw->CreateRenderTarget();
+        }
+        return 0;
+
+    case WM_KILLFOCUS:
+        if (pw) pw->Hide();
+        return 0;
+    }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }

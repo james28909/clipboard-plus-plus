@@ -75,6 +75,7 @@ bool Application::Init() {
     wc.hInstance     = m_hInstance;
     wc.hIcon         = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));   // IDI_APPLICATION
     wc.hCursor       = LoadCursorW(nullptr, MAKEINTRESOURCEW(32514)); // IDC_ARROW
+    wc.hbrBackground = nullptr; // D3D owns the background — prevents white flash on resize
     wc.lpszClassName = L"ClipboardPlusPlus_Main";
     RegisterClassExW(&wc);
 
@@ -325,6 +326,9 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         mmi->ptMinTrackSize = {800, 500};
         return 0;
     }
+
+    case WM_ERASEBKGND:
+        return TRUE; // prevent white flash during resize
 
     case WM_SIZE:
         if (app && app->m_d3dDevice && wParam != SIZE_MINIMIZED) {
