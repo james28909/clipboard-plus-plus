@@ -229,8 +229,8 @@ void MainWindow::DrawHotkeys() {
     struct Row { const char* function; const char* binding; };
     static const Row rows[] = {
         { "Toggle popup",                "Ctrl+Shift+V" },
-        { "Paste item 1",                "Ctrl+Shift+1" },
-        { "Multi-paste modifier (hold)", "Ctrl+Alt"     },
+        { "Focus popup search",          "Ctrl+Shift+S" },
+        { "Hidden paste slots",          "Ctrl+Alt+1-z/F1-F12" },
         { "Toggle incognito mode",       "Ctrl+Shift+I" },
         { "Open settings",               "Ctrl+Shift+," },
         { "Open popup (images filter)",  "Ctrl+Shift+G" },

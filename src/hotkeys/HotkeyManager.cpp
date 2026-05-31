@@ -2,9 +2,9 @@
 #include "../app/Application.h"
 #include "../ui/PopupWindow.h"
 
-HotkeyManager* HotkeyManager::s_instance = nullptr;
+#include <utility>
 
-// ── Public ────────────────────────────────────────────────────────────────────
+HotkeyManager* HotkeyManager::s_instance = nullptr;
 
 bool HotkeyManager::Install(HWND msgTarget) {
     m_msgTarget = msgTarget;
@@ -25,20 +25,31 @@ void HotkeyManager::SetBindings(std::vector<KeyBinding> bindings) {
 
 std::vector<KeyBinding> HotkeyManager::DefaultBindings() {
     return {
-        {true, true, false, 'V',          HotkeyAction::TogglePopup,  0}, // Ctrl+Shift+V
-        {true, true, false, 'I',          HotkeyAction::Incognito,    0}, // Ctrl+Shift+I
-        {true, true, false, VK_OEM_COMMA, HotkeyAction::OpenSettings, 0}, // Ctrl+Shift+,
+        {true, true, false, 'V',          HotkeyAction::TogglePopup,     0}, // Ctrl+Shift+V
+        {true, true, false, 'S',          HotkeyAction::ShowPopupSearch, 0}, // Ctrl+Shift+S
+        {true, true, false, 'I',          HotkeyAction::Incognito,       0}, // Ctrl+Shift+I
+        {true, true, false, VK_OEM_COMMA, HotkeyAction::OpenSettings,    0}, // Ctrl+Shift+,
     };
 }
 
-// ── Hook proc ─────────────────────────────────────────────────────────────────
+int HotkeyManager::SlotFromVKey(UINT vk, bool includeFunctionKeys) {
+    if (vk >= '1' && vk <= '9') return static_cast<int>(vk - '1');
+    if (vk >= 'A' && vk <= 'Z') return 9 + static_cast<int>(vk - 'A');
+    if (includeFunctionKeys && vk >= VK_F1 && vk <= VK_F12)
+        return 35 + static_cast<int>(vk - VK_F1);
+    return -1;
+}
+
+char HotkeyManager::SlotLabel(int slot) {
+    if (slot >= 0 && slot < 9) return static_cast<char>('1' + slot);
+    if (slot >= 9 && slot < 35) return static_cast<char>('a' + (slot - 9));
+    return '?';
+}
 
 LRESULT CALLBACK HotkeyManager::LLProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && s_instance) {
         auto* kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
 
-        // Events we injected via SendInput carry kClipboardPasteMagic.
-        // Pass them straight through — never process our own paste inputs.
         if (kb->dwExtraInfo == kClipboardPasteMagic)
             return CallNextHookEx(nullptr, nCode, wParam, lParam);
 
@@ -54,13 +65,10 @@ LRESULT CALLBACK HotkeyManager::LLProc(int nCode, WPARAM wParam, LPARAM lParam) 
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
 
-// ── Key dispatch ──────────────────────────────────────────────────────────────
-
 bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
-    PopupWindow* popup    = Application::Get() ? Application::Get()->GetPopup() : nullptr;
+    PopupWindow* popup     = Application::Get() ? Application::Get()->GetPopup() : nullptr;
     const bool   popupOpen = popup && popup->IsVisible();
 
-    // ── 1. Configured bindings — always checked, popup open or closed ─────────
     for (const auto& b : m_bindings) {
         if (b.Matches(ctrl, shift, alt, vk)) {
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
@@ -70,62 +78,45 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         }
     }
 
-    // ── 2. Popup open ─────────────────────────────────────────────────────────
     if (popupOpen) {
-        // Escape closes
         if (vk == VK_ESCAPE) {
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(HotkeyAction::TogglePopup), 0);
             return true;
         }
 
-        // Win+key combos are system shortcuts — pass through unmodified
         const bool win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0
                       || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
         if (win) return false;
 
-        // 1-9 with no modifier: paste that slot and close the popup.
-        // This is the primary quick-select interaction — popup is open,
-        // you see the numbered list, press the number, it pastes.
-        if (!ctrl && !alt && vk >= '1' && vk <= '9') {
-            int slot = static_cast<int>(vk - '1');
+        const int visibleSlot = SlotFromVKey(vk, false);
+        if (!ctrl && !shift && !alt && visibleSlot >= 0 && !popup->IsSearchActive()) {
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
-                         static_cast<WPARAM>(HotkeyAction::PasteSlot),
-                         static_cast<LPARAM>(slot));
+                         static_cast<WPARAM>(HotkeyAction::PasteVisibleSlot),
+                         static_cast<LPARAM>(visibleSlot));
             return true;
         }
 
-        // All other keys (including letters) go to the search bar so the
-        // user can filter the list. a-z slots are accessed via click or
-        // Ctrl+Shift+a-z when popup is closed.
         ForwardKeyToPopup(vk, shift);
         return true;
     }
 
-    // ── 3. Popup closed — Ctrl+Shift+slot direct paste ────────────────────────
-    if (ctrl && shift) {
-        int slot = -1;
-        if (vk >= '1' && vk <= '9') slot = static_cast<int>(vk - '1');
-        if (vk >= 'A' && vk <= 'Z') slot = 9 + static_cast<int>(vk - 'A');
-        if (slot >= 0) {
-            PostMessageW(m_msgTarget, WM_HOTKEYACTION,
-                         static_cast<WPARAM>(HotkeyAction::PasteSlot),
-                         static_cast<LPARAM>(slot));
-            return true;
-        }
+    const int historySlot = SlotFromVKey(vk, true);
+    if (ctrl && alt && !shift && historySlot >= 0) {
+        PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                     static_cast<WPARAM>(HotkeyAction::PasteHistorySlot),
+                     static_cast<LPARAM>(historySlot));
+        return true;
     }
 
     return false;
 }
-
-// ── Key forwarding to popup search bar ───────────────────────────────────────
 
 void HotkeyManager::ForwardKeyToPopup(UINT vk, bool shift) const {
     PopupWindow* popup = Application::Get()->GetPopup();
     if (!popup) return;
     HWND hw = popup->GetHwnd();
 
-    // Navigation / editing keys forwarded as WM_KEYDOWN
     switch (vk) {
     case VK_BACK:
     case VK_DELETE:
@@ -140,10 +131,6 @@ void HotkeyManager::ForwardKeyToPopup(UINT vk, bool shift) const {
     default: break;
     }
 
-    // Build a clean key state with ONLY the shift flag set.
-    // Never call GetKeyboardState() — it returns the live system state which
-    // still shows Ctrl/Shift from whatever combo the user just pressed, causing
-    // ToUnicode to produce control characters instead of printable ones.
     BYTE keyState[256]{};
     keyState[VK_SHIFT] = shift ? 0x80 : 0x00;
 
@@ -151,7 +138,6 @@ void HotkeyManager::ForwardKeyToPopup(UINT vk, bool shift) const {
     UINT    scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
     int     n    = ToUnicode(vk, scan, keyState, chars, 4, 0);
 
-    // n < 0 = dead key consumed internal state; flush it
     if (n < 0)
         n = ToUnicode(vk, scan, keyState, chars, 4, 0);
 

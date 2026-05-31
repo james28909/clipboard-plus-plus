@@ -8,6 +8,7 @@
 #include <imgui_impl_dx11.h>
 #include <dxgi.h>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <cstdio>
 #include "../hotkeys/HotkeyManager.h"  // kClipboardPasteMagic
@@ -15,6 +16,7 @@
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 static constexpr wchar_t kPopupClass[] = L"CPPPopupWnd";
+static constexpr UINT_PTR kPopupResizeRenderTimerId = 1;
 
 // ── Create / Destroy ──────────────────────────────────────────────────────────
 
@@ -104,23 +106,31 @@ void PopupWindow::Destroy() {
 
 // ── Show / Hide ───────────────────────────────────────────────────────────────
 
-void PopupWindow::Show() {
+void PopupWindow::Show(bool focusSearch) {
     m_prevForeground = GetForegroundWindow();
     PositionAtCursor();
     ApplyOpacity();
     ShowWindow(m_hwnd, SW_SHOWNA); // NA = no-activate
-    m_visible    = true;
-    m_justOpened = true;
-    m_queueMode  = false;
+    m_visible           = true;
+    m_justOpened        = true;
+    m_focusSearchOnOpen = focusSearch;
+    m_searchActive      = false;
+    m_queueMode         = false;
     m_queue.clear();
     std::memset(m_searchBuf, 0, sizeof(m_searchBuf));
 }
 
 void PopupWindow::Hide() {
     ShowWindow(m_hwnd, SW_HIDE);
-    m_visible   = false;
-    m_queueMode = false;
+    m_visible      = false;
+    m_searchActive = false;
+    m_queueMode    = false;
     m_queue.clear();
+}
+
+void PopupWindow::RequestSearchFocus() {
+    m_focusSearchOnOpen = true;
+    m_justOpened = true;
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -165,14 +175,14 @@ void PopupWindow::Render() {
     // ── Search bar ────────────────────────────────────────────────────────────
     float winW = ImGui::GetWindowWidth();
     ImGui::SetNextItemWidth(winW - 16.0f);
-    if (m_justOpened) {
-        // Note: keyboard focus won't work while WS_EX_NOACTIVATE is set.
-        // Milestone 4 (keyboard hook) will handle search-bar typing.
+    if (m_justOpened && m_focusSearchOnOpen) {
         ImGui::SetKeyboardFocusHere();
-        m_justOpened = false;
     }
+    m_justOpened = false;
     ImGui::InputTextWithHint("##search", "  Search...",
                               m_searchBuf, sizeof(m_searchBuf));
+    m_searchActive = ImGui::IsItemActive();
+    m_focusSearchOnOpen = false;
 
     ImGui::Spacing();
     DrawFilterStrip();
@@ -224,6 +234,13 @@ void PopupWindow::DrawFilterStrip() {
         ImGui::SameLine();
     }
 
+    if (m_appendNewlineAfterPaste)
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    if (ImGui::SmallButton("Newline")) m_appendNewlineAfterPaste = !m_appendNewlineAfterPaste;
+    if (m_appendNewlineAfterPaste) ImGui::PopStyleColor();
+    ImGui::SameLine();
+
     if (ImGui::SmallButton(" @ ")) {       // gear placeholder
         Application::Get()->ShowMainWindow();
         Hide();
@@ -242,21 +259,17 @@ bool PopupWindow::ItemPassesFilter(const ClipboardItem& item) const {
     }
 }
 
-void PopupWindow::DrawItemList() {
+std::vector<size_t> PopupWindow::BuildVisibleHistoryIndices() const {
+    std::vector<size_t> indices;
     ClipboardHistory* hist = Application::Get()->GetHistory();
-    if (!hist) return;
+    if (!hist) return indices;
 
     const std::string query(m_searchBuf);
     std::string lquery = query;
     std::transform(lquery.begin(), lquery.end(), lquery.begin(),
                    [](unsigned char c){ return (char)std::tolower(c); });
 
-    ImGui::BeginChild("##items", {0.f, 0.f}, ImGuiChildFlags_None);
-
-    size_t slot     = 0;
-    bool   anyShown = false;
-
-    for (size_t i = 0; i < hist->Size() && slot < 35; ++i) {
+    for (size_t i = 0; i < hist->Size() && indices.size() < 35; ++i) {
         const ClipboardItem* item = hist->Get(i);
         if (!item || !ItemPassesFilter(*item)) continue;
 
@@ -267,12 +280,27 @@ void PopupWindow::DrawItemList() {
             if (lt.find(lquery) == std::string::npos) continue;
         }
 
-        anyShown = true;
+        indices.push_back(i);
+    }
+
+    return indices;
+}
+
+void PopupWindow::DrawItemList() {
+    ClipboardHistory* hist = Application::Get()->GetHistory();
+    if (!hist) return;
+
+    ImGui::BeginChild("##items", {0.f, 0.f}, ImGuiChildFlags_None);
+
+    const std::vector<size_t> visible = BuildVisibleHistoryIndices();
+
+    for (size_t slot = 0; slot < visible.size(); ++slot) {
+        const size_t i = visible[slot];
+        const ClipboardItem* item = hist->Get(i);
+        if (!item) continue;
 
         char key[2]{};
-        key[0] = slot < 9 ? (char)('1' + (int)slot)
-                           : (char)('a' + (int)(slot - 9));
-        ++slot;
+        key[0] = HotkeyManager::SlotLabel(static_cast<int>(slot));
 
         int qpos = -1;
         for (size_t q = 0; q < m_queue.size(); ++q)
@@ -303,11 +331,7 @@ void PopupWindow::DrawItemList() {
                 // so we just write to clipboard and send V — Ctrl is already
                 // physically held, so the background app sees Ctrl+V.
                 if (isSecret) ImGui::PopStyleColor();
-                WriteToClipboard(*item);
-                INPUT in[2]{};
-                in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = 'V';
-                in[1] = in[0]; in[1].ki.dwFlags = KEYEVENTF_KEYUP;
-                SendInput(2, in, sizeof(INPUT));
+                PasteItemKeepOpen(*item);
                 ImGui::EndChild();
                 return;
             } else if (m_queueMode) {
@@ -318,7 +342,7 @@ void PopupWindow::DrawItemList() {
                     m_queue.push_back(i);
             } else {
                 if (isSecret) ImGui::PopStyleColor();
-                PasteItem(*item);
+                PasteItemKeepOpen(*item);
                 ImGui::EndChild();
                 return;
             }
@@ -326,7 +350,7 @@ void PopupWindow::DrawItemList() {
         if (isSecret) ImGui::PopStyleColor();
     }
 
-    if (!anyShown)
+    if (visible.empty())
         ImGui::TextDisabled("  No items match.");
 
     ImGui::EndChild();
@@ -337,12 +361,22 @@ void PopupWindow::DrawItemList() {
 void PopupWindow::PasteDirect(const ClipboardItem& item, HWND targetWindow) {
     m_prevForeground = targetWindow;
     WriteToClipboard(item);
-    RestoreFocusAndPaste();
+    RestoreFocusAndPaste(targetWindow);
 }
 
-void PopupWindow::PasteItem(const ClipboardItem& item) {
+void PopupWindow::PasteVisibleSlot(int slot) {
+    const std::vector<size_t> visible = BuildVisibleHistoryIndices();
+    if (slot < 0 || static_cast<size_t>(slot) >= visible.size()) return;
+    ClipboardHistory* hist = Application::Get()->GetHistory();
+    if (!hist) return;
+
+    const ClipboardItem* item = hist->Get(visible[static_cast<size_t>(slot)]);
+    if (item)
+        PasteItemKeepOpen(*item);
+}
+
+void PopupWindow::PasteItemKeepOpen(const ClipboardItem& item) {
     WriteToClipboard(item);
-    Hide();
     RestoreFocusAndPaste();
 }
 
@@ -363,7 +397,7 @@ void PopupWindow::PasteQueue() {
     }
 }
 
-void PopupWindow::WriteToClipboard(const ClipboardItem& item) {
+void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
     if (!OpenClipboard(nullptr)) return;
     EmptyClipboard();
 
@@ -375,13 +409,17 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) {
             SetClipboardData(CF_DIB, hm);
         }
     } else {
+        std::string text = item.text;
+        if (m_appendNewlineAfterPaste)
+            text += "\r\n";
+
         int wlen = MultiByteToWideChar(CP_UTF8, 0,
-                                        item.text.c_str(), -1, nullptr, 0);
+                                        text.c_str(), -1, nullptr, 0);
         if (wlen > 0) {
             HGLOBAL hm = GlobalAlloc(GMEM_MOVEABLE,
                                       static_cast<SIZE_T>(wlen) * sizeof(wchar_t));
             if (hm) {
-                MultiByteToWideChar(CP_UTF8, 0, item.text.c_str(), -1,
+                MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1,
                                     static_cast<wchar_t*>(GlobalLock(hm)), wlen);
                 GlobalUnlock(hm);
                 SetClipboardData(CF_UNICODETEXT, hm);
@@ -391,37 +429,76 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) {
     CloseClipboard();
 }
 
-void PopupWindow::RestoreFocusAndPaste() {
-    if (m_prevForeground && IsWindow(m_prevForeground)) {
-        // Only switch focus if the target doesn't already have it.
-        // For direct-paste hotkeys the popup never stole focus (WS_EX_NOACTIVATE),
-        // so this is a no-op and the Sleep is skipped — enabling rapid-fire
-        // Ctrl+Shift+1 / 2 / 3 without any delay between pastes.
-        if (GetForegroundWindow() != m_prevForeground) {
-            SetForegroundWindow(m_prevForeground);
-            Sleep(25);
+HWND PopupWindow::ResolvePasteTarget() const {
+    HWND fg = GetForegroundWindow();
+    HWND main = Application::Get() ? Application::Get()->GetHwnd() : nullptr;
+
+    if (fg && fg != m_hwnd && fg != main)
+        return fg;
+    if (m_prevForeground && IsWindow(m_prevForeground))
+        return m_prevForeground;
+    return nullptr;
+}
+
+bool PopupWindow::WaitForForeground(HWND target, DWORD timeoutMs) const {
+    if (!target) return false;
+
+    const DWORD started = GetTickCount();
+    while (GetForegroundWindow() != target) {
+        if (GetTickCount() - started >= timeoutMs)
+            return false;
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT);
+    }
+    return true;
+}
+
+void PopupWindow::RestoreFocusAndPaste(HWND preferredTarget) {
+    HWND target = preferredTarget ? preferredTarget : ResolvePasteTarget();
+    if (target && IsWindow(target)) {
+        if (GetForegroundWindow() != target) {
+            SetForegroundWindow(target);
+            WaitForForeground(target, 100);
         }
     }
 
     // All injected events carry kClipboardPasteMagic so our LL hook ignores them.
-    INPUT in[4]{};
-    for (auto& i : in) i.ki.dwExtraInfo = kClipboardPasteMagic;
+    const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    const bool altDown  = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
 
-    if (GetAsyncKeyState(VK_CONTROL) & 0x8000) {
-        // Ctrl is physically held — injecting Ctrl-up would corrupt the OS
-        // key state and cause the next Ctrl+Shift+<slot> to fail.
-        // Just send V; the physical Ctrl provides the modifier.
-        in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = 'V';
-        in[1]      = in[0]; in[1].ki.dwFlags = KEYEVENTF_KEYUP;
-        SendInput(2, in, sizeof(INPUT));
-    } else {
-        // Ctrl not held (e.g. clicked an item after releasing keys) — inject full Ctrl+V.
-        in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_CONTROL;
-        in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = 'V';
-        in[2]      = in[1]; in[2].ki.dwFlags = KEYEVENTF_KEYUP;
-        in[3]      = in[0]; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
-        SendInput(4, in, sizeof(INPUT));
+    INPUT in[8]{};
+    for (auto& i : in) {
+        i.type = INPUT_KEYBOARD;
+        i.ki.dwExtraInfo = kClipboardPasteMagic;
     }
+
+    int n = 0;
+    if (altDown) {
+        in[n].ki.wVk = VK_MENU;
+        in[n].ki.dwFlags = KEYEVENTF_KEYUP;
+        ++n;
+    }
+    if (!ctrlDown) {
+        in[n].ki.wVk = VK_CONTROL;
+        ++n;
+    }
+
+    in[n].ki.wVk = 'V';
+    ++n;
+    in[n].ki.wVk = 'V';
+    in[n].ki.dwFlags = KEYEVENTF_KEYUP;
+    ++n;
+
+    if (!ctrlDown) {
+        in[n].ki.wVk = VK_CONTROL;
+        in[n].ki.dwFlags = KEYEVENTF_KEYUP;
+        ++n;
+    }
+    if (altDown) {
+        in[n].ki.wVk = VK_MENU;
+        ++n;
+    }
+
+    SendInput(static_cast<UINT>(n), in, sizeof(INPUT));
 }
 
 // ── D3D11 swap chain ──────────────────────────────────────────────────────────
@@ -536,11 +613,11 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     switch (msg) {
     case WM_ERASEBKGND:
-        return TRUE; // tell Windows we handled it — prevents white fill on resize
+        return TRUE;
 
     case WM_GETMINMAXINFO: {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
-        mmi->ptMinTrackSize = {280, 180};
+        mmi->ptMinTrackSize = {360, 260};
         return 0;
     }
 
@@ -551,6 +628,21 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
                                             DXGI_FORMAT_UNKNOWN, 0);
             pw->CreateRenderTarget();
         }
+        return 0;
+
+    // WS_EX_NOACTIVATE stops Windows from sending paint messages during the
+    // internal move/resize modal loop, so our D3D frames stop until mouse-up.
+    // Fix: run a ~60fps timer during the modal loop and render each tick.
+    case WM_ENTERSIZEMOVE:
+        SetTimer(hwnd, kPopupResizeRenderTimerId, 16, nullptr);
+        return 0;
+
+    case WM_EXITSIZEMOVE:
+        KillTimer(hwnd, kPopupResizeRenderTimerId);
+        return 0;
+
+    case WM_TIMER:
+        if (pw && wParam == kPopupResizeRenderTimerId) pw->Render();
         return 0;
 
     case WM_KILLFOCUS:

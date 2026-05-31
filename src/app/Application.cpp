@@ -17,6 +17,7 @@
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 Application* Application::s_instance = nullptr;
+static constexpr UINT_PTR kResizeRenderTimerId = 1;
 
 // ── Construction / destruction ────────────────────────────────────────────────
 
@@ -339,6 +340,19 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         }
         return 0;
 
+    case WM_ENTERSIZEMOVE:
+        SetTimer(hwnd, kResizeRenderTimerId, 16, nullptr);
+        return 0;
+
+    case WM_EXITSIZEMOVE:
+        KillTimer(hwnd, kResizeRenderTimerId);
+        return 0;
+
+    case WM_TIMER:
+        if (app && wParam == kResizeRenderTimerId)
+            app->RenderFrame();
+        return 0;
+
     case WM_SYSCOMMAND:
         if ((wParam & 0xfff0) == SC_MINIMIZE) {
             if (app) app->HideMainWindow();
@@ -372,7 +386,15 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case HotkeyAction::TogglePopup:
             if (app->m_popup) {
                 if (app->m_popup->IsVisible()) app->m_popup->Hide();
-                else                           app->m_popup->Show();
+                else                           app->m_popup->Show(false);
+            }
+            break;
+        case HotkeyAction::ShowPopupSearch:
+            if (app->m_popup) {
+                if (!app->m_popup->IsVisible())
+                    app->m_popup->Show(true);
+                else
+                    app->m_popup->RequestSearchFocus();
             }
             break;
         case HotkeyAction::OpenSettings:
@@ -381,7 +403,7 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case HotkeyAction::Incognito:
             // TODO Milestone 9
             break;
-        case HotkeyAction::PasteSlot: {
+        case HotkeyAction::PasteHistorySlot: {
             // Direct paste — no popup shown.
             // Capture foreground window now, before any focus changes.
             HWND target = GetForegroundWindow();
@@ -393,6 +415,10 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             }
             break;
         }
+        case HotkeyAction::PasteVisibleSlot:
+            if (app->m_popup)
+                app->m_popup->PasteVisibleSlot(data);
+            break;
         default: break;
         }
         return 0;

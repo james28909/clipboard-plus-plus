@@ -14,9 +14,10 @@ public:
                 ID3D11DeviceContext* context);
     void Destroy();
 
-    void Show();
+    void Show(bool focusSearch = false);
     void Hide();
     bool IsVisible() const { return m_visible; }
+    bool IsSearchActive() const { return m_searchActive || m_focusSearchOnOpen; }
     HWND GetHwnd()   const { return m_hwnd; }
 
     // Called each frame from Application — renders the popup if visible.
@@ -25,6 +26,8 @@ public:
     // Paste a specific item without opening the popup (used by hotkey direct-paste).
     // targetWindow is the HWND that should receive the Ctrl+V after we write to clipboard.
     void PasteDirect(const ClipboardItem& item, HWND targetWindow);
+    void PasteVisibleSlot(int slot);
+    void RequestSearchFocus();
 
     // Configurable
     float m_opacity{0.95f};
@@ -47,12 +50,15 @@ private:
     void DrawFilterStrip();
     void DrawItemList();
     bool ItemPassesFilter(const ClipboardItem& item) const;
+    std::vector<size_t> BuildVisibleHistoryIndices() const;
 
     // ── Paste ─────────────────────────────────────────────────────────────────
-    void PasteItem(const ClipboardItem& item);
+    void PasteItemKeepOpen(const ClipboardItem& item);
     void PasteQueue();
-    static void WriteToClipboard(const ClipboardItem& item);
-    void RestoreFocusAndPaste();
+    void WriteToClipboard(const ClipboardItem& item) const;
+    HWND ResolvePasteTarget() const;
+    bool WaitForForeground(HWND target, DWORD timeoutMs) const;
+    void RestoreFocusAndPaste(HWND preferredTarget = nullptr);
 
     // ── Win32 + D3D11 ─────────────────────────────────────────────────────────
     HWND                    m_hwnd{};
@@ -68,7 +74,10 @@ private:
     // ── State ─────────────────────────────────────────────────────────────────
     bool  m_visible{false};
     bool  m_justOpened{false};
+    bool  m_focusSearchOnOpen{false};
+    bool  m_searchActive{false};
     bool  m_queueMode{false};
+    bool  m_appendNewlineAfterPaste{false};
     int   m_filterMode{0};      // 0=All 1=Text 2=Image 3=URL
     char  m_searchBuf[256]{};
     HWND  m_prevForeground{};
