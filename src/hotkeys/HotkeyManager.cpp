@@ -70,25 +70,34 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         }
     }
 
-    // ── 2. Popup open — all remaining keys go to the search bar ───────────────
-    // Ctrl+Shift+slot is intentionally NOT checked here so that typing the
-    // first letter while Ctrl/Shift are still physically held from opening
-    // the popup (Ctrl+Shift+V) does not accidentally trigger a paste.
+    // ── 2. Popup open ─────────────────────────────────────────────────────────
     if (popupOpen) {
-        // Escape closes the popup
+        // Escape closes
         if (vk == VK_ESCAPE) {
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(HotkeyAction::TogglePopup), 0);
             return true;
         }
 
-        // Win+key combos are system shortcuts — let them pass through
+        // Win+key combos are system shortcuts — pass through unmodified
         const bool win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0
                       || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
         if (win) return false;
 
-        // Everything else (including keys with Ctrl/Shift still held from
-        // the opening combo) is forwarded to the popup search bar
+        // 1-9 with no modifier: paste that slot and close the popup.
+        // This is the primary quick-select interaction — popup is open,
+        // you see the numbered list, press the number, it pastes.
+        if (!ctrl && !alt && vk >= '1' && vk <= '9') {
+            int slot = static_cast<int>(vk - '1');
+            PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                         static_cast<WPARAM>(HotkeyAction::PasteSlot),
+                         static_cast<LPARAM>(slot));
+            return true;
+        }
+
+        // All other keys (including letters) go to the search bar so the
+        // user can filter the list. a-z slots are accessed via click or
+        // Ctrl+Shift+a-z when popup is closed.
         ForwardKeyToPopup(vk, shift);
         return true;
     }
