@@ -99,8 +99,12 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         return true;
     }
 
-    // Don't forward modified keys (Ctrl+C, Alt+Tab, etc.) to the search bar
-    if (ctrl || alt) return false;
+    // Don't forward if any modifier that isn't Shift is held — this lets
+    // Ctrl+C, Alt+Tab, Win+D etc. pass through unaffected even while the
+    // popup is open. (Shift alone is fine; it just uppercases the char.)
+    const bool win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0
+                  || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+    if (ctrl || alt || win) return false;
 
     ForwardKeyToPopup(vk, shift);
     return true; // consume so it doesn't land in the background app
