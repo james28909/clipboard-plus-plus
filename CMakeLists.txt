@@ -58,6 +58,15 @@ target_link_libraries(clipboardpp PRIVATE
 set_property(TARGET clipboardpp PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# ── Windows Unicode + lean headers ───────────────────────────────────────────
+target_compile_definitions(clipboardpp PRIVATE
+    UNICODE
+    _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+)
+
 # ── Compiler options ──────────────────────────────────────────────────────────
 if(MSVC)
     target_compile_options(clipboardpp PRIVATE

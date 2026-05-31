@@ -15,7 +15,7 @@ bool TrayIcon::Create() {
     m_nid.uID              = 1;
     m_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     m_nid.uCallbackMessage = WM_TRAYICON;
-    m_nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION); // replaced with custom icon later
+    m_nid.hIcon            = LoadIconW(nullptr, MAKEINTRESOURCEW(32512)); // IDI_APPLICATION placeholder
     wcscpy_s(m_nid.szTip, L"Clipboard++");
 
     if (!Shell_NotifyIconW(NIM_ADD, &m_nid))

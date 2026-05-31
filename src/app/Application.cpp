@@ -64,8 +64,8 @@ bool Application::Init() {
     wc.style         = CS_CLASSDC;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = m_hInstance;
-    wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
-    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hIcon         = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));  // IDI_APPLICATION
+    wc.hCursor       = LoadCursorW(nullptr, MAKEINTRESOURCEW(32514)); // IDC_ARROW
     wc.lpszClassName = L"ClipboardPlusPlus_Main";
     RegisterClassExW(&wc);
 
