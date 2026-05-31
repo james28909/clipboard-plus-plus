@@ -53,7 +53,7 @@ void MainWindow::Draw(bool& open) {
     const float contentW = ImGui::GetContentRegionAvail().x - sidebarW - 8.0f;
 
     // Sidebar — bordered so it reads as a separate panel
-    ImGui::BeginChild("##sidebar", ImVec2(sidebarW, 0), ImGuiChildFlags_Border);
+    ImGui::BeginChild("##sidebar", ImVec2(sidebarW, 0), ImGuiChildFlags_Borders);
     DrawSidebarNav(s_activeSection);
     ImGui::EndChild();
 
