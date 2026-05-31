@@ -393,25 +393,35 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) {
 
 void PopupWindow::RestoreFocusAndPaste() {
     if (m_prevForeground && IsWindow(m_prevForeground)) {
-        SetForegroundWindow(m_prevForeground);
-        Sleep(25);
+        // Only switch focus if the target doesn't already have it.
+        // For direct-paste hotkeys the popup never stole focus (WS_EX_NOACTIVATE),
+        // so this is a no-op and the Sleep is skipped — enabling rapid-fire
+        // Ctrl+Shift+1 / 2 / 3 without any delay between pastes.
+        if (GetForegroundWindow() != m_prevForeground) {
+            SetForegroundWindow(m_prevForeground);
+            Sleep(25);
+        }
     }
 
-    // Tag every event with kClipboardPasteMagic so our LL hook recognises
-    // them as self-injected and passes them straight through without
-    // re-triggering any hotbindings. This means we never need to inject
-    // a Shift-up first, so the user's physical Ctrl+Shift state is untouched
-    // and rapid Ctrl+Shift+1 → Ctrl+Shift+2 → Ctrl+Shift+3 works without
-    // having to release and re-press the modifier between presses.
+    // All injected events carry kClipboardPasteMagic so our LL hook ignores them.
     INPUT in[4]{};
     for (auto& i : in) i.ki.dwExtraInfo = kClipboardPasteMagic;
 
-    in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_CONTROL;
-    in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = 'V';
-    in[2]      = in[1]; in[2].ki.dwFlags = KEYEVENTF_KEYUP;
-    in[3]      = in[0]; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
-
-    SendInput(4, in, sizeof(INPUT));
+    if (GetAsyncKeyState(VK_CONTROL) & 0x8000) {
+        // Ctrl is physically held — injecting Ctrl-up would corrupt the OS
+        // key state and cause the next Ctrl+Shift+<slot> to fail.
+        // Just send V; the physical Ctrl provides the modifier.
+        in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = 'V';
+        in[1]      = in[0]; in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(2, in, sizeof(INPUT));
+    } else {
+        // Ctrl not held (e.g. clicked an item after releasing keys) — inject full Ctrl+V.
+        in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_CONTROL;
+        in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = 'V';
+        in[2]      = in[1]; in[2].ki.dwFlags = KEYEVENTF_KEYUP;
+        in[3]      = in[0]; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(4, in, sizeof(INPUT));
+    }
 }
 
 // ── D3D11 swap chain ──────────────────────────────────────────────────────────
