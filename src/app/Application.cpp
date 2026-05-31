@@ -1,6 +1,8 @@
 #include "Application.h"
 #include "TrayIcon.h"
 #include "../ui/MainWindow.h"
+#include "../clipboard/ClipboardHistory.h"
+#include "../clipboard/ClipboardMonitor.h"
 
 #include <imgui.h>
 #include <imgui_impl_win32.h>
@@ -129,6 +131,13 @@ bool Application::Init() {
     m_tray = std::make_unique<TrayIcon>(m_hwnd, m_hInstance);
     if (!m_tray->Create()) return false;
 
+    // Clipboard history + monitor
+    m_history = std::make_unique<ClipboardHistory>(100);
+    m_monitor = std::make_unique<ClipboardMonitor>();
+    m_monitor->Start(m_hInstance, [this](ClipboardItem item) {
+        m_history->Push(std::move(item));
+    });
+
     // TODO (Milestone 5): only show on first launch
     ShowMainWindow();
 
@@ -137,7 +146,8 @@ bool Application::Init() {
 }
 
 void Application::Shutdown() {
-    if (m_tray) m_tray->Destroy();
+    if (m_monitor) m_monitor->Stop();
+    if (m_tray)    m_tray->Destroy();
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

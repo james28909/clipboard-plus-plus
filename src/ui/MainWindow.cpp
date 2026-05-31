@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 #include "../app/Application.h"
+#include "../clipboard/ClipboardHistory.h"
+#include "../clipboard/ContentDetector.h"
 #include <imgui.h>
 #include <windows.h>
 
@@ -322,6 +324,50 @@ void MainWindow::DrawHistory() {
     }
     ImGui::Spacing();
     ImGui::TextDisabled("Storage engine wired in Milestone 5.");
+
+    // ── Live history preview ──────────────────────────────────────────────────
+    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+    ClipboardHistory* hist = Application::Get()->GetHistory();
+    size_t count = hist ? hist->Size() : 0;
+    ImGui::Text("Live history  (%zu / %d items)", count, activeLimit);
+    ImGui::Spacing();
+
+    if (ImGui::BeginChild("##histlive", {-1.0f, 220.0f}, ImGuiChildFlags_Borders)) {
+        if (count == 0) {
+            ImGui::TextDisabled("  Nothing captured yet — copy something!");
+        } else {
+            static const ContentTag kTagOrder[] = {
+                TAG_SECRET, TAG_URL, TAG_EMAIL, TAG_JSON, TAG_XML,
+                TAG_HEX, TAG_PATH, TAG_CODE
+            };
+            for (size_t i = 0; i < count && i < 35; ++i) {
+                const ClipboardItem* item = hist->Get(i);
+                if (!item) break;
+
+                // Slot label: 1-9 then a-z
+                char slot[4]{};
+                if (i < 9)       slot[0] = (char)('1' + (int)i);
+                else if (i < 35) slot[0] = (char)('a' + (int)(i - 9));
+                ImGui::TextDisabled(" %s ", slot);
+                ImGui::SameLine();
+
+                // Inline tag badges
+                for (ContentTag t : kTagOrder) {
+                    if (!item->HasTag(t)) continue;
+                    ImVec4 col = (t == TAG_SECRET)
+                        ? ImVec4(1.f, 0.34f, 0.34f, 1.f)
+                        : ImVec4(0.4f, 0.7f, 1.0f, 1.f);
+                    ImGui::PushStyleColor(ImGuiCol_Text, col);
+                    ImGui::Text("[%s]", ContentDetector::TagName(t));
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                }
+
+                ImGui::TextUnformatted(item->Preview(72).c_str());
+            }
+        }
+    }
+    ImGui::EndChild();
 }
 
 // ── Section: Privacy ─────────────────────────────────────────────────────────

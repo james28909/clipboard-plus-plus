@@ -19,13 +19,18 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
 )
 
-# ── App sources (Milestone 1) ─────────────────────────────────────────────────
+# ── App sources ───────────────────────────────────────────────────────────────
 set(APP_SOURCES
     src/main.cpp
     src/app/Application.cpp
     src/app/TrayIcon.cpp
     src/ui/Renderer.cpp
     src/ui/MainWindow.cpp
+    # Milestone 2 — clipboard core
+    src/clipboard/ClipboardItem.cpp
+    src/clipboard/ClipboardHistory.cpp
+    src/clipboard/ClipboardMonitor.cpp
+    src/clipboard/ContentDetector.cpp
 )
 
 # ── Executable ────────────────────────────────────────────────────────────────
@@ -52,6 +57,7 @@ target_link_libraries(clipboardpp PRIVATE
     shlwapi.lib
     user32.lib
     gdi32.lib
+    psapi.lib
 )
 
 # ── Static runtime (no MSVC redist needed) ────────────────────────────────────

@@ -4,6 +4,8 @@
 #include <memory>
 
 class TrayIcon;
+class ClipboardHistory;
+class ClipboardMonitor;
 
 // Message IDs used across the app
 constexpr UINT WM_TRAYICON     = WM_APP + 1; // tray icon callback
@@ -22,6 +24,7 @@ public:
     HWND GetHwnd() const { return m_hwnd; }
     ID3D11Device* GetDevice() const { return m_d3dDevice; }
     ID3D11DeviceContext* GetContext() const { return m_d3dContext; }
+    ClipboardHistory* GetHistory() const { return m_history.get(); }
 
 private:
     bool Init();
@@ -43,7 +46,9 @@ private:
     IDXGISwapChain*          m_swapChain{};
     ID3D11RenderTargetView*  m_renderTarget{};
 
-    std::unique_ptr<TrayIcon> m_tray;
+    std::unique_ptr<TrayIcon>          m_tray;
+    std::unique_ptr<ClipboardHistory>  m_history;
+    std::unique_ptr<ClipboardMonitor>  m_monitor;
 
     bool m_running{false};
     bool m_mainVisible{false};
