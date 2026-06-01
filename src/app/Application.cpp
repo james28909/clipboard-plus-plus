@@ -13,11 +13,18 @@
 #include <d3dcompiler.h>
 #include <dwmapi.h>
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
+#include <algorithm>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 Application* Application::s_instance = nullptr;
 static constexpr UINT_PTR kResizeRenderTimerId = 1;
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
 
 // ── Construction / destruction ────────────────────────────────────────────────
 
@@ -66,9 +73,72 @@ void Application::ShowPopup() {
     if (m_popup) m_popup->Show();
 }
 
+void Application::RequestAppearance(const AppearanceSettings& settings) {
+    m_appearance = settings;
+    m_config.appearance = settings;
+    m_appearanceDirty = true;
+    SaveConfig();
+}
+
+void Application::SetPopupOpacity(float opacity) {
+    m_appearance.popupOpacity = std::clamp(opacity, 0.1f, 1.0f);
+    m_config.appearance = m_appearance;
+    m_appearanceDirty = true;
+    SaveConfig();
+}
+
+void Application::RequestHotkeySettings(const HotkeySettings& settings) {
+    m_hotkeySettings = settings;
+    m_config.hotkeys = settings;
+    if (m_hotkeys)
+        m_hotkeys->ApplySettings(m_hotkeySettings);
+    SaveConfig();
+}
+
+void Application::SetNewItemsAtTop(bool value) {
+    m_config.newItemsAtTop = value;
+    if (m_history)
+        m_history->SetNewItemsAtTop(value);
+    SaveConfig();
+}
+
+void Application::SetAppendNewlineAfterPaste(bool value) {
+    m_config.appendNewlineAfterPaste = value;
+    if (m_popup)
+        m_popup->SetAppendNewlineAfterPaste(value);
+    SaveConfig();
+}
+
+ClipboardHistory::MoveTarget Application::GetPasteMoveTarget() const {
+    switch (m_config.pasteMoveTarget) {
+    case 1: return ClipboardHistory::MoveTarget::Top;
+    case 2: return ClipboardHistory::MoveTarget::Bottom;
+    default: return ClipboardHistory::MoveTarget::None;
+    }
+}
+
+void Application::SetPasteMoveTarget(ClipboardHistory::MoveTarget target) {
+    switch (target) {
+    case ClipboardHistory::MoveTarget::Top:    m_config.pasteMoveTarget = 1; break;
+    case ClipboardHistory::MoveTarget::Bottom: m_config.pasteMoveTarget = 2; break;
+    default:                                   m_config.pasteMoveTarget = 0; break;
+    }
+    if (m_popup)
+        m_popup->SetPasteMoveTarget(target);
+    SaveConfig();
+}
+
+void Application::SaveConfig() {
+    ConfigStore::Save(m_config);
+}
+
 // ── Private: initialisation ───────────────────────────────────────────────────
 
 bool Application::Init() {
+    m_config = ConfigStore::Load();
+    m_appearance = m_config.appearance;
+    m_hotkeySettings = m_config.hotkeys;
+
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(WNDCLASSEXW);
     wc.style         = CS_CLASSDC;
@@ -97,6 +167,9 @@ bool Application::Init() {
     // DWM drop-shadow for borderless window (1px inset on all sides is enough)
     MARGINS shadow = {1, 1, 1, 1};
     DwmExtendFrameIntoClientArea(m_hwnd, &shadow);
+    const COLORREF noBorder = DWMWA_COLOR_NONE;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_BORDER_COLOR,
+                          &noBorder, sizeof(noBorder));
 
     if (!CreateD3D()) {
         DestroyD3D();
@@ -112,35 +185,19 @@ bool Application::Init() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename  = nullptr;
 
-    // Dark base style — ThemeManager replaces this in Milestone 8
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding    = 0.0f;  // flat edges for full-window layout
-    style.FrameRounding     = 3.0f;
-    style.ScrollbarRounding = 3.0f;
-    style.GrabRounding      = 3.0f;
-    style.WindowBorderSize  = 0.0f;
-    style.FrameBorderSize   = 0.0f;
-    style.WindowPadding     = ImVec2(0, 0);
+    ApplyThemeStyle(m_appearance.theme, false);
 
     ImGui_ImplWin32_Init(m_hwnd);
     ImGui_ImplDX11_Init(m_d3dDevice, m_d3dContext);
 
-    // Segoe UI for a clean Windows-native feel
-    ImFontConfig fontCfg;
-    fontCfg.OversampleH = 2;
-    fontCfg.OversampleV = 2;
-    const char* segoeUiPath = "C:\\Windows\\Fonts\\segoeui.ttf";
-    if (GetFileAttributesA(segoeUiPath) != INVALID_FILE_ATTRIBUTES)
-        io.Fonts->AddFontFromFileTTF(segoeUiPath, 15.0f, &fontCfg);
-    else
-        io.Fonts->AddFontDefault();
+    RebuildFontAtlas(io, m_appearance);
 
     m_tray = std::make_unique<TrayIcon>(m_hwnd, m_hInstance);
     if (!m_tray->Create()) return false;
 
     // Clipboard history + monitor
     m_history = std::make_unique<ClipboardHistory>(100);
+    m_history->SetNewItemsAtTop(m_config.newItemsAtTop);
     m_monitor = std::make_unique<ClipboardMonitor>();
     m_monitor->Start(m_hInstance, [this](ClipboardItem item) {
         m_history->Push(std::move(item));
@@ -149,9 +206,13 @@ bool Application::Init() {
     m_popup = std::make_unique<PopupWindow>();
     if (!m_popup->Create(m_hInstance, m_d3dDevice, m_d3dContext))
         return false;
+    m_popup->ApplyAppearance(m_appearance);
+    m_popup->SetAppendNewlineAfterPaste(m_config.appendNewlineAfterPaste);
+    m_popup->SetPasteMoveTarget(GetPasteMoveTarget());
 
     m_hotkeys = std::make_unique<HotkeyManager>();
     m_hotkeys->Install(m_hwnd);
+    m_hotkeys->ApplySettings(m_hotkeySettings);
 
     // TODO (Milestone 5): only show on first launch
     ShowMainWindow();
@@ -182,6 +243,9 @@ void Application::Shutdown() {
 // ── Private: render ───────────────────────────────────────────────────────────
 
 void Application::RenderFrame() {
+    if (m_appearanceDirty)
+        ApplyAppearanceNow();
+
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -199,6 +263,21 @@ void Application::RenderFrame() {
 
     // Popup has its own context + swap chain — rendered separately
     if (m_popup) m_popup->Render();
+}
+
+void Application::ApplyAppearanceNow() {
+    m_appearanceDirty = false;
+
+    ImGuiContext* prevCtx = ImGui::GetCurrentContext();
+    ApplyThemeStyle(m_appearance.theme, false);
+    ImGui_ImplDX11_InvalidateDeviceObjects();
+    RebuildFontAtlas(ImGui::GetIO(), m_appearance);
+    ImGui_ImplDX11_CreateDeviceObjects();
+
+    if (m_popup)
+        m_popup->ApplyAppearance(m_appearance);
+
+    ImGui::SetCurrentContext(prevCtx);
 }
 
 // ── Private: D3D11 ───────────────────────────────────────────────────────────
@@ -287,6 +366,12 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         break;
 
     // ── Tell Windows which part of our window each pixel belongs to ──────────
+    case WM_NCPAINT:
+        return 0;
+
+    case WM_NCACTIVATE:
+        return TRUE;
+
     case WM_NCHITTEST: {
         POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(hwnd, &pt);

@@ -1,5 +1,6 @@
 #pragma once
 #include <windows.h>
+#include <string>
 #include <vector>
 
 // Tag every INPUT event we inject ourselves with this value in dwExtraInfo.
@@ -31,6 +32,14 @@ struct KeyBinding {
     }
 };
 
+struct HotkeySettings {
+    std::vector<KeyBinding> bindings;
+    bool hiddenPasteCtrl{true};
+    bool hiddenPasteShift{false};
+    bool hiddenPasteAlt{true};
+    bool hiddenPasteFunctionKeys{true};
+};
+
 class HotkeyManager {
 public:
     // Install the global keyboard hook.
@@ -42,14 +51,25 @@ public:
 
     // Replace the active binding set (called from settings when user changes a combo)
     void SetBindings(std::vector<KeyBinding> bindings);
+    void ApplySettings(const HotkeySettings& settings);
+    const HotkeySettings& GetSettings() const { return m_settings; }
+
+    void BeginCapture();
+    bool IsCapturing() const { return m_captureActive; }
+    bool ConsumeCapturedBinding(KeyBinding& binding);
 
     // Default bindings returned as a starting point for settings UI.
     static std::vector<KeyBinding> DefaultBindings();
+    static HotkeySettings DefaultSettings();
     static int SlotFromVKey(UINT vk, bool includeFunctionKeys);
     static char SlotLabel(int slot);
+    static const char* ActionName(HotkeyAction action);
+    static std::string BindingText(const KeyBinding& binding);
+    static std::string ModifiersText(bool ctrl, bool shift, bool alt);
 
 private:
     static LRESULT CALLBACK LLProc(int nCode, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK MouseLLProc(int nCode, WPARAM wParam, LPARAM lParam);
 
     // Called on WM_KEYDOWN / WM_SYSKEYDOWN.
     // Returns true if the key should be consumed.
@@ -57,10 +77,19 @@ private:
 
     // Forward a raw key event to the popup's HWND so ImGui can process it.
     void ForwardKeyToPopup(UINT vk, bool shift) const;
+    void UpdateModifierState(UINT vk, bool isDown);
 
     HHOOK                   m_hook{};
+    HHOOK                   m_mouseHook{};
     HWND                    m_msgTarget{};
     std::vector<KeyBinding> m_bindings;
+    HotkeySettings          m_settings;
+    bool                    m_captureActive{false};
+    bool                    m_captureReady{false};
+    KeyBinding              m_capturedBinding{};
+    bool                    m_ctrlDown{false};
+    bool                    m_shiftDown{false};
+    bool                    m_altDown{false};
 
     static HotkeyManager*   s_instance;
 };

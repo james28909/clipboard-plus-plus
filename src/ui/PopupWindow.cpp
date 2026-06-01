@@ -3,15 +3,20 @@
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
+#include "Appearance.h"
 
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
 #include <dxgi.h>
+#include <dwmapi.h>
+#include <windowsx.h>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <cstdio>
+#include <cfloat>
+#include <cmath>
 #include <string>
 #include "../hotkeys/HotkeyManager.h"  // kClipboardPasteMagic
 
@@ -19,6 +24,21 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM,
 
 static constexpr wchar_t kPopupClass[] = L"CPPPopupWnd";
 static constexpr UINT_PTR kPopupResizeRenderTimerId = 1;
+static constexpr int kPopupResizeBorder = 8;
+static constexpr int kPopupTitlePad = 8;
+static constexpr int kPopupTitleButton = 22;
+static constexpr int kPopupTitleGap = 4;
+static constexpr int kPopupTitleHeight = kPopupTitlePad + kPopupTitleButton + 8;
+
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
 
 static const char* PasteMoveLabel(ClipboardHistory::MoveTarget target) {
     switch (target) {
@@ -88,13 +108,7 @@ bool PopupWindow::Create(HINSTANCE hInstance,
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style      = ImGui::GetStyle();
-    style.WindowRounding   = 6.0f;
-    style.FrameRounding    = 3.0f;
-    style.ScrollbarRounding = 3.0f;
-    style.WindowBorderSize = 1.0f;
-    style.WindowPadding    = {8.0f, 8.0f};
+    ApplyThemeStyle(ThemeId::DarkDefault, true);
 
     ImGui_ImplWin32_Init(m_hwnd);
     ImGui_ImplDX11_Init(m_device, m_context);
@@ -102,6 +116,31 @@ bool PopupWindow::Create(HINSTANCE hInstance,
     // Restore the main context so we don't interfere with Application init
     ImGui::SetCurrentContext(prevCtx);
     return true;
+}
+
+void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
+    if (!m_imguiCtx) return;
+
+    ImGuiContext* prevCtx = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(m_imguiCtx);
+
+    ApplyThemeStyle(settings.theme, true);
+    m_theme = settings.theme;
+    ImGui_ImplDX11_InvalidateDeviceObjects();
+    RebuildFontAtlas(ImGui::GetIO(), settings);
+    ImGui_ImplDX11_CreateDeviceObjects();
+    m_opacity = settings.popupOpacity;
+    m_width = settings.popupWidth;
+    m_height = settings.popupHeight;
+    ApplyOpacity();
+    if (m_visible) {
+        SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, m_width, m_height,
+                     SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        ResizeSwapChainToClient();
+        ApplyWindowCorners();
+    }
+
+    ImGui::SetCurrentContext(prevCtx);
 }
 
 void PopupWindow::Destroy() {
@@ -128,6 +167,8 @@ void PopupWindow::Destroy() {
 void PopupWindow::Show(bool focusSearch) {
     m_prevForeground = GetForegroundWindow();
     PositionAtCursor();
+    ResizeSwapChainToClient();
+    ApplyWindowCorners();
     ApplyOpacity();
     ShowWindow(m_hwnd, SW_SHOWNA); // NA = no-activate
     m_visible           = true;
@@ -135,6 +176,8 @@ void PopupWindow::Show(bool focusSearch) {
     m_focusSearchOnOpen = focusSearch;
     m_searchActive      = false;
     m_searchCapture     = focusSearch;
+    m_keyboardCapture   = true;
+    m_maximized         = false;
     m_queueMode         = false;
     m_queue.clear();
     std::memset(m_searchBuf, 0, sizeof(m_searchBuf));
@@ -145,6 +188,8 @@ void PopupWindow::Hide() {
     m_visible       = false;
     m_searchActive  = false;
     m_searchCapture = false;
+    m_keyboardCapture = false;
+    m_maximized = false;
     m_queueMode     = false;
     m_queue.clear();
 }
@@ -152,6 +197,7 @@ void PopupWindow::Hide() {
 void PopupWindow::RequestSearchFocus() {
     m_focusSearchOnOpen = true;
     m_searchCapture = true;
+    m_keyboardCapture = true;
     m_justOpened = true;
 }
 
@@ -171,8 +217,8 @@ void PopupWindow::Render() {
     // Full-window ImGui overlay — no title bar, fills the entire HWND
     RECT rc{};
     GetClientRect(m_hwnd, &rc);
-    ImGui::SetNextWindowPos({0, 0});
-    ImGui::SetNextWindowSize({(float)(rc.right), (float)(rc.bottom)});
+    ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({(float)(rc.right), (float)(rc.bottom)}, ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(1.0f); // opacity handled at OS level
 
     ImGuiWindowFlags flags =
@@ -186,6 +232,8 @@ void PopupWindow::Render() {
 
     ImGui::Begin("##popup", nullptr, flags);
 
+    DrawTitleBar();
+
     // Escape closes
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         ImGui::End(); ImGui::Render();
@@ -195,31 +243,38 @@ void PopupWindow::Render() {
     }
 
     // ── Search bar ────────────────────────────────────────────────────────────
-    float winW = ImGui::GetWindowWidth();
-    ImGui::SetNextItemWidth(winW - 16.0f);
-    if (m_justOpened && m_focusSearchOnOpen) {
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if ((m_justOpened && m_focusSearchOnOpen) ||
+        (m_searchCapture && !ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
         ImGui::SetKeyboardFocusHere();
     }
     m_justOpened = false;
     ImGui::InputTextWithHint("##search", "  Search...",
                               m_searchBuf, sizeof(m_searchBuf));
     const bool searchHovered = ImGui::IsItemHovered();
-    if (m_focusSearchOnOpen || ImGui::IsItemClicked())
+    const bool searchInputActive = ImGui::IsItemActive();
+    if (m_focusSearchOnOpen || ImGui::IsItemClicked()) {
+        m_keyboardCapture = true;
         m_searchCapture = true;
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !searchHovered)
-        m_searchCapture = false;
-    m_searchActive = ImGui::IsItemActive() || m_searchCapture;
+    }
+    m_searchActive = searchInputActive || m_searchCapture;
     m_focusSearchOnOpen = false;
 
     ImGuiIO& popupIo = ImGui::GetIO();
+    const bool anyItemActive = ImGui::IsAnyItemActive();
     const size_t searchLen = std::strlen(m_searchBuf);
     if (m_searchActive != m_lastSearchActive ||
+        searchInputActive != m_lastSearchInputActive ||
+        anyItemActive != m_lastAnyItemActive ||
         popupIo.WantTextInput != m_lastWantTextInput ||
         searchLen != m_lastSearchLen) {
         std::snprintf(m_searchDebug, sizeof(m_searchDebug),
-                      "Search debug: active=%d capture=%d wantText=%d len=%zu text=\"%.48s\"",
+                      "Search debug: active=%d capture=%d input=%d hover=%d anyActive=%d wantText=%d len=%zu text=\"%.48s\"",
                       m_searchActive ? 1 : 0,
                       m_searchCapture ? 1 : 0,
+                      searchInputActive ? 1 : 0,
+                      searchHovered ? 1 : 0,
+                      anyItemActive ? 1 : 0,
                       popupIo.WantTextInput ? 1 : 0,
                       searchLen,
                       m_searchBuf);
@@ -227,11 +282,11 @@ void PopupWindow::Render() {
         line += "\n";
         OutputDebugStringA(line.c_str());
         m_lastSearchActive = m_searchActive;
+        m_lastSearchInputActive = searchInputActive;
+        m_lastAnyItemActive = anyItemActive;
         m_lastWantTextInput = popupIo.WantTextInput;
         m_lastSearchLen = searchLen;
     }
-    ImGui::TextDisabled("%s", m_searchDebug);
-
     ImGui::Spacing();
     DrawFilterStrip();
     ImGui::Separator();
@@ -252,55 +307,109 @@ void PopupWindow::Render() {
 
 // ── Filter strip ──────────────────────────────────────────────────────────────
 
+void PopupWindow::DrawTitleBar() {
+    const float height = static_cast<float>(kPopupTitleButton);
+    const float gap = static_cast<float>(kPopupTitleGap);
+    const float knobSize = height;
+    const float fullWidth = ImGui::GetContentRegionAvail().x;
+    const float spacerWidth = std::max(0.0f, fullWidth - height - knobSize - gap * 2.0f);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.0f, 0.0f});
+    if (ImGui::Button("x", {height, height})) {
+        Hide();
+    }
+    ImGui::PopStyleVar();
+
+    ImGui::SameLine();
+    ImGui::InvisibleButton("##opacity_knob", {knobSize, knobSize});
+    const bool knobHovered = ImGui::IsItemHovered();
+    if (knobHovered && ImGui::GetIO().MouseWheel != 0.0f) {
+        if (Application* app = Application::Get()) {
+            app->SetPopupOpacity(m_opacity + ImGui::GetIO().MouseWheel * 0.05f);
+        }
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const ImVec2 center = {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f};
+    const float radius = knobSize * 0.33f;
+    const ImU32 ring = ImGui::GetColorU32(knobHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+    const ImU32 fill = ImGui::GetColorU32(ImGuiCol_WindowBg);
+    dl->AddCircleFilled(center, radius, fill, 24);
+    dl->AddCircle(center, radius, ring, 24, 2.0f);
+    const float angle = -1.5708f + m_opacity * 6.28318f;
+    dl->AddLine(center,
+                {center.x + std::cos(angle) * radius * 0.78f,
+                 center.y + std::sin(angle) * radius * 0.78f},
+                ring, 2.0f);
+    if (knobHovered)
+        ImGui::SetTooltip("Opacity %.0f%%", m_opacity * 100.0f);
+
+    ImGui::SameLine();
+    ImGui::Dummy({spacerWidth, height});
+
+    ImGui::Spacing();
+}
+
+static bool PopupToggleButton(const char* label, bool active, const PopupToggleColors& colors) {
+    ImGui::PushStyleColor(ImGuiCol_Button, active ? colors.on : colors.off);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? colors.onHovered : colors.offHovered);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, active ? colors.onActive : colors.offActive);
+    const bool clicked = ImGui::SmallButton(label);
+    ImGui::PopStyleColor(3);
+    return clicked;
+}
+
 void PopupWindow::DrawFilterStrip() {
+    const PopupToggleColors toggleColors = GetPopupToggleColors(m_theme);
     struct Btn { const char* label; int mode; };
     static constexpr Btn kFilters[] = {
         {"All",0},{"Text",1},{"Image",2},{"URL",3}
     };
     for (const auto& f : kFilters) {
         bool active = (m_filterMode == f.mode);
-        if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        if (ImGui::SmallButton(f.label)) m_filterMode = f.mode;
-        if (active) ImGui::PopStyleColor();
+        if (PopupToggleButton(f.label, active, toggleColors)) {
+            ActivateKeyboardCapture();
+            m_filterMode = f.mode;
+        }
         ImGui::SameLine();
     }
     ImGui::NewLine();
 
     bool qActive = m_queueMode;
-    if (qActive)
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    if (ImGui::SmallButton("Queue")) { m_queueMode = !m_queueMode; m_queue.clear(); }
-    if (qActive) ImGui::PopStyleColor();
+    if (PopupToggleButton("Queue", qActive, toggleColors)) {
+        ActivateKeyboardCapture();
+        m_queueMode = !m_queueMode;
+        m_queue.clear();
+    }
     ImGui::SameLine();
 
     if (m_queueMode && !m_queue.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.f));
-        if (ImGui::SmallButton("Paste All")) PasteQueue();
+        if (ImGui::SmallButton("Paste All")) {
+            ActivateKeyboardCapture();
+            PasteQueue();
+        }
         ImGui::PopStyleColor();
         ImGui::SameLine();
     }
 
     bool newlineActive = m_appendNewlineAfterPaste;
-    if (newlineActive)
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    if (ImGui::SmallButton("Newline")) m_appendNewlineAfterPaste = !m_appendNewlineAfterPaste;
-    if (newlineActive) ImGui::PopStyleColor();
+    if (PopupToggleButton("Newline", newlineActive, toggleColors)) {
+        ActivateKeyboardCapture();
+        m_appendNewlineAfterPaste = !m_appendNewlineAfterPaste;
+    }
     ImGui::SameLine();
 
     bool moveActive = m_pasteMoveTarget != ClipboardHistory::MoveTarget::None;
-    if (moveActive)
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    if (ImGui::SmallButton(PasteMoveLabel(m_pasteMoveTarget)))
+    if (PopupToggleButton(PasteMoveLabel(m_pasteMoveTarget), moveActive, toggleColors)) {
+        ActivateKeyboardCapture();
         m_pasteMoveTarget = NextPasteMoveTarget(m_pasteMoveTarget);
-    if (moveActive) ImGui::PopStyleColor();
+    }
     ImGui::SameLine();
 
     if (ImGui::SmallButton(" @ ")) {       // gear placeholder
+        ActivateKeyboardCapture();
         Application::Get()->ShowMainWindow();
         Hide();
     }
@@ -349,6 +458,7 @@ void PopupWindow::DrawItemList() {
     ClipboardHistory* hist = Application::Get()->GetHistory();
     if (!hist) return;
 
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
     ImGui::BeginChild("##items", {0.f, 0.f}, ImGuiChildFlags_None);
 
     const std::vector<size_t> visible = BuildVisibleHistoryIndices();
@@ -383,6 +493,9 @@ void PopupWindow::DrawItemList() {
 
         if (ImGui::Selectable(label, qpos >= 0,
                                ImGuiSelectableFlags_SpanAllColumns)) {
+            ActivateKeyboardCapture();
+            ReleaseSearchCapture();
+
             // Check physical Ctrl state — ImGui's KeyCtrl is unreliable since
             // the popup has WS_EX_NOACTIVATE and never receives raw key events.
             const bool ctrlHeld = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -398,6 +511,7 @@ void PopupWindow::DrawItemList() {
                 PasteItemKeepOpen(*item);
                 hist->MoveItemById(itemId, m_pasteMoveTarget);
                 ImGui::EndChild();
+                ImGui::PopStyleColor();
                 return;
             } else if (m_queueMode) {
                 if (qpos >= 0)
@@ -411,6 +525,7 @@ void PopupWindow::DrawItemList() {
                 PasteItemKeepOpen(*item);
                 hist->MoveItemById(itemId, m_pasteMoveTarget);
                 ImGui::EndChild();
+                ImGui::PopStyleColor();
                 return;
             }
         }
@@ -432,10 +547,44 @@ void PopupWindow::DrawItemList() {
     if (visible.empty())
         ImGui::TextDisabled("  No items match.");
 
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        ActivateKeyboardCapture();
+        ReleaseSearchCapture();
+    }
+
     ImGui::EndChild();
+    ImGui::PopStyleColor();
 }
 
 // ── Paste ─────────────────────────────────────────────────────────────────────
+
+void PopupWindow::ReleaseSearchCapture() {
+    m_searchCapture = false;
+    m_searchActive = false;
+    m_focusSearchOnOpen = false;
+}
+
+void PopupWindow::ActivateKeyboardCapture() {
+    m_keyboardCapture = true;
+}
+
+void PopupWindow::NoteExternalMouseDown(POINT screenPoint) {
+    RECT popupRect{};
+    if (GetWindowRect(m_hwnd, &popupRect) &&
+        PtInRect(&popupRect, screenPoint)) {
+        return;
+    }
+
+    ReleaseSearchCapture();
+    m_keyboardCapture = false;
+
+    HWND clicked = WindowFromPoint(screenPoint);
+    HWND main = Application::Get() ? Application::Get()->GetHwnd() : nullptr;
+    if (clicked) clicked = GetAncestor(clicked, GA_ROOT);
+    if (clicked && clicked != m_hwnd && clicked != main)
+        m_prevForeground = clicked;
+}
 
 void PopupWindow::DrawItemDragDrop(uint64_t itemId, int qpos) {
     ClipboardHistory* hist = Application::Get()->GetHistory();
@@ -634,10 +783,15 @@ bool PopupWindow::CreateSwapChain() {
     dxgiDev->GetAdapter(&adapter);
     adapter->GetParent(__uuidof(IDXGIFactory), reinterpret_cast<void**>(&factory));
 
+    RECT rc{};
+    GetClientRect(m_hwnd, &rc);
+    const UINT clientWidth = std::max<UINT>(1, static_cast<UINT>(rc.right - rc.left));
+    const UINT clientHeight = std::max<UINT>(1, static_cast<UINT>(rc.bottom - rc.top));
+
     DXGI_SWAP_CHAIN_DESC sd{};
     sd.BufferCount                        = 2;
-    sd.BufferDesc.Width                   = static_cast<UINT>(m_width);
-    sd.BufferDesc.Height                  = static_cast<UINT>(m_height);
+    sd.BufferDesc.Width                   = clientWidth;
+    sd.BufferDesc.Height                  = clientHeight;
     sd.BufferDesc.Format                  = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferDesc.RefreshRate.Numerator   = 60;
     sd.BufferDesc.RefreshRate.Denominator = 1;
@@ -656,6 +810,22 @@ bool PopupWindow::CreateSwapChain() {
     if (FAILED(hr)) return false;
     CreateRenderTarget();
     return true;
+}
+
+void PopupWindow::ResizeSwapChainToClient() {
+    if (!m_swapChain) return;
+
+    RECT rc{};
+    if (!GetClientRect(m_hwnd, &rc)) return;
+
+    const UINT width = std::max<UINT>(1, static_cast<UINT>(rc.right - rc.left));
+    const UINT height = std::max<UINT>(1, static_cast<UINT>(rc.bottom - rc.top));
+
+    DestroyRenderTarget();
+    HRESULT hr = m_swapChain->ResizeBuffers(0, width, height,
+                                            DXGI_FORMAT_UNKNOWN, 0);
+    if (SUCCEEDED(hr))
+        CreateRenderTarget();
 }
 
 void PopupWindow::DestroySwapChain() {
@@ -703,7 +873,51 @@ void PopupWindow::ApplyOpacity() {
     SetLayeredWindowAttributes(m_hwnd, 0, alpha, LWA_ALPHA);
 }
 
+void PopupWindow::ApplyWindowCorners() {
+    // ImGui rounds only its own drawing. DWM owns the native HWND corners.
+    // Windows chooses the exact radius; custom pixel radii require region/per-pixel masks.
+    const int pref = 2; // DWMWCP_ROUND
+    DwmSetWindowAttribute(m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                          &pref, sizeof(pref));
+
+    const COLORREF noBorder = DWMWA_COLOR_NONE;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_BORDER_COLOR,
+                          &noBorder, sizeof(noBorder));
+}
+
 // ── Win32 message handler ─────────────────────────────────────────────────────
+
+void PopupWindow::ToggleMaximized() {
+    if (m_maximized) {
+        SetWindowPos(m_hwnd, HWND_TOPMOST,
+                     m_restoreRect.left, m_restoreRect.top,
+                     m_restoreRect.right - m_restoreRect.left,
+                     m_restoreRect.bottom - m_restoreRect.top,
+                     SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        m_maximized = false;
+        ResizeSwapChainToClient();
+        ApplyWindowCorners();
+        return;
+    }
+
+    if (!GetWindowRect(m_hwnd, &m_restoreRect))
+        return;
+
+    HMONITOR mon = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{sizeof(MONITORINFO)};
+    if (!GetMonitorInfoW(mon, &mi))
+        return;
+
+    const RECT& r = mi.rcWork;
+    SetWindowPos(m_hwnd, HWND_TOPMOST,
+                 r.left, r.top,
+                 r.right - r.left,
+                 r.bottom - r.top,
+                 SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    m_maximized = true;
+    ResizeSwapChainToClient();
+    ApplyWindowCorners();
+}
 
 LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
                                        WPARAM wParam, LPARAM lParam) {
@@ -731,6 +945,72 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
     if (imgHandled) return TRUE;
 
     switch (msg) {
+    case WM_NCCALCSIZE:
+        if (wParam == TRUE)
+            return 0;
+        break;
+
+    case WM_NCPAINT:
+        return 0;
+
+    case WM_NCACTIVATE:
+        return TRUE;
+
+    case WM_NCHITTEST: {
+        POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        ScreenToClient(hwnd, &pt);
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+
+        const bool onL = pt.x < kPopupResizeBorder;
+        const bool onR = pt.x >= rc.right - kPopupResizeBorder;
+        const bool onT = pt.y < kPopupResizeBorder;
+        const bool onB = pt.y >= rc.bottom - kPopupResizeBorder;
+
+        if (onT && onL) return HTTOPLEFT;
+        if (onT && onR) return HTTOPRIGHT;
+        if (onB && onL) return HTBOTTOMLEFT;
+        if (onB && onR) return HTBOTTOMRIGHT;
+        if (onL)        return HTLEFT;
+        if (onR)        return HTRIGHT;
+        if (onT)        return HTTOP;
+        if (onB)        return HTBOTTOM;
+
+        const int closeLeft = kPopupTitlePad;
+        const int closeRight = closeLeft + kPopupTitleButton;
+        const int knobLeft = closeRight + kPopupTitleGap;
+        const int knobRight = knobLeft + kPopupTitleButton;
+        const int closeBottom = kPopupTitlePad + kPopupTitleButton;
+        const bool overClose = pt.x >= closeLeft && pt.x < closeRight &&
+                               pt.y >= kPopupTitlePad && pt.y < closeBottom;
+        const bool overKnob = pt.x >= knobLeft && pt.x < knobRight &&
+                              pt.y >= kPopupTitlePad && pt.y < closeBottom;
+        if (!overClose && !overKnob &&
+            pt.y >= kPopupResizeBorder && pt.y < kPopupTitleHeight)
+            return HTCAPTION;
+
+        return HTCLIENT;
+    }
+
+    case WM_NCLBUTTONDOWN:
+        if (pw && wParam == HTCAPTION) {
+            pw->ActivateKeyboardCapture();
+            pw->ReleaseSearchCapture();
+        }
+        break;
+
+    case WM_NCLBUTTONDBLCLK:
+        if (pw && wParam == HTCAPTION) {
+            pw->ActivateKeyboardCapture();
+            pw->ReleaseSearchCapture();
+            pw->ToggleMaximized();
+            return 0;
+        }
+        break;
+
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+
     case WM_ERASEBKGND:
         return TRUE;
 
@@ -742,10 +1022,8 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     case WM_SIZE:
         if (pw && pw->m_swapChain && wParam != SIZE_MINIMIZED) {
-            pw->DestroyRenderTarget();
-            pw->m_swapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam),
-                                            DXGI_FORMAT_UNKNOWN, 0);
-            pw->CreateRenderTarget();
+            pw->ResizeSwapChainToClient();
+            pw->ApplyWindowCorners();
         }
         return 0;
 
@@ -765,7 +1043,6 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
         return 0;
 
     case WM_KILLFOCUS:
-        if (pw) pw->Hide();
         return 0;
     }
 

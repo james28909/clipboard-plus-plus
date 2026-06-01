@@ -2,12 +2,14 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <memory>
+#include "ConfigStore.h"
+#include "../clipboard/ClipboardHistory.h"
+#include "../ui/Appearance.h"
+#include "../hotkeys/HotkeyManager.h"
 
 class TrayIcon;
-class ClipboardHistory;
 class ClipboardMonitor;
 class PopupWindow;
-class HotkeyManager;
 enum class HotkeyAction : WPARAM;
 
 // Message IDs used across the app
@@ -33,11 +35,25 @@ public:
     ClipboardHistory*    GetHistory() const { return m_history.get(); }
     ClipboardMonitor*    GetMonitor() const { return m_monitor.get(); }
     PopupWindow*         GetPopup()   const { return m_popup.get(); }
+    HotkeyManager*       GetHotkeys() const { return m_hotkeys.get(); }
+    const AppearanceSettings& GetAppearance() const { return m_appearance; }
+    void RequestAppearance(const AppearanceSettings& settings);
+    void SetPopupOpacity(float opacity);
+    const HotkeySettings& GetHotkeySettings() const { return m_hotkeySettings; }
+    void RequestHotkeySettings(const HotkeySettings& settings);
+    bool GetNewItemsAtTop() const { return m_config.newItemsAtTop; }
+    void SetNewItemsAtTop(bool value);
+    bool GetAppendNewlineAfterPaste() const { return m_config.appendNewlineAfterPaste; }
+    void SetAppendNewlineAfterPaste(bool value);
+    ClipboardHistory::MoveTarget GetPasteMoveTarget() const;
+    void SetPasteMoveTarget(ClipboardHistory::MoveTarget target);
 
 private:
     bool Init();
     void Shutdown();
     void RenderFrame();
+    void ApplyAppearanceNow();
+    void SaveConfig();
 
     bool CreateD3D();
     void DestroyD3D();
@@ -62,6 +78,10 @@ private:
 
     bool m_running{false};
     bool m_mainVisible{false};
+    AppearanceSettings m_appearance{};
+    bool m_appearanceDirty{true};
+    HotkeySettings m_hotkeySettings{};
+    AppConfig m_config{};
 
     static Application* s_instance;
 };

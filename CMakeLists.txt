@@ -24,8 +24,10 @@ set(IMGUI_SOURCES
 set(APP_SOURCES
     src/main.cpp
     src/app/Application.cpp
+    src/app/ConfigStore.cpp
     src/app/TrayIcon.cpp
     src/ui/Renderer.cpp
+    src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
     src/ui/PopupWindow.cpp
     # Milestone 4 — hotkeys
@@ -67,14 +69,16 @@ target_link_libraries(clipboardpp PRIVATE
 if(WIN32 AND CLIPBOARDPP_RESTART_AFTER_BUILD)
     add_custom_command(TARGET clipboardpp PRE_BUILD
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
-                "Get-Process -Name clipboardpp -ErrorAction SilentlyContinue | Stop-Process -Force"
+                "Stop-Process -Name clipboardpp -Force -ErrorAction SilentlyContinue; exit 0"
         COMMENT "Stopping running clipboardpp.exe before build"
+        VERBATIM
     )
 
     add_custom_command(TARGET clipboardpp POST_BUILD
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
                 "Start-Process -FilePath '$<TARGET_FILE:clipboardpp>' -WorkingDirectory '$<TARGET_FILE_DIR:clipboardpp>'"
         COMMENT "Launching clipboardpp.exe after build"
+        VERBATIM
     )
 endif()
 

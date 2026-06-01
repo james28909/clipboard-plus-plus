@@ -2,9 +2,15 @@
 #include "../app/Application.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ContentDetector.h"
+#include "Appearance.h"
 #include "PopupWindow.h"
 #include <imgui.h>
 #include <windows.h>
+#include <commdlg.h>
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <string>
 
 // ── Section nav ───────────────────────────────────────────────────────────────
 
@@ -26,6 +32,34 @@ static const char* kSectionLabels[SEC_COUNT] = {
 
 static int s_activeSection = SEC_GENERAL;
 
+static bool PickFontFile(char* path, DWORD pathSize) {
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = Application::Get() ? Application::Get()->GetHwnd() : nullptr;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = pathSize;
+    ofn.lpstrFilter = "Font Files (*.ttf;*.otf)\0*.ttf;*.otf\0All Files (*.*)\0*.*\0";
+    ofn.lpstrTitle = "Choose font";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return GetOpenFileNameA(&ofn) != FALSE;
+}
+
+static bool BindingHasConflict(const HotkeySettings& settings, size_t index) {
+    if (index >= settings.bindings.size()) return false;
+    const KeyBinding& a = settings.bindings[index];
+    if (a.vkey == 0) return false;
+
+    for (size_t i = 0; i < settings.bindings.size(); ++i) {
+        if (i == index) continue;
+        const KeyBinding& b = settings.bindings[i];
+        if (a.ctrl == b.ctrl && a.shift == b.shift &&
+            a.alt == b.alt && a.vkey == b.vkey) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ── Title bar helpers ─────────────────────────────────────────────────────────
 
 // Draws a single title bar button. Handles hover highlight and click detection.
@@ -39,7 +73,7 @@ static bool TitleBtn(const char* id, float x, float w, float h, bool isClose) {
     if (hovered) {
         ImVec2 wp  = ImGui::GetWindowPos();
         ImU32  col = isClose ? IM_COL32(196, 43, 28, 255)
-                             : IM_COL32(255, 255, 255, 26); // ~10% white tint
+                             : ImGui::GetColorU32(ImGuiCol_ButtonHovered);
         ImGui::GetWindowDrawList()->AddRectFilled(
             {wp.x + x,     wp.y},
             {wp.x + x + w, wp.y + h}, col);
@@ -59,13 +93,16 @@ void MainWindow::DrawTitleBar() {
     HWND        wnd = Application::Get()->GetHwnd();
 
     // ── Background ───────────────────────────────────────────────────────────
-    // #1e1e1e — will be replaced by theme accent/background in Milestone 8
-    dl->AddRectFilled(wp, {wp.x + W, wp.y + H}, IM_COL32(30, 30, 30, 255));
+    const ImU32 titleBg = ImGui::GetColorU32(ImGuiCol_WindowBg);
+    const ImU32 titleLine = ImGui::GetColorU32(ImGuiCol_Border);
+    const ImU32 titleText = ImGui::GetColorU32(ImGuiCol_Text);
+    const ImU32 titleMuted = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    dl->AddRectFilled(wp, {wp.x + W, wp.y + H}, titleBg);
 
     // ── App title text (left-aligned, vertically centred) ────────────────────
     float textY = (H - ImGui::GetTextLineHeight()) * 0.5f;
     ImGui::SetCursorPos({12.0f, textY});
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(204, 204, 204, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text, titleText);
     ImGui::TextUnformatted("Clipboard++");
     ImGui::PopStyleColor();
 
@@ -81,7 +118,7 @@ void MainWindow::DrawTitleBar() {
     {   // icon: horizontal bar centred in the button
         ImVec2 c = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f + 1.0f};
         dl->AddLine({c.x - 5.0f, c.y}, {c.x + 5.0f, c.y},
-                    IM_COL32(180, 180, 180, 255), 1.5f);
+                    titleMuted, 1.5f);
     }
     bx += BW;
 
@@ -93,16 +130,16 @@ void MainWindow::DrawTitleBar() {
         if (isMax) {
             // Restore: two overlapping squares (back then front)
             dl->AddRect({c.x - 2.0f, c.y - 5.0f}, {c.x + 5.0f, c.y + 2.0f},
-                        IM_COL32(180, 180, 180, 255), 0, 0, 1.2f);
+                        titleMuted, 0, 0, 1.2f);
             // Erase overlap area so back square doesn't bleed through front
             dl->AddRectFilled({c.x - 5.0f, c.y - 2.0f}, {c.x + 1.0f, c.y + 5.0f},
-                              IM_COL32(30, 30, 30, 255));
+                              titleBg);
             dl->AddRect({c.x - 5.0f, c.y - 2.0f}, {c.x + 2.0f, c.y + 5.0f},
-                        IM_COL32(180, 180, 180, 255), 0, 0, 1.2f);
+                        titleMuted, 0, 0, 1.2f);
         } else {
             // Maximize: single square
             dl->AddRect({c.x - 5.0f, c.y - 5.0f}, {c.x + 5.0f, c.y + 5.0f},
-                        IM_COL32(180, 180, 180, 255), 0, 0, 1.2f);
+                        titleMuted, 0, 0, 1.2f);
         }
     }
     bx += BW;
@@ -114,15 +151,14 @@ void MainWindow::DrawTitleBar() {
         ImVec2 c    = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f};
         bool hov    = ImGui::IsMouseHoveringRect({wp.x + bx, wp.y},
                                                   {wp.x + bx + BW, wp.y + H});
-        ImU32 xcol  = hov ? IM_COL32(255, 255, 255, 255)
-                          : IM_COL32(180, 180, 180, 255);
+        ImU32 xcol  = hov ? IM_COL32(255, 255, 255, 255) : titleMuted;
         dl->AddLine({c.x - 5.0f, c.y - 5.0f}, {c.x + 5.0f, c.y + 5.0f}, xcol, 1.5f);
         dl->AddLine({c.x + 5.0f, c.y - 5.0f}, {c.x - 5.0f, c.y + 5.0f}, xcol, 1.5f);
     }
 
     // ── Separator line ────────────────────────────────────────────────────────
     dl->AddLine({wp.x, wp.y + H}, {wp.x + W, wp.y + H},
-                IM_COL32(60, 60, 60, 255));
+                titleLine);
 
     // Advance ImGui cursor below the title bar
     ImGui::SetCursorPos({0.0f, H});
@@ -152,18 +188,21 @@ void MainWindow::Draw(bool& open) {
     DrawTitleBar();
 
     // ── Sidebar + content layout below the title bar ──────────────────────────
-    const float pad      = 8.0f;
-    const float sidebarW = 160.0f;
-    const float contentW = ImGui::GetContentRegionAvail().x - sidebarW - pad;
+    const float pad      = 16.0f;
+    const float sidebarW = 168.0f;
+    const float contentW = ImGui::GetContentRegionAvail().x - sidebarW - pad * 2.0f;
 
     ImGui::SetCursorPos({pad, (float)kTitleBarHeight + pad});
 
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {10.0f, 10.0f});
     ImGui::BeginChild("##sidebar", {sidebarW, 0}, ImGuiChildFlags_Borders);
     DrawSidebarNav(s_activeSection);
     ImGui::EndChild();
+    ImGui::PopStyleVar();
 
     ImGui::SameLine(0, pad);
 
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14.0f, 12.0f});
     ImGui::BeginChild("##content", {contentW, 0}, ImGuiChildFlags_None);
     switch (s_activeSection) {
     case SEC_GENERAL:    DrawGeneral();    break;
@@ -175,6 +214,7 @@ void MainWindow::Draw(bool& open) {
     case SEC_ABOUT:      DrawAbout();      break;
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar();
 
     ImGui::End();
 }
@@ -199,19 +239,21 @@ void MainWindow::DrawSidebarNav(int& selected) {
 // ── Section: General ─────────────────────────────────────────────────────────
 
 void MainWindow::DrawGeneral() {
+    Application* app = Application::Get();
+    if (!app) return;
+
     ImGui::TextDisabled("General");
     ImGui::Separator();
     ImGui::Spacing();
 
     static bool startWithWindows = true;
-    static bool newItemsAtTop    = true;
     static bool deduplication    = true;
 
     ImGui::Checkbox("Start with Windows", &startWithWindows);
     ImGui::Spacing();
+    bool newItemsAtTop = app->GetNewItemsAtTop();
     if (ImGui::Checkbox("New items added to top of list", &newItemsAtTop)) {
-        if (auto* hist = Application::Get()->GetHistory())
-            hist->SetNewItemsAtTop(newItemsAtTop);
+        app->SetNewItemsAtTop(newItemsAtTop);
     }
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
@@ -226,41 +268,104 @@ void MainWindow::DrawGeneral() {
 // ── Section: Hotkeys ─────────────────────────────────────────────────────────
 
 void MainWindow::DrawHotkeys() {
+    Application* app = Application::Get();
+    if (!app) return;
+    HotkeyManager* hotkeys = app->GetHotkeys();
+    if (!hotkeys) return;
+
     ImGui::TextDisabled("Hotkeys");
     ImGui::Separator();
     ImGui::Spacing();
 
-    struct Row { const char* function; const char* binding; };
-    static const Row rows[] = {
-        { "Toggle popup",                "Ctrl+Shift+V" },
-        { "Focus popup search",          "Ctrl+Shift+S" },
-        { "Hidden paste slots",          "Ctrl+Alt+1-z/F1-F12" },
-        { "Toggle incognito mode",       "Ctrl+Shift+I" },
-        { "Open settings",               "Ctrl+Shift+," },
-        { "Open popup (images filter)",  "Ctrl+Shift+G" },
-    };
+    static HotkeySettings draft = app->GetHotkeySettings();
+    static bool initialized = false;
+    static int captureIndex = -1;
+    if (!initialized) {
+        draft = app->GetHotkeySettings();
+        initialized = true;
+    }
+
+    KeyBinding captured;
+    if (hotkeys->ConsumeCapturedBinding(captured) && captureIndex >= 0 &&
+        static_cast<size_t>(captureIndex) < draft.bindings.size()) {
+        captured.action = draft.bindings[static_cast<size_t>(captureIndex)].action;
+        captured.data = draft.bindings[static_cast<size_t>(captureIndex)].data;
+        draft.bindings[static_cast<size_t>(captureIndex)] = captured;
+        app->RequestHotkeySettings(draft);
+        captureIndex = -1;
+    }
 
     if (ImGui::BeginTable("##hotkeys", 2,
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
     {
         ImGui::TableSetupColumn("Function", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Binding",  ImGuiTableColumnFlags_WidthFixed, 180.0f);
+        ImGui::TableSetupColumn("Binding",  ImGuiTableColumnFlags_WidthFixed, 240.0f);
         ImGui::TableHeadersRow();
-        for (const auto& r : rows) {
+        for (size_t i = 0; i < draft.bindings.size(); ++i) {
+            const KeyBinding& binding = draft.bindings[i];
+            const bool conflict = BindingHasConflict(draft, i);
             ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(r.function);
-            ImGui::TableSetColumnIndex(1); ImGui::TextDisabled("%s", r.binding);
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(HotkeyManager::ActionName(binding.action));
+            if (conflict) {
+                ImGui::SameLine();
+                ImGui::TextColored({1.0f, 0.45f, 0.25f, 1.0f}, "Conflict");
+            }
+
+            ImGui::TableSetColumnIndex(1);
+            const std::string label = captureIndex == static_cast<int>(i)
+                ? "Press keys...##capture" + std::to_string(i)
+                : HotkeyManager::BindingText(binding) + "##capture" + std::to_string(i);
+            if (ImGui::Button(label.c_str(), {160.0f, 0.0f})) {
+                captureIndex = static_cast<int>(i);
+                hotkeys->BeginCapture();
+            }
+            ImGui::SameLine();
+            const std::string resetId = "Reset##resetHotkey" + std::to_string(i);
+            if (ImGui::SmallButton(resetId.c_str())) {
+                HotkeySettings defaults = HotkeyManager::DefaultSettings();
+                auto it = std::find_if(defaults.bindings.begin(), defaults.bindings.end(),
+                    [&](const KeyBinding& b) { return b.action == binding.action; });
+                if (it != defaults.bindings.end()) {
+                    draft.bindings[i] = *it;
+                    app->RequestHotkeySettings(draft);
+                }
+            }
         }
         ImGui::EndTable();
     }
+
+    if (captureIndex >= 0) {
+        ImGui::TextDisabled("Press Esc to cancel capture.");
+        if (!hotkeys->IsCapturing())
+            captureIndex = -1;
+    }
+
+    ImGui::Spacing();
+    ImGui::Text("Hidden paste slots");
+    bool changed = false;
+    changed |= ImGui::Checkbox("Ctrl##hiddenCtrl", &draft.hiddenPasteCtrl);
+    ImGui::SameLine();
+    changed |= ImGui::Checkbox("Shift##hiddenShift", &draft.hiddenPasteShift);
+    ImGui::SameLine();
+    changed |= ImGui::Checkbox("Alt##hiddenAlt", &draft.hiddenPasteAlt);
+    changed |= ImGui::Checkbox("Allow F1-F12 hidden paste slots", &draft.hiddenPasteFunctionKeys);
+    ImGui::TextDisabled("%s + 1-9/a-z%s",
+        HotkeyManager::ModifiersText(draft.hiddenPasteCtrl,
+                                     draft.hiddenPasteShift,
+                                     draft.hiddenPasteAlt).c_str(),
+        draft.hiddenPasteFunctionKeys ? "/F1-F12" : "");
+    if (changed)
+        app->RequestHotkeySettings(draft);
+
     ImGui::Spacing();
     if (PopupWindow* popup = Application::Get()->GetPopup()) {
-        bool newline = popup->GetAppendNewlineAfterPaste();
+        bool newline = app->GetAppendNewlineAfterPaste();
         if (ImGui::Checkbox("Append newline after paste", &newline))
-            popup->SetAppendNewlineAfterPaste(newline);
+            app->SetAppendNewlineAfterPaste(newline);
 
         int moveMode = 0;
-        switch (popup->GetPasteMoveTarget()) {
+        switch (app->GetPasteMoveTarget()) {
         case ClipboardHistory::MoveTarget::Top:    moveMode = 1; break;
         case ClipboardHistory::MoveTarget::Bottom: moveMode = 2; break;
         default:                                   moveMode = 0; break;
@@ -273,24 +378,31 @@ void MainWindow::DrawHotkeys() {
             ClipboardHistory::MoveTarget target = ClipboardHistory::MoveTarget::None;
             if (moveMode == 1) target = ClipboardHistory::MoveTarget::Top;
             if (moveMode == 2) target = ClipboardHistory::MoveTarget::Bottom;
-            popup->SetPasteMoveTarget(target);
+            app->SetPasteMoveTarget(target);
         }
     }
 
     ImGui::Spacing();
-    ImGui::TextDisabled("Live hotkey capture wired in Milestone 4.");
+    ImGui::TextDisabled("Hotkey changes apply immediately. Settings persistence is next.");
 }
 
 // ── Section: Appearance ──────────────────────────────────────────────────────
 
 void MainWindow::DrawAppearance() {
+    Application* app = Application::Get();
+    if (!app) return;
+
     ImGui::TextDisabled("Appearance");
     ImGui::Separator();
     ImGui::Spacing();
 
-    static int   themeIndex   = 0;
-    static float popupOpacity = 0.95f;
-    static int   popupW = 420, popupH = 520;
+    static AppearanceSettings draft = app->GetAppearance();
+    static char fontPath[512]{};
+    static bool initialized = false;
+    if (!initialized) {
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+        initialized = true;
+    }
 
     const char* themes[] = {
         "Dark Default", "Dracula", "Nord", "Monokai",
@@ -300,21 +412,59 @@ void MainWindow::DrawAppearance() {
 
     ImGui::Text("Theme");
     ImGui::SetNextItemWidth(240.0f);
-    ImGui::Combo("##theme", &themeIndex, themes, IM_ARRAYSIZE(themes));
+    int themeIndex = static_cast<int>(draft.theme);
+    if (ImGui::Combo("##theme", &themeIndex, themes, IM_ARRAYSIZE(themes))) {
+        draft.theme = static_cast<ThemeId>(themeIndex);
+        app->RequestAppearance(draft);
+    }
 
     ImGui::Spacing();
     ImGui::Text("Popup opacity");
     ImGui::SetNextItemWidth(240.0f);
-    ImGui::SliderFloat("##opacity", &popupOpacity, 0.1f, 1.0f, "%.2f");
+    if (ImGui::SliderFloat("##opacity", &draft.popupOpacity, 0.1f, 1.0f, "%.2f"))
+        app->RequestAppearance(draft);
 
     ImGui::Spacing();
     ImGui::Text("Default popup size");
-    ImGui::SetNextItemWidth(100.0f); ImGui::InputInt("W##pw", &popupW, 10);
+    bool sizeChanged = false;
+    ImGui::SetNextItemWidth(100.0f);
+    sizeChanged |= ImGui::InputInt("W##pw", &draft.popupWidth, 10);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(100.0f); ImGui::InputInt("H##ph", &popupH, 10);
+    ImGui::SetNextItemWidth(100.0f);
+    sizeChanged |= ImGui::InputInt("H##ph", &draft.popupHeight, 10);
+    if (sizeChanged) {
+        draft.popupWidth = std::max(360, draft.popupWidth);
+        draft.popupHeight = std::max(260, draft.popupHeight);
+        app->RequestAppearance(draft);
+    }
 
     ImGui::Spacing();
-    ImGui::TextDisabled("Theme engine + live preview wired in Milestone 8.");
+    ImGui::Text("Font");
+    ImGui::SetNextItemWidth(420.0f);
+    bool fontEdited = false;
+    fontEdited |= ImGui::InputText("##fontPath", fontPath, sizeof(fontPath));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse")) {
+        if (PickFontFile(fontPath, sizeof(fontPath))) {
+            fontEdited = true;
+        }
+    }
+
+    ImGui::SetNextItemWidth(110.0f);
+    fontEdited |= ImGui::InputFloat("Size##fontSize", &draft.fontSize, 0.5f, 1.0f, "%.1f");
+    ImGui::SameLine();
+    if (ImGui::Button("Apply Font")) {
+        draft.fontPath = fontPath;
+        draft.fontSize = std::clamp(draft.fontSize, 9.0f, 32.0f);
+        app->RequestAppearance(draft);
+    }
+    if (fontEdited) {
+        draft.fontPath = fontPath;
+        draft.fontSize = std::clamp(draft.fontSize, 9.0f, 32.0f);
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Font changes apply to the main window and popup.");
 }
 
 // ── Section: History ─────────────────────────────────────────────────────────
