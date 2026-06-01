@@ -474,7 +474,7 @@ void MainWindow::DrawHistory() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    static int  activeLimit    = 100;
+    static int  activeLimit    = 500;
     static bool persistHistory = true;
     static bool sessionOnly    = false;
     static bool vaultUnlimited = true;

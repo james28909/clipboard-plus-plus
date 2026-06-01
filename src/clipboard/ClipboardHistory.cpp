@@ -44,6 +44,27 @@ bool ClipboardHistory::Push(ClipboardItem item) {
     return true;
 }
 
+bool ClipboardHistory::Insert(ClipboardItem item, size_t index) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    item.id        = m_nextId++;
+    item.timestamp = std::chrono::system_clock::now();
+
+    if (!item.text.empty() && item.type != ContentType::Image) {
+        auto it = std::find_if(m_items.begin(), m_items.end(),
+            [&item](const ClipboardItem& e) {
+                return e.type == item.type && e.text == item.text;
+            });
+        if (it != m_items.end())
+            m_items.erase(it);
+    }
+
+    index = std::min(index, m_items.size());
+    m_items.insert(m_items.begin() + static_cast<std::ptrdiff_t>(index), std::move(item));
+    TrimToLimit();
+    return true;
+}
+
 size_t ClipboardHistory::Size() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_items.size();

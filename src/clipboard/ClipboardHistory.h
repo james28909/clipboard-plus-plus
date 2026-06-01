@@ -18,6 +18,7 @@ public:
 
     // Push a new item. Returns false if it was a duplicate (existing moved).
     bool Push(ClipboardItem item);
+    bool Insert(ClipboardItem item, size_t index);
 
     // Read access — index 0 is the most-recently-added end
     size_t Size() const;

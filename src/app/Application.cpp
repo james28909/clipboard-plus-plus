@@ -4,6 +4,7 @@
 #include "../ui/PopupWindow.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardMonitor.h"
+#include "../clipboard/ContentDetector.h"
 #include "../hotkeys/HotkeyManager.h"
 
 #include <imgui.h>
@@ -14,6 +15,8 @@
 #include <dwmapi.h>
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 #include <algorithm>
+#include <cstddef>
+#include <cstring>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -25,6 +28,47 @@ static constexpr UINT_PTR kResizeRenderTimerId = 1;
 #ifndef DWMWA_COLOR_NONE
 #define DWMWA_COLOR_NONE 0xFFFFFFFE
 #endif
+
+namespace {
+
+bool SetUnicodeClipboardText(HWND owner, const wchar_t* text, size_t chars) {
+    if (!OpenClipboard(owner))
+        return false;
+
+    if (!EmptyClipboard()) {
+        CloseClipboard();
+        return false;
+    }
+
+    const size_t bytes = (chars + 1) * sizeof(wchar_t);
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!mem) {
+        CloseClipboard();
+        return false;
+    }
+
+    void* data = GlobalLock(mem);
+    if (!data) {
+        GlobalFree(mem);
+        CloseClipboard();
+        return false;
+    }
+
+    std::memcpy(data, text, chars * sizeof(wchar_t));
+    static_cast<wchar_t*>(data)[chars] = L'\0';
+    GlobalUnlock(mem);
+
+    if (!SetClipboardData(CF_UNICODETEXT, mem)) {
+        GlobalFree(mem);
+        CloseClipboard();
+        return false;
+    }
+
+    CloseClipboard();
+    return true;
+}
+
+} // namespace
 
 // ── Construction / destruction ────────────────────────────────────────────────
 
@@ -151,6 +195,52 @@ void Application::ApplyLoadedConfig(const AppConfig& config) {
         m_hotkeys->ApplySettings(m_hotkeySettings);
 }
 
+bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
+    if (!m_history || cds.dwData != CD_CLIPBOARD_TEXT ||
+        cds.cbData < sizeof(ClipboardTextCommand))
+        return false;
+
+    const auto* cmd = static_cast<const ClipboardTextCommand*>(cds.lpData);
+    const size_t headerBytes = offsetof(ClipboardTextCommand, text);
+    const size_t textBytes = cds.cbData - headerBytes;
+    if (textBytes < sizeof(wchar_t))
+        return false;
+
+    const size_t maxChars = textBytes / sizeof(wchar_t);
+    const size_t chars = wcsnlen_s(cmd->text, maxChars);
+    if (chars == 0)
+        return false;
+
+    int utf8Bytes = WideCharToMultiByte(CP_UTF8, 0, cmd->text, static_cast<int>(chars),
+                                        nullptr, 0, nullptr, nullptr);
+    if (utf8Bytes <= 0)
+        return false;
+
+    ClipboardItem item;
+    item.type = ContentType::Text;
+    item.text.resize(static_cast<size_t>(utf8Bytes));
+    WideCharToMultiByte(CP_UTF8, 0, cmd->text, static_cast<int>(chars),
+                        item.text.data(), utf8Bytes, nullptr, nullptr);
+    item.sourceProcess = "clipboardpp.exe";
+    item.tags = ContentDetector::DetectTags(item.text);
+
+    size_t index = 0;
+    if (cmd->position == -1) {
+        index = m_history->Size();
+    } else if (cmd->position > 0) {
+        index = static_cast<size_t>(std::clamp(cmd->position, 1, 500) - 1);
+    }
+
+    if (cmd->setSystemClipboard) {
+        if (m_monitor)
+            m_monitor->SuppressNextUpdate();
+        SetUnicodeClipboardText(m_hwnd, cmd->text, chars);
+    }
+
+    m_history->Insert(std::move(item), index);
+    return true;
+}
+
 // ── Private: initialisation ───────────────────────────────────────────────────
 
 bool Application::Init() {
@@ -213,7 +303,7 @@ bool Application::Init() {
     if (!m_tray->Create()) return false;
 
     // Clipboard history + monitor
-    m_history = std::make_unique<ClipboardHistory>(100);
+    m_history = std::make_unique<ClipboardHistory>(500);
     m_history->SetNewItemsAtTop(m_config.newItemsAtTop);
     m_monitor = std::make_unique<ClipboardMonitor>();
     m_monitor->Start(m_hInstance, [this](ClipboardItem item) {
@@ -490,6 +580,11 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     case WM_RELOAD_CONFIG:
         if (app) app->ApplyLoadedConfig(ConfigStore::Load());
         return 0;
+
+    case WM_COPYDATA:
+        if (app)
+            return app->HandleClipboardTextCommand(*reinterpret_cast<COPYDATASTRUCT*>(lParam)) ? TRUE : FALSE;
+        return FALSE;
 
     case WM_HOTKEYACTION: {
         if (!app) return 0;

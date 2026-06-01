@@ -19,6 +19,14 @@ constexpr UINT WM_SHOWPOPUP    = WM_APP + 3;
 constexpr UINT WM_HOTKEYACTION = WM_APP + 4;
 constexpr UINT WM_RELOAD_CONFIG = WM_APP + 5;
 
+constexpr ULONG_PTR CD_CLIPBOARD_TEXT = 0x43505031; // "CPP1"
+
+struct ClipboardTextCommand {
+    int position; // 0=top, -1=bottom, 1..500=one-based history slot
+    BOOL setSystemClipboard;
+    wchar_t text[1];
+};
+
 class Application {
 public:
     explicit Application(HINSTANCE hInstance);
@@ -57,6 +65,7 @@ private:
     void SaveConfig();
     bool HasRenderableUi() const;
     void ApplyLoadedConfig(const AppConfig& config);
+    bool HandleClipboardTextCommand(const COPYDATASTRUCT& cds);
 
     bool CreateD3D();
     void DestroyD3D();
