@@ -53,7 +53,10 @@ int Application::Run() {
                 m_running = false;
         }
         if (!m_running) break;
-        RenderFrame();
+        if (HasRenderableUi() || m_appearanceDirty)
+            RenderFrame();
+        else
+            WaitMessage();
     }
     return 0;
 }
@@ -246,23 +249,31 @@ void Application::RenderFrame() {
     if (m_appearanceDirty)
         ApplyAppearanceNow();
 
-    ImGui_ImplDX11_NewFrame();
-    ImGui_ImplWin32_NewFrame();
-    ImGui::NewFrame();
+    const bool renderMain = m_mainVisible && m_hwnd && !IsIconic(m_hwnd);
+    if (renderMain) {
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
 
-    if (m_mainVisible)
         MainWindow::Draw(m_mainVisible);
 
-    ImGui::Render();
+        ImGui::Render();
 
-    constexpr float bg[4] = {0.118f, 0.118f, 0.118f, 1.0f}; // #1e1e1e
-    m_d3dContext->OMSetRenderTargets(1, &m_renderTarget, nullptr);
-    m_d3dContext->ClearRenderTargetView(m_renderTarget, bg);
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    m_swapChain->Present(1, 0);
+        constexpr float bg[4] = {0.118f, 0.118f, 0.118f, 1.0f}; // #1e1e1e
+        m_d3dContext->OMSetRenderTargets(1, &m_renderTarget, nullptr);
+        m_d3dContext->ClearRenderTargetView(m_renderTarget, bg);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        m_swapChain->Present(1, 0);
+    }
 
     // Popup has its own context + swap chain — rendered separately
     if (m_popup) m_popup->Render();
+}
+
+bool Application::HasRenderableUi() const {
+    const bool mainRenderable = m_mainVisible && m_hwnd && !IsIconic(m_hwnd);
+    const bool popupRenderable = m_popup && m_popup->IsVisible();
+    return mainRenderable || popupRenderable;
 }
 
 void Application::ApplyAppearanceNow() {

@@ -54,6 +54,7 @@ private:
     void RenderFrame();
     void ApplyAppearanceNow();
     void SaveConfig();
+    bool HasRenderableUi() const;
 
     bool CreateD3D();
     void DestroyD3D();
