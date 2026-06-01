@@ -17,4 +17,6 @@ namespace ConfigStore {
     bool Save(const AppConfig& config);
     std::filesystem::path Path();
     std::filesystem::path Directory();
+    std::filesystem::path FontsDirectory();
+    std::filesystem::path ImportFontFile(const std::filesystem::path& source);
 }

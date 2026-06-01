@@ -107,8 +107,5 @@ if(MSVC)
     target_link_options(clipboardpp PRIVATE
         $<$<CONFIG:Release>:/LTCG>
     )
-    # Suppress the console window in release
-    set_target_properties(clipboardpp PROPERTIES
-        LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS"
-    )
+    target_link_options(clipboardpp PRIVATE /SUBSYSTEM:CONSOLE)
 endif()

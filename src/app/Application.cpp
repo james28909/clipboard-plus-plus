@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -107,8 +108,19 @@ int Application::Run() {
 
 void Application::ShowMainWindow() {
     m_mainVisible = true;
-    ShowWindow(m_hwnd, SW_SHOW);
+
+    if (IsIconic(m_hwnd))
+        ShowWindow(m_hwnd, SW_RESTORE);
+    else
+        ShowWindow(m_hwnd, SW_SHOWNORMAL);
+
+    SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     SetForegroundWindow(m_hwnd);
+    BringWindowToTop(m_hwnd);
+    SetFocus(m_hwnd);
 }
 
 void Application::HideMainWindow() {
@@ -122,7 +134,10 @@ void Application::ShowPopup() {
 
 void Application::RequestAppearance(const AppearanceSettings& settings) {
     m_appearance = settings;
-    m_config.appearance = settings;
+    std::filesystem::path imported = ConfigStore::ImportFontFile(m_appearance.fontPath);
+    if (!imported.empty())
+        m_appearance.fontPath = imported.u8string();
+    m_config.appearance = m_appearance;
     m_appearanceDirty = true;
     SaveConfig();
 }

@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
 
 #include "app/Application.h"
 #include "app/ConfigStore.h"
@@ -41,18 +42,13 @@ HWND FindRunningInstance() {
 }
 
 void SignalRunning(UINT message) {
-    if (HWND hwnd = FindRunningInstance())
+    if (HWND hwnd = FindRunningInstance()) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid)
+            AllowSetForegroundWindow(pid);
         PostMessageW(hwnd, message, 0, 0);
-}
-
-void AttachConsoleForCli() {
-    if (!AttachConsole(ATTACH_PARENT_PROCESS))
-        return;
-
-    FILE* out = nullptr;
-    freopen_s(&out, "CONOUT$", "w", stdout);
-    FILE* err = nullptr;
-    freopen_s(&err, "CONOUT$", "w", stderr);
+    }
 }
 
 void DetachConsoleForCli() {
@@ -60,7 +56,6 @@ void DetachConsoleForCli() {
     std::wcerr.flush();
     fflush(stdout);
     fflush(stderr);
-    FreeConsole();
 }
 
 void PrintHelp() {
@@ -103,9 +98,18 @@ Configuration shortcuts:
       Update one config value and ask the running app to reload.
 
 Clipboard shortcuts:
+  --clipboard set <text-or-paths>
+      Set the Windows clipboard. If the value is one or more existing file or
+      folder paths, the clipboard is populated as a file drop for Explorer.
+
+  --clipboard get
+      Print text or file paths from the current Windows clipboard.
+
+  --clipboard insert <text> [--top|--bottom|--index 1-500] [--system]
+      Insert text into Clipboard++ history. Top is the default.
+
   --clipboard <text> [--top|--bottom|--index 1-500] [--system]
-      Insert text into Clipboard++ history. Top is the default. If --system is
-      supplied, also put the text onto the Windows clipboard.
+      Backward-compatible alias for --clipboard insert <text>.
 
   --clipboard-file <path> [--top|--bottom|--index 1-500] [--system]
       Read a UTF-8 text file and insert its contents into Clipboard++ history.
@@ -119,6 +123,9 @@ Configuration command:
 
   config --reset
       Replace config.json with defaults and ask the running app to reload.
+
+  config --reset-font
+      Restore the default Segoe UI font and default size.
 
   config --list
       Print all supported config keys and their current values.
@@ -147,10 +154,14 @@ Configuration command:
           Popup default height, minimum 260.
 
         font.path
-          Full path to a .ttf or .otf font file.
+          Full path to a .ttf or .otf font file. User-selected fonts are copied
+          into the managed fonts folder before saving.
 
         font.size
           Floating point font size from 9.0 to 32.0.
+
+        font.dir
+          Read-only path to the managed fonts folder.
 
         history.newAtTop
           true/false. Controls whether new clipboard items go to the top.
@@ -191,6 +202,10 @@ Examples:
   clipboardpp.exe config --list
   clipboardpp.exe config --get popup.opacity
   clipboardpp.exe config --set paste.newline true
+  clipboardpp.exe config --reset-font
+  clipboardpp.exe --clipboard set "C:\Temp\report.pdf"
+  clipboardpp.exe --clipboard get
+  clipboardpp.exe --clipboard insert "hello from the CLI" --top
   clipboardpp.exe --clipboard "hello from the CLI" --top
   clipboardpp.exe --clipboard "archive this lower" --bottom
   clipboardpp.exe --clipboard "put me at slot 7" --index 7
@@ -203,6 +218,7 @@ Examples:
 
 Notes:
   Running clipboardpp.exe with no arguments starts the tray app.
+  Command-line invocations run in their own short-lived process.
   Window commands signal an already-running instance.
   Commands that modify config work even when the app is not running.
   If the app is running, config-changing commands send it a reload message.
@@ -290,6 +306,68 @@ std::wstring ReadUtf8FileAsWide(const std::filesystem::path& path, bool& ok) {
     return out;
 }
 
+std::vector<std::wstring> ParseExistingPaths(const std::wstring& text) {
+    std::vector<std::wstring> paths;
+    std::wistringstream stream(text);
+    std::wstring line;
+    while (std::getline(stream, line)) {
+        auto isSpace = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
+        while (!line.empty() && isSpace(line.front())) line.erase(line.begin());
+        while (!line.empty() && isSpace(line.back())) line.pop_back();
+        if (line.size() >= 2 && line.front() == L'"' && line.back() == L'"')
+            line = line.substr(1, line.size() - 2);
+        if (line.empty()) continue;
+        if (GetFileAttributesW(line.c_str()) == INVALID_FILE_ATTRIBUTES)
+            return {};
+        paths.push_back(line);
+    }
+    return paths;
+}
+
+bool PushClipboardFileDrop(const std::vector<std::wstring>& paths) {
+    if (paths.empty()) return false;
+    if (!OpenClipboard(nullptr)) return false;
+    if (!EmptyClipboard()) {
+        CloseClipboard();
+        return false;
+    }
+
+    size_t chars = 1;
+    for (const std::wstring& path : paths)
+        chars += path.size() + 1;
+
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT,
+                              sizeof(DROPFILES) + chars * sizeof(wchar_t));
+    if (!mem) {
+        CloseClipboard();
+        return false;
+    }
+
+    auto* drop = static_cast<DROPFILES*>(GlobalLock(mem));
+    if (!drop) {
+        GlobalFree(mem);
+        CloseClipboard();
+        return false;
+    }
+
+    drop->pFiles = sizeof(DROPFILES);
+    drop->fWide = TRUE;
+    wchar_t* out = reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(drop) + sizeof(DROPFILES));
+    for (const std::wstring& path : paths) {
+        std::memcpy(out, path.c_str(), path.size() * sizeof(wchar_t));
+        out += path.size() + 1;
+    }
+    GlobalUnlock(mem);
+
+    if (!SetClipboardData(CF_HDROP, mem)) {
+        GlobalFree(mem);
+        CloseClipboard();
+        return false;
+    }
+    CloseClipboard();
+    return true;
+}
+
 bool PushClipboardText(const std::wstring& text) {
     if (!OpenClipboard(nullptr))
         return false;
@@ -324,6 +402,54 @@ bool PushClipboardText(const std::wstring& text) {
 
     CloseClipboard();
     return true;
+}
+
+bool PushClipboardSmart(const std::wstring& text) {
+    std::vector<std::wstring> paths = ParseExistingPaths(text);
+    if (!paths.empty())
+        return PushClipboardFileDrop(paths);
+    return PushClipboardText(text);
+}
+
+int PrintSystemClipboard() {
+    if (!OpenClipboard(nullptr)) {
+        std::wcerr << L"Failed to open the Windows clipboard.\n";
+        return 1;
+    }
+
+    if (IsClipboardFormatAvailable(CF_HDROP)) {
+        HANDLE h = GetClipboardData(CF_HDROP);
+        if (!h) {
+            CloseClipboard();
+            return 1;
+        }
+        auto* hDrop = static_cast<HDROP>(h);
+        UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+        for (UINT i = 0; i < count; ++i) {
+            wchar_t path[MAX_PATH]{};
+            if (DragQueryFileW(hDrop, i, path, MAX_PATH))
+                std::wcout << path << L"\n";
+        }
+        CloseClipboard();
+        return 0;
+    }
+
+    if (IsClipboardFormatAvailable(CF_UNICODETEXT)) {
+        HANDLE h = GetClipboardData(CF_UNICODETEXT);
+        if (h) {
+            auto* text = static_cast<const wchar_t*>(GlobalLock(h));
+            if (text) {
+                std::wcout << text << L"\n";
+                GlobalUnlock(h);
+                CloseClipboard();
+                return 0;
+            }
+        }
+    }
+
+    CloseClipboard();
+    std::wcerr << L"No supported text or file-list clipboard data found.\n";
+    return 1;
 }
 
 struct ClipboardCliOptions {
@@ -390,11 +516,11 @@ int InsertClipboardText(const std::wstring& text, const ClipboardCliOptions& opt
     }
 
     if (!SendClipboardHistoryText(text, options)) {
-        if (!options.setSystemClipboard && PushClipboardText(text)) {
+        if (!options.setSystemClipboard && PushClipboardSmart(text)) {
             std::wcerr << L"Clipboard++ is not running; wrote text to the Windows clipboard only.\n";
             return 1;
         }
-        if (options.setSystemClipboard && PushClipboardText(text)) {
+        if (options.setSystemClipboard && PushClipboardSmart(text)) {
             std::wcerr << L"Clipboard++ is not running; wrote text to the Windows clipboard only.\n";
             return 1;
         }
@@ -433,6 +559,8 @@ std::wstring ConfigValue(const AppConfig& config, const std::wstring& rawKey, bo
         return std::to_wstring(config.appearance.popupHeight);
     if (key == L"font.path" || key == L"fontpath")
         return ToWide(config.appearance.fontPath);
+    if (key == L"font.dir" || key == L"fontdir")
+        return ToWide(ConfigStore::FontsDirectory());
     if (key == L"font.size" || key == L"fontsize")
         return std::to_wstring(config.appearance.fontSize);
     if (key == L"history.newattop" || key == L"historynewattop")
@@ -453,6 +581,7 @@ void PrintConfigList(const AppConfig& config) {
         L"popup.height",
         L"font.path",
         L"font.size",
+        L"font.dir",
         L"history.newAtTop",
         L"paste.newline",
         L"paste.move",
@@ -519,7 +648,8 @@ bool ApplySet(AppConfig& config, const std::wstring& assignment, std::wstring& e
         } else if (key == L"popup.height" || key == L"popupheight") {
             config.appearance.popupHeight = std::max(260, std::stoi(value));
         } else if (key == L"font.path" || key == L"fontpath") {
-            config.appearance.fontPath = Narrow(value);
+            std::filesystem::path imported = ConfigStore::ImportFontFile(value);
+            config.appearance.fontPath = Narrow(imported.empty() ? value : imported.wstring());
         } else if (key == L"font.size" || key == L"fontsize") {
             config.appearance.fontSize = std::clamp(std::stof(value), 9.0f, 32.0f);
         } else if (key == L"history.newattop" || key == L"historynewattop") {
@@ -584,6 +714,12 @@ int RunConfigCommand(int argc, wchar_t** argv) {
     }
     if (Eq(argv[2], L"--reset")) {
         return SaveAndReload(AppConfig{}) ? 0 : 1;
+    }
+    if (Eq(argv[2], L"--reset-font")) {
+        AppConfig config = ConfigStore::Load();
+        config.appearance.fontPath = "C:\\Windows\\Fonts\\segoeui.ttf";
+        config.appearance.fontSize = 15.0f;
+        return SaveAndReload(config) ? 0 : 1;
     }
     if (Eq(argv[2], L"--list")) {
         PrintConfigList(ConfigStore::Load());
@@ -672,9 +808,47 @@ int RunSetCommand(int argc, wchar_t** argv) {
     return 1;
 }
 
-int RunCLI(int argc, wchar_t** argv) {
-    AttachConsoleForCli();
+int RunClipboardCommand(int argc, wchar_t** argv) {
+    if (argc < 3 || Eq(argv[2], L"--help") || Eq(argv[2], L"-h") || Eq(argv[2], L"/?")) {
+        PrintHelp();
+        return 0;
+    }
 
+    if (Eq(argv[2], L"get")) {
+        return PrintSystemClipboard();
+    }
+
+    if (Eq(argv[2], L"set")) {
+        if (argc < 4) {
+            std::wcerr << L"--clipboard set requires text or file/folder paths. See --help.\n";
+            return 1;
+        }
+        if (!PushClipboardSmart(argv[3])) {
+            std::wcerr << L"Failed to set the Windows clipboard.\n";
+            return 1;
+        }
+        std::wcout << L"Set Windows clipboard.\n";
+        return 0;
+    }
+
+    if (Eq(argv[2], L"insert")) {
+        if (argc < 4) {
+            std::wcerr << L"--clipboard insert requires text. See --help.\n";
+            return 1;
+        }
+        ClipboardCliOptions options;
+        if (!ParseClipboardOptions(argc, argv, 4, options))
+            return 1;
+        return InsertClipboardText(argv[3], options);
+    }
+
+    ClipboardCliOptions options;
+    if (!ParseClipboardOptions(argc, argv, 3, options))
+        return 1;
+    return InsertClipboardText(argv[2], options);
+}
+
+int RunCLI(int argc, wchar_t** argv) {
     int result = 0;
 
     if (argc <= 1 || Eq(argv[1], L"--help") || Eq(argv[1], L"-h") || Eq(argv[1], L"/?")) {
@@ -717,17 +891,7 @@ int RunCLI(int argc, wchar_t** argv) {
         return result;
     }
     if (Eq(argv[1], L"--clipboard")) {
-        if (argc < 3) {
-            std::wcerr << L"--clipboard requires text. See --help.\n";
-            DetachConsoleForCli();
-            return 1;
-        }
-        ClipboardCliOptions options;
-        if (!ParseClipboardOptions(argc, argv, 3, options)) {
-            DetachConsoleForCli();
-            return 1;
-        }
-        result = InsertClipboardText(argv[2], options);
+        result = RunClipboardCommand(argc, argv);
         DetachConsoleForCli();
         return result;
     }
@@ -801,16 +965,52 @@ int RunCLI(int argc, wchar_t** argv) {
 
 } // namespace
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
-    int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+int wmain(int argc, wchar_t** argv) {
+    HINSTANCE hInstance = GetModuleHandleW(nullptr);
 
-    if (argc > 1) {
-        int result = RunCLI(argc, argv);
-        LocalFree(argv);
-        return result;
+    if (argc > 1 && !Eq(argv[1], L"--clipboardpp-run-gui"))
+        return RunCLI(argc, argv);
+
+    if (argc <= 1) {
+        if (HWND existing = FindRunningInstance()) {
+            PostMessageW(existing, WM_SHOWCPP_MAIN, 0, 0);
+            return 0;
+        }
+
+        wchar_t module[MAX_PATH]{};
+        if (!GetModuleFileNameW(nullptr, module, MAX_PATH))
+            return 1;
+
+        std::wstring command = L"\"";
+        command += module;
+        command += L"\" --clipboardpp-run-gui";
+
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+        mutableCommand.push_back(L'\0');
+
+        BOOL started = CreateProcessW(
+            module,
+            mutableCommand.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            nullptr,
+            nullptr,
+            &si,
+            &pi);
+        if (!started)
+            return 1;
+
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return 0;
     }
-    LocalFree(argv);
+
+    FreeConsole();
 
     HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"Local\\ClipboardPlusPlus");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {

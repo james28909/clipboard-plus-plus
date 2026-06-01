@@ -10,6 +10,8 @@
 #include <imgui_impl_dx11.h>
 #include <dxgi.h>
 #include <dwmapi.h>
+#include <shlobj.h>
+#include <shellapi.h>
 #include <windowsx.h>
 #include <algorithm>
 #include <cctype>
@@ -17,6 +19,7 @@
 #include <cstdio>
 #include <cfloat>
 #include <cmath>
+#include <sstream>
 #include <string>
 #include "../hotkeys/HotkeyManager.h"  // kClipboardPasteMagic
 
@@ -55,6 +58,73 @@ static ClipboardHistory::MoveTarget NextPasteMoveTarget(ClipboardHistory::MoveTa
     case ClipboardHistory::MoveTarget::Bottom: return ClipboardHistory::MoveTarget::None;
     default:                                   return ClipboardHistory::MoveTarget::None;
     }
+}
+
+static std::wstring Utf8ToWide(const std::string& value) {
+    if (value.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring out(static_cast<size_t>(len - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, out.data(), len);
+    return out;
+}
+
+static std::wstring TrimPathToken(std::wstring value) {
+    auto isSpace = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
+    while (!value.empty() && isSpace(value.front())) value.erase(value.begin());
+    while (!value.empty() && isSpace(value.back())) value.pop_back();
+    if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"')
+        value = value.substr(1, value.size() - 2);
+    return value;
+}
+
+static std::vector<std::wstring> ExistingFileDropPaths(const std::string& text) {
+    std::vector<std::wstring> paths;
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line)) {
+        std::wstring path = TrimPathToken(Utf8ToWide(line));
+        if (path.empty()) continue;
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+            return {};
+        paths.push_back(std::move(path));
+    }
+    return paths;
+}
+
+static bool SetClipboardFileDrop(const std::vector<std::wstring>& paths) {
+    if (paths.empty()) return false;
+
+    size_t chars = 1; // final extra null
+    for (const std::wstring& path : paths)
+        chars += path.size() + 1;
+
+    const SIZE_T bytes = sizeof(DROPFILES) + chars * sizeof(wchar_t);
+    HGLOBAL hm = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
+    if (!hm) return false;
+
+    auto* drop = static_cast<DROPFILES*>(GlobalLock(hm));
+    if (!drop) {
+        GlobalFree(hm);
+        return false;
+    }
+
+    drop->pFiles = sizeof(DROPFILES);
+    drop->fWide = TRUE;
+
+    wchar_t* out = reinterpret_cast<wchar_t*>(
+        reinterpret_cast<BYTE*>(drop) + sizeof(DROPFILES));
+    for (const std::wstring& path : paths) {
+        std::memcpy(out, path.c_str(), path.size() * sizeof(wchar_t));
+        out += path.size() + 1;
+    }
+
+    GlobalUnlock(hm);
+    if (!SetClipboardData(CF_HDROP, hm)) {
+        GlobalFree(hm);
+        return false;
+    }
+    return true;
 }
 
 // ── Create / Destroy ──────────────────────────────────────────────────────────
@@ -680,6 +750,16 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
         std::string text = item.text;
         if (m_appendNewlineAfterPaste)
             text += "\r\n";
+
+        std::vector<std::wstring> filePaths;
+        if (!m_appendNewlineAfterPaste &&
+            (item.type == ContentType::FilePaths || (item.tags & TAG_PATH) != 0)) {
+            filePaths = ExistingFileDropPaths(text);
+        }
+        if (!filePaths.empty() && SetClipboardFileDrop(filePaths)) {
+            CloseClipboard();
+            return;
+        }
 
         int wlen = MultiByteToWideChar(CP_UTF8, 0,
                                         text.c_str(), -1, nullptr, 0);

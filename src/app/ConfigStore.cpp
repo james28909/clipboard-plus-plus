@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -62,6 +63,28 @@ KeyBinding DefaultBindingForAction(HotkeyAction action) {
         if (b.action == action) return b;
     }
     return {};
+}
+
+bool IsFontPath(const std::filesystem::path& path) {
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == ".ttf" || ext == ".otf";
+}
+
+std::filesystem::path UniqueDestination(std::filesystem::path dir, std::filesystem::path filename) {
+    std::filesystem::path dest = dir / filename.filename();
+    if (!std::filesystem::exists(dest))
+        return dest;
+
+    const std::filesystem::path stem = filename.stem();
+    const std::filesystem::path ext = filename.extension();
+    for (int i = 1; i < 1000; ++i) {
+        dest = dir / (stem.wstring() + L"-" + std::to_wstring(i) + ext.wstring());
+        if (!std::filesystem::exists(dest))
+            return dest;
+    }
+    return dir / filename.filename();
 }
 
 void LoadAppearance(const json& root, AppConfig& config) {
@@ -164,6 +187,36 @@ std::filesystem::path Path() {
 
 std::filesystem::path Directory() {
     return Path().parent_path();
+}
+
+std::filesystem::path FontsDirectory() {
+    return Directory() / "fonts";
+}
+
+std::filesystem::path ImportFontFile(const std::filesystem::path& source) {
+    std::error_code ec;
+    if (source.empty() || !std::filesystem::exists(source, ec) || !IsFontPath(source))
+        return {};
+
+    const std::filesystem::path src = std::filesystem::absolute(source, ec);
+    if (ec) return {};
+
+    const std::filesystem::path fonts = FontsDirectory();
+    std::filesystem::create_directories(fonts, ec);
+    if (ec) return {};
+
+    const std::filesystem::path destDir = std::filesystem::absolute(fonts, ec);
+    if (ec) return {};
+
+    std::filesystem::path rel;
+    rel = std::filesystem::relative(src, destDir, ec);
+    if (!ec && !rel.empty() && rel.native().find(L"..") != 0)
+        return src;
+
+    std::filesystem::path dest = UniqueDestination(destDir, src.filename());
+    std::filesystem::copy_file(src, dest, std::filesystem::copy_options::skip_existing, ec);
+    if (ec) return {};
+    return dest;
 }
 
 } // namespace ConfigStore

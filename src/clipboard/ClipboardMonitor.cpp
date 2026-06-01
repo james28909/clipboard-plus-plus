@@ -104,7 +104,24 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
         return item;
 
     // ── Plain / unicode text (most common) ────────────────────────────────────
-    if (IsClipboardFormatAvailable(CF_UNICODETEXT)) {
+    if (IsClipboardFormatAvailable(CF_HDROP)) {
+        HANDLE h = GetClipboardData(CF_HDROP);
+        if (h) {
+            auto* hDrop  = static_cast<HDROP>(h);
+            UINT  count  = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+            std::string paths;
+            for (UINT i = 0; i < count; ++i) {
+                wchar_t buf[MAX_PATH]{};
+                if (DragQueryFileW(hDrop, i, buf, MAX_PATH)) {
+                    if (!paths.empty()) paths += '\n';
+                    paths += WideToUtf8(buf);
+                }
+            }
+            item.text = paths;
+        }
+        item.type = ContentType::FilePaths;
+    }
+    else if (IsClipboardFormatAvailable(CF_UNICODETEXT)) {
         HANDLE h = GetClipboardData(CF_UNICODETEXT);
         if (h) {
             auto* pw = static_cast<wchar_t*>(GlobalLock(h));
@@ -134,7 +151,7 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
                   + "x"      + std::to_string(item.imageH) + "]";
     }
     // ── File drop ─────────────────────────────────────────────────────────────
-    else if (IsClipboardFormatAvailable(CF_HDROP)) {
+    else if (false && IsClipboardFormatAvailable(CF_HDROP)) {
         HANDLE h = GetClipboardData(CF_HDROP);
         if (h) {
             auto* hDrop  = static_cast<HDROP>(h);
