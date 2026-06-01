@@ -13,7 +13,7 @@ using json = nlohmann::json;
 
 namespace {
 
-std::filesystem::path ConfigPath() {
+std::filesystem::path ResolveConfigPath() {
     PWSTR roaming = nullptr;
     std::filesystem::path base;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &roaming))) {
@@ -102,7 +102,7 @@ namespace ConfigStore {
 
 AppConfig Load() {
     AppConfig config;
-    const std::filesystem::path path = ConfigPath();
+    const std::filesystem::path path = ResolveConfigPath();
     std::ifstream in(path);
     if (!in) return config;
 
@@ -121,7 +121,7 @@ AppConfig Load() {
 }
 
 bool Save(const AppConfig& config) {
-    const std::filesystem::path path = ConfigPath();
+    const std::filesystem::path path = ResolveConfigPath();
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
     if (ec) return false;
@@ -156,6 +156,14 @@ bool Save(const AppConfig& config) {
     if (!out) return false;
     out << root.dump(2);
     return true;
+}
+
+std::filesystem::path Path() {
+    return ResolveConfigPath();
+}
+
+std::filesystem::path Directory() {
+    return Path().parent_path();
 }
 
 } // namespace ConfigStore

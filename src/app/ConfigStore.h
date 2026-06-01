@@ -2,6 +2,7 @@
 
 #include "../hotkeys/HotkeyManager.h"
 #include "../ui/Appearance.h"
+#include <filesystem>
 
 struct AppConfig {
     AppearanceSettings appearance{};
@@ -14,4 +15,6 @@ struct AppConfig {
 namespace ConfigStore {
     AppConfig Load();
     bool Save(const AppConfig& config);
+    std::filesystem::path Path();
+    std::filesystem::path Directory();
 }

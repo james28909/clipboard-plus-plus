@@ -135,12 +135,26 @@ void Application::SaveConfig() {
     ConfigStore::Save(m_config);
 }
 
+void Application::ApplyLoadedConfig(const AppConfig& config) {
+    m_config = config;
+    m_appearance = m_config.appearance;
+    m_hotkeySettings = m_config.hotkeys;
+    m_appearanceDirty = true;
+
+    if (m_history)
+        m_history->SetNewItemsAtTop(m_config.newItemsAtTop);
+    if (m_popup) {
+        m_popup->SetAppendNewlineAfterPaste(m_config.appendNewlineAfterPaste);
+        m_popup->SetPasteMoveTarget(GetPasteMoveTarget());
+    }
+    if (m_hotkeys)
+        m_hotkeys->ApplySettings(m_hotkeySettings);
+}
+
 // ── Private: initialisation ───────────────────────────────────────────────────
 
 bool Application::Init() {
-    m_config = ConfigStore::Load();
-    m_appearance = m_config.appearance;
-    m_hotkeySettings = m_config.hotkeys;
+    ApplyLoadedConfig(ConfigStore::Load());
 
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(WNDCLASSEXW);
@@ -471,6 +485,10 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     case WM_SHOWPOPUP:
         if (app) app->ShowPopup();
+        return 0;
+
+    case WM_RELOAD_CONFIG:
+        if (app) app->ApplyLoadedConfig(ConfigStore::Load());
         return 0;
 
     case WM_HOTKEYACTION: {

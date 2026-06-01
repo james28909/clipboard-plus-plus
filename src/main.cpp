@@ -1,16 +1,529 @@
 #include <windows.h>
 #include <shellapi.h>
-#include "app/Application.h"
 
-// Forward declaration — CLI dispatcher lives in src/cli/CLI.cpp (Milestone 6)
-static int RunCLI(int argc, wchar_t** argv);
+#include "app/Application.h"
+#include "app/ConfigStore.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <cwchar>
+#include <cwctype>
+#include <filesystem>
+#include <iostream>
+#include <string>
+
+namespace {
+
+bool Eq(const wchar_t* a, const wchar_t* b) {
+    return _wcsicmp(a, b) == 0;
+}
+
+std::wstring ToWide(const std::filesystem::path& path) {
+    return path.wstring();
+}
+
+std::wstring ToWide(const std::string& value) {
+    if (value.empty()) return {};
+    int size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
+    if (size <= 0) return {};
+    std::wstring out(static_cast<size_t>(size - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, out.data(), size);
+    return out;
+}
+
+HWND FindRunningInstance() {
+    return FindWindowW(L"ClipboardPlusPlus_Main", nullptr);
+}
+
+void SignalRunning(UINT message) {
+    if (HWND hwnd = FindRunningInstance())
+        PostMessageW(hwnd, message, 0, 0);
+}
+
+void AttachConsoleForCli() {
+    if (!AttachConsole(ATTACH_PARENT_PROCESS))
+        return;
+
+    FILE* out = nullptr;
+    freopen_s(&out, "CONOUT$", "w", stdout);
+    FILE* err = nullptr;
+    freopen_s(&err, "CONOUT$", "w", stderr);
+}
+
+void PrintHelp() {
+    std::wcout <<
+LR"(Clipboard++ command line
+
+Usage:
+  clipboardpp.exe [command] [options]
+  clipboardpp.exe config <operation> [value]
+
+Window commands:
+  --show
+      Show/focus the main settings window in the running app.
+
+  --popup
+      Show the quick paste popup in the running app.
+
+  --settings
+      Alias for --show.
+
+Status and diagnostics:
+  status [--format text|json]
+      Print app status. Text is the default format.
+
+  --diagnostics
+      Print useful paths and whether a Clipboard++ instance is currently running.
+
+Configuration shortcuts:
+  --config-path
+      Print the full path to config.json.
+
+  --open-config-folder
+      Open the Clipboard++ configuration folder in File Explorer.
+
+  --reset-config
+      Replace config.json with default settings, then ask the running app to reload.
+
+  --set key=value
+      Update one config value and ask the running app to reload.
+
+Configuration command:
+  config --path
+      Print the full path to config.json.
+
+  config --open-folder
+      Open the configuration folder in File Explorer.
+
+  config --reset
+      Replace config.json with defaults and ask the running app to reload.
+
+  config --list
+      Print all supported config keys and their current values.
+
+  config --get <key>
+      Print one config value.
+
+  config --set <key> <value>
+  config --set key=value
+      Update one config value and ask the running app to reload.
+
+      Supported keys:
+        theme
+          Theme name or index. Names may omit spaces/case.
+          Examples: DarkDefault, Dracula, Nord, OneDarkPro, TokyoNight,
+                    SolarizedDark, GitHubDark, GitHubLight, SolarizedLight,
+                    VSLight, QuietLight
+
+        popup.opacity
+          Floating point value from 0.10 to 1.00.
+
+        popup.width
+          Popup default width, minimum 360.
+
+        popup.height
+          Popup default height, minimum 260.
+
+        font.path
+          Full path to a .ttf or .otf font file.
+
+        font.size
+          Floating point font size from 9.0 to 32.0.
+
+        history.newAtTop
+          true/false. Controls whether new clipboard items go to the top.
+
+        paste.newline
+          true/false. Appends a newline after pasted text.
+
+        paste.move
+          keep, top, or bottom.
+
+Exit codes:
+  0   Command succeeded.
+  1   Command failed, used an invalid value, or referenced an unknown key.
+
+Current scope:
+  This CLI manages the running window and app configuration available today.
+  History and vault commands are planned in SPEC.md, but require the encrypted
+  history/vault IPC layer before they can be safely exposed here.
+
+Help:
+  --help, -h, /?
+      Show this help.
+
+Examples:
+  clipboardpp.exe --show
+  clipboardpp.exe --popup
+  clipboardpp.exe --config-path
+  clipboardpp.exe --set theme=TokyoNight
+  clipboardpp.exe config --list
+  clipboardpp.exe config --get popup.opacity
+  clipboardpp.exe config --set paste.newline true
+  clipboardpp.exe --set popup.opacity=0.85
+  clipboardpp.exe --set font.path="C:\Windows\Fonts\consola.ttf"
+  clipboardpp.exe --set font.size=16
+  clipboardpp.exe --set paste.move=bottom
+  clipboardpp.exe status --format json
+
+Notes:
+  Running clipboardpp.exe with no arguments starts the tray app.
+  Window commands signal an already-running instance.
+  Commands that modify config work even when the app is not running.
+  If the app is running, config-changing commands send it a reload message.
+)";
+}
+
+std::wstring Normalize(std::wstring s) {
+    s.erase(std::remove_if(s.begin(), s.end(), [](wchar_t c) {
+        return c == L' ' || c == L'-' || c == L'_';
+    }), s.end());
+    std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(towlower(c));
+    });
+    return s;
+}
+
+bool ParseBool(const std::wstring& value, bool& out) {
+    const std::wstring v = Normalize(value);
+    if (v == L"true" || v == L"1" || v == L"yes" || v == L"on") {
+        out = true;
+        return true;
+    }
+    if (v == L"false" || v == L"0" || v == L"no" || v == L"off") {
+        out = false;
+        return true;
+    }
+    return false;
+}
+
+bool ParseTheme(const std::wstring& value, ThemeId& out) {
+    wchar_t* end = nullptr;
+    long index = wcstol(value.c_str(), &end, 10);
+    if (end && *end == 0 && index >= 0 && index < static_cast<long>(ThemeId::Count)) {
+        out = static_cast<ThemeId>(index);
+        return true;
+    }
+
+    const std::wstring needle = Normalize(value);
+    for (int i = 0; i < static_cast<int>(ThemeId::Count); ++i) {
+        const char* name = ThemeName(static_cast<ThemeId>(i));
+        std::wstring wide;
+        while (*name) wide.push_back(static_cast<unsigned char>(*name++));
+        if (Normalize(wide) == needle) {
+            out = static_cast<ThemeId>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string Narrow(const std::wstring& value) {
+    if (value.empty()) return {};
+    int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return {};
+    std::string out(static_cast<size_t>(size - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, out.data(), size, nullptr, nullptr);
+    return out;
+}
+
+std::wstring BoolText(bool value) {
+    return value ? L"true" : L"false";
+}
+
+std::wstring PasteMoveText(int value) {
+    switch (value) {
+    case 1: return L"top";
+    case 2: return L"bottom";
+    default: return L"keep";
+    }
+}
+
+std::wstring ConfigValue(const AppConfig& config, const std::wstring& rawKey, bool& found) {
+    found = true;
+    const std::wstring key = Normalize(rawKey);
+    if (key == L"theme")
+        return ToWide(std::string(ThemeName(config.appearance.theme)));
+    if (key == L"popup.opacity" || key == L"popupopacity")
+        return std::to_wstring(config.appearance.popupOpacity);
+    if (key == L"popup.width" || key == L"popupwidth")
+        return std::to_wstring(config.appearance.popupWidth);
+    if (key == L"popup.height" || key == L"popupheight")
+        return std::to_wstring(config.appearance.popupHeight);
+    if (key == L"font.path" || key == L"fontpath")
+        return ToWide(config.appearance.fontPath);
+    if (key == L"font.size" || key == L"fontsize")
+        return std::to_wstring(config.appearance.fontSize);
+    if (key == L"history.newattop" || key == L"historynewattop")
+        return BoolText(config.newItemsAtTop);
+    if (key == L"paste.newline" || key == L"pastenewline")
+        return BoolText(config.appendNewlineAfterPaste);
+    if (key == L"paste.move" || key == L"pastemove")
+        return PasteMoveText(config.pasteMoveTarget);
+    found = false;
+    return {};
+}
+
+void PrintConfigList(const AppConfig& config) {
+    const wchar_t* keys[] = {
+        L"theme",
+        L"popup.opacity",
+        L"popup.width",
+        L"popup.height",
+        L"font.path",
+        L"font.size",
+        L"history.newAtTop",
+        L"paste.newline",
+        L"paste.move",
+    };
+
+    for (const wchar_t* key : keys) {
+        bool found = false;
+        std::wcout << key << L"=" << ConfigValue(config, key, found) << L"\n";
+    }
+}
+
+std::wstring JsonEscape(std::wstring value) {
+    std::wstring out;
+    for (wchar_t c : value) {
+        if (c == L'\\') out += L"\\\\";
+        else if (c == L'"') out += L"\\\"";
+        else if (c == L'\n') out += L"\\n";
+        else if (c == L'\r') out += L"\\r";
+        else if (c == L'\t') out += L"\\t";
+        else out.push_back(c);
+    }
+    return out;
+}
+
+void PrintStatus(const std::wstring& format) {
+    const bool json = Normalize(format) == L"json";
+    const bool running = FindRunningInstance() != nullptr;
+    if (json) {
+        std::wcout << L"{\n";
+        std::wcout << L"  \"running\": " << (running ? L"true" : L"false") << L",\n";
+        std::wcout << L"  \"configPath\": \"" << JsonEscape(ToWide(ConfigStore::Path())) << L"\",\n";
+        std::wcout << L"  \"configFolder\": \"" << JsonEscape(ToWide(ConfigStore::Directory())) << L"\"\n";
+        std::wcout << L"}\n";
+        return;
+    }
+
+    std::wcout << L"Running: " << (running ? L"yes" : L"no") << L"\n";
+    std::wcout << L"Config: " << ToWide(ConfigStore::Path()) << L"\n";
+    std::wcout << L"Config folder: " << ToWide(ConfigStore::Directory()) << L"\n";
+}
+
+bool ApplySet(AppConfig& config, const std::wstring& assignment, std::wstring& error) {
+    const size_t eq = assignment.find(L'=');
+    if (eq == std::wstring::npos) {
+        error = L"--set expects key=value";
+        return false;
+    }
+
+    const std::wstring key = Normalize(assignment.substr(0, eq));
+    const std::wstring value = assignment.substr(eq + 1);
+
+    try {
+        if (key == L"theme") {
+            ThemeId theme{};
+            if (!ParseTheme(value, theme)) {
+                error = L"Unknown theme.";
+                return false;
+            }
+            config.appearance.theme = theme;
+        } else if (key == L"popup.opacity" || key == L"popupopacity") {
+            config.appearance.popupOpacity = std::clamp(std::stof(value), 0.1f, 1.0f);
+        } else if (key == L"popup.width" || key == L"popupwidth") {
+            config.appearance.popupWidth = std::max(360, std::stoi(value));
+        } else if (key == L"popup.height" || key == L"popupheight") {
+            config.appearance.popupHeight = std::max(260, std::stoi(value));
+        } else if (key == L"font.path" || key == L"fontpath") {
+            config.appearance.fontPath = Narrow(value);
+        } else if (key == L"font.size" || key == L"fontsize") {
+            config.appearance.fontSize = std::clamp(std::stof(value), 9.0f, 32.0f);
+        } else if (key == L"history.newattop" || key == L"historynewattop") {
+            bool b{};
+            if (!ParseBool(value, b)) {
+                error = L"history.newAtTop expects true/false.";
+                return false;
+            }
+            config.newItemsAtTop = b;
+        } else if (key == L"paste.newline" || key == L"pastenewline") {
+            bool b{};
+            if (!ParseBool(value, b)) {
+                error = L"paste.newline expects true/false.";
+                return false;
+            }
+            config.appendNewlineAfterPaste = b;
+        } else if (key == L"paste.move" || key == L"pastemove") {
+            const std::wstring v = Normalize(value);
+            if (v == L"keep" || v == L"none") config.pasteMoveTarget = 0;
+            else if (v == L"top") config.pasteMoveTarget = 1;
+            else if (v == L"bottom") config.pasteMoveTarget = 2;
+            else {
+                error = L"paste.move expects keep, top, or bottom.";
+                return false;
+            }
+        } else {
+            error = L"Unknown config key: " + assignment.substr(0, eq);
+            return false;
+        }
+    } catch (...) {
+        error = L"Invalid value for key: " + assignment.substr(0, eq);
+        return false;
+    }
+
+    return true;
+}
+
+bool SaveAndReload(const AppConfig& config) {
+    if (!ConfigStore::Save(config)) {
+        std::wcerr << L"Failed to save config.\n";
+        return false;
+    }
+    SignalRunning(WM_RELOAD_CONFIG);
+    return true;
+}
+
+int RunConfigCommand(int argc, wchar_t** argv) {
+    if (argc < 3 || Eq(argv[2], L"--help") || Eq(argv[2], L"-h") || Eq(argv[2], L"/?")) {
+        PrintHelp();
+        return 0;
+    }
+
+    if (Eq(argv[2], L"--path")) {
+        std::wcout << ToWide(ConfigStore::Path()) << L"\n";
+        return 0;
+    }
+    if (Eq(argv[2], L"--open-folder")) {
+        std::filesystem::create_directories(ConfigStore::Directory());
+        const std::filesystem::path dir = ConfigStore::Directory();
+        ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return 0;
+    }
+    if (Eq(argv[2], L"--reset")) {
+        return SaveAndReload(AppConfig{}) ? 0 : 1;
+    }
+    if (Eq(argv[2], L"--list")) {
+        PrintConfigList(ConfigStore::Load());
+        return 0;
+    }
+    if (Eq(argv[2], L"--get")) {
+        if (argc < 4) {
+            std::wcerr << L"config --get requires a key. See --help.\n";
+            return 1;
+        }
+        bool found = false;
+        const std::wstring value = ConfigValue(ConfigStore::Load(), argv[3], found);
+        if (!found) {
+            std::wcerr << L"Unknown config key: " << argv[3] << L"\n";
+            return 1;
+        }
+        std::wcout << value << L"\n";
+        return 0;
+    }
+    if (Eq(argv[2], L"--set")) {
+        if (argc < 4) {
+            std::wcerr << L"config --set requires key/value. See --help.\n";
+            return 1;
+        }
+
+        std::wstring assignment = argv[3];
+        if (assignment.find(L'=') == std::wstring::npos) {
+            if (argc < 5) {
+                std::wcerr << L"config --set <key> requires a value. See --help.\n";
+                return 1;
+            }
+            assignment += L"=";
+            assignment += argv[4];
+        }
+
+        AppConfig config = ConfigStore::Load();
+        std::wstring error;
+        if (!ApplySet(config, assignment, error)) {
+            std::wcerr << error << L"\n";
+            return 1;
+        }
+        return SaveAndReload(config) ? 0 : 1;
+    }
+
+    std::wcerr << L"Unknown config operation: " << argv[2] << L"\n\n";
+    PrintHelp();
+    return 1;
+}
+
+int RunCLI(int argc, wchar_t** argv) {
+    AttachConsoleForCli();
+
+    if (argc <= 1 || Eq(argv[1], L"--help") || Eq(argv[1], L"-h") || Eq(argv[1], L"/?")) {
+        PrintHelp();
+        return 0;
+    }
+
+    if (Eq(argv[1], L"--show") || Eq(argv[1], L"--settings")) {
+        SignalRunning(WM_SHOWCPP_MAIN);
+        return 0;
+    }
+    if (Eq(argv[1], L"--popup")) {
+        SignalRunning(WM_SHOWPOPUP);
+        return 0;
+    }
+    if (Eq(argv[1], L"status")) {
+        std::wstring format = L"text";
+        if (argc >= 4 && Eq(argv[2], L"--format"))
+            format = argv[3];
+        if (Normalize(format) != L"text" && Normalize(format) != L"json") {
+            std::wcerr << L"status --format expects text or json.\n";
+            return 1;
+        }
+        PrintStatus(format);
+        return 0;
+    }
+    if (Eq(argv[1], L"config")) {
+        return RunConfigCommand(argc, argv);
+    }
+    if (Eq(argv[1], L"--config-path")) {
+        std::wcout << ToWide(ConfigStore::Path()) << L"\n";
+        return 0;
+    }
+    if (Eq(argv[1], L"--open-config-folder")) {
+        std::filesystem::create_directories(ConfigStore::Directory());
+        const std::filesystem::path dir = ConfigStore::Directory();
+        ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return 0;
+    }
+    if (Eq(argv[1], L"--reset-config")) {
+        return SaveAndReload(AppConfig{}) ? 0 : 1;
+    }
+    if (Eq(argv[1], L"--set")) {
+        if (argc < 3) {
+            std::wcerr << L"--set requires key=value. See --help.\n";
+            return 1;
+        }
+        AppConfig config = ConfigStore::Load();
+        std::wstring error;
+        if (!ApplySet(config, argv[2], error)) {
+            std::wcerr << error << L"\n";
+            return 1;
+        }
+        return SaveAndReload(config) ? 0 : 1;
+    }
+    if (Eq(argv[1], L"--diagnostics")) {
+        PrintStatus(L"text");
+        return 0;
+    }
+
+    std::wcerr << L"Unknown command: " << argv[1] << L"\n\n";
+    PrintHelp();
+    return 1;
+}
+
+} // namespace
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
-    // Parse the real command line (WinMain drops args we need)
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
 
-    // CLI mode: any argument triggers pipe-based dispatch
     if (argc > 1) {
         int result = RunCLI(argc, argv);
         LocalFree(argv);
@@ -18,13 +531,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     }
     LocalFree(argv);
 
-    // Single-instance guard — second launch without args brings window to front
     HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"Local\\ClipboardPlusPlus");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        // Signal the running instance to show its main window
-        HWND existing = FindWindowW(L"ClipboardPlusPlus_Main", nullptr);
-        if (existing)
-            PostMessageW(existing, WM_APP + 2, 0, 0); // WM_SHOWCPP_MAIN
+        SignalRunning(WM_SHOWCPP_MAIN);
         if (hMutex) CloseHandle(hMutex);
         return 0;
     }
@@ -34,13 +543,4 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     CloseHandle(hMutex);
     return result;
-}
-
-// ── Stub — replaced in Milestone 6 ───────────────────────────────────────────
-static int RunCLI(int argc, wchar_t** argv) {
-    MessageBoxW(nullptr,
-        L"CLI support coming in Milestone 6.\n"
-        L"Run clipboardpp.exe without arguments to start the tray app.",
-        L"Clipboard++", MB_OK | MB_ICONINFORMATION);
-    return 0;
 }

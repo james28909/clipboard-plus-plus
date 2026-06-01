@@ -17,6 +17,7 @@ constexpr UINT WM_TRAYICON     = WM_APP + 1;
 constexpr UINT WM_SHOWCPP_MAIN = WM_APP + 2;
 constexpr UINT WM_SHOWPOPUP    = WM_APP + 3;
 constexpr UINT WM_HOTKEYACTION = WM_APP + 4;
+constexpr UINT WM_RELOAD_CONFIG = WM_APP + 5;
 
 class Application {
 public:
@@ -55,6 +56,7 @@ private:
     void ApplyAppearanceNow();
     void SaveConfig();
     bool HasRenderableUi() const;
+    void ApplyLoadedConfig(const AppConfig& config);
 
     bool CreateD3D();
     void DestroyD3D();
