@@ -1,0 +1,13 @@
+{
+  "name": "Clipboard++ sample",
+  "features": [
+    "tree view",
+    "pretty text view",
+    "search"
+  ],
+  "metadata": {
+    "createdFor": "JSON Viewer",
+    "valid": true,
+    "count": 3
+  }
+}
