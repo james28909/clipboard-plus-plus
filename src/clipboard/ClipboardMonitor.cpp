@@ -5,6 +5,8 @@
 #include <vector>
 
 static constexpr wchar_t kMonitorClass[] = L"CPPClipboardMonitor";
+static constexpr int kOpenClipboardAttempts = 12;
+static constexpr DWORD kOpenClipboardRetryMs = 8;
 
 namespace {
 
@@ -121,7 +123,16 @@ void ClipboardMonitor::OnClipboardUpdate() {
 ClipboardItem ClipboardMonitor::ReadClipboard() const {
     ClipboardItem item;
 
-    if (!OpenClipboard(m_hwnd))
+    bool opened = false;
+    for (int attempt = 0; attempt < kOpenClipboardAttempts; ++attempt) {
+        if (OpenClipboard(m_hwnd)) {
+            opened = true;
+            break;
+        }
+        Sleep(kOpenClipboardRetryMs);
+    }
+
+    if (!opened)
         return item;
 
     // -- Plain / unicode text (most common) ------------------------------------

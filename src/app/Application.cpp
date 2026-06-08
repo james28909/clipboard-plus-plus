@@ -237,6 +237,7 @@ void Application::SetActiveClipboardProfile(const std::string& id) {
 
     m_config.activeClipboardId = id;
     m_history = HistoryForActiveClipboard();
+    m_manualClipboardProcessOverride = ForegroundProcessName();
     SaveConfig();
     AddDeveloperEvent("selected clipboard profile: " + it->name + " (" + it->id + ")");
 }
@@ -250,7 +251,6 @@ void Application::SelectClipboardProfileSlot(int slot) {
         return;
 
     SetActiveClipboardProfile(m_config.clipboards[index].id);
-    m_manualClipboardProcessOverride = ForegroundProcessName();
 }
 
 void Application::CreateClipboardProfile(const std::string& name, const std::string& processName) {
@@ -272,6 +272,7 @@ void Application::CreateClipboardProfile(const std::string& name, const std::str
     });
     m_config.activeClipboardId = m_config.clipboards.back().id;
     m_history = m_histories.back().get();
+    m_manualClipboardProcessOverride = ForegroundProcessName();
     SaveConfig();
     SaveActiveClipboardHistory();
     AddDeveloperEvent("created clipboard profile: " + m_config.clipboards.back().name);
