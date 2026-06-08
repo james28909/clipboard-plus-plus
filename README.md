@@ -4,6 +4,8 @@ Clipboard++ is a Windows clipboard manager built with C++17, Win32, Dear ImGui, 
 
 This project is under active development. Core clipboard capture, popup paste workflows, configurable hotkeys, multi-clipboard profiles, custom themes, and CLI/config commands are implemented. The encrypted vault and some advanced privacy/developer features are planned but not complete yet.
 
+Clipboard++ is developed by james28909 with close AI-assisted development support from OpenAI Codex and Claude. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for project attribution.
+
 ## Screenshots
 
 Main settings window:
@@ -177,3 +179,7 @@ Planned or partial:
 ## License
 
 License information has not been finalized in this README yet.
+
+## Acknowledgements
+
+Clipboard++ is being built through a close human/AI development loop: james28909 drives the product direction, testing, and implementation decisions, with AI-assisted development support from OpenAI Codex and Claude.
