@@ -1,11 +1,32 @@
 #include "ClipboardMonitor.h"
 #include "ContentDetector.h"
+#include "../util/Win32Util.h"
 #include <shellapi.h>   // DragQueryFileW
-#include <psapi.h>      // QueryFullProcessImageNameW
+#include <vector>
 
 static constexpr wchar_t kMonitorClass[] = L"CPPClipboardMonitor";
 
-// ── Construction / destruction ────────────────────────────────────────────────
+namespace {
+
+std::string FileDropPathsUtf8(HDROP hDrop) {
+    UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+    std::string paths;
+    for (UINT i = 0; i < count; ++i) {
+        const UINT len = DragQueryFileW(hDrop, i, nullptr, 0);
+        if (len == 0)
+            continue;
+        std::vector<wchar_t> buf(static_cast<size_t>(len) + 1);
+        if (DragQueryFileW(hDrop, i, buf.data(), static_cast<UINT>(buf.size()))) {
+            if (!paths.empty()) paths += '\n';
+            paths += win32util::WideToUtf8(buf.data());
+        }
+    }
+    return paths;
+}
+
+} // namespace
+
+// -- Construction / destruction ------------------------------------------------
 
 ClipboardMonitor::ClipboardMonitor() = default;
 
@@ -13,7 +34,7 @@ ClipboardMonitor::~ClipboardMonitor() {
     Stop();
 }
 
-// ── Public ────────────────────────────────────────────────────────────────────
+// -- Public --------------------------------------------------------------------
 
 bool ClipboardMonitor::Start(HINSTANCE hInstance, ItemCallback onItem) {
     m_hInstance = hInstance;
@@ -56,7 +77,7 @@ void ClipboardMonitor::SuppressNextUpdate() {
     m_ignoreUntilTick = GetTickCount64() + 250;
 }
 
-// ── Private: Win32 message handler ───────────────────────────────────────────
+// -- Private: Win32 message handler -------------------------------------------
 
 LRESULT CALLBACK ClipboardMonitor::WndProc(HWND hwnd, UINT msg,
                                              WPARAM wParam, LPARAM lParam) {
@@ -95,7 +116,7 @@ void ClipboardMonitor::OnClipboardUpdate() {
         m_callback(std::move(item));
 }
 
-// ── Private: clipboard reading ────────────────────────────────────────────────
+// -- Private: clipboard reading ------------------------------------------------
 
 ClipboardItem ClipboardMonitor::ReadClipboard() const {
     ClipboardItem item;
@@ -103,22 +124,11 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
     if (!OpenClipboard(m_hwnd))
         return item;
 
-    // ── Plain / unicode text (most common) ────────────────────────────────────
+    // -- Plain / unicode text (most common) ------------------------------------
     if (IsClipboardFormatAvailable(CF_HDROP)) {
         HANDLE h = GetClipboardData(CF_HDROP);
-        if (h) {
-            auto* hDrop  = static_cast<HDROP>(h);
-            UINT  count  = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
-            std::string paths;
-            for (UINT i = 0; i < count; ++i) {
-                wchar_t buf[MAX_PATH]{};
-                if (DragQueryFileW(hDrop, i, buf, MAX_PATH)) {
-                    if (!paths.empty()) paths += '\n';
-                    paths += WideToUtf8(buf);
-                }
-            }
-            item.text = paths;
-        }
+        if (h)
+            item.text = FileDropPathsUtf8(static_cast<HDROP>(h));
         item.type = ContentType::FilePaths;
     }
     else if (IsClipboardFormatAvailable(CF_UNICODETEXT)) {
@@ -126,13 +136,13 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
         if (h) {
             auto* pw = static_cast<wchar_t*>(GlobalLock(h));
             if (pw) {
-                item.text = WideToUtf8(pw);
+                item.text = win32util::WideToUtf8(pw);
                 GlobalUnlock(h);
             }
         }
         item.type = ContentType::Text;
     }
-    // ── DIB image ─────────────────────────────────────────────────────────────
+    // -- DIB image -------------------------------------------------------------
     else if (IsClipboardFormatAvailable(CF_DIB)) {
         HANDLE h = GetClipboardData(CF_DIB);
         if (h) {
@@ -150,25 +160,6 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
         item.text = "[Image " + std::to_string(item.imageW)
                   + "x"      + std::to_string(item.imageH) + "]";
     }
-    // ── File drop ─────────────────────────────────────────────────────────────
-    else if (false && IsClipboardFormatAvailable(CF_HDROP)) {
-        HANDLE h = GetClipboardData(CF_HDROP);
-        if (h) {
-            auto* hDrop  = static_cast<HDROP>(h);
-            UINT  count  = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
-            std::string paths;
-            for (UINT i = 0; i < count; ++i) {
-                wchar_t buf[MAX_PATH]{};
-                if (DragQueryFileW(hDrop, i, buf, MAX_PATH)) {
-                    if (!paths.empty()) paths += '\n';
-                    paths += WideToUtf8(buf);
-                }
-            }
-            item.text = paths;
-        }
-        item.type = ContentType::FilePaths;
-    }
-
     CloseClipboard();
 
     if (item.IsEmpty()) return item; // nothing readable
@@ -183,39 +174,8 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
     return item;
 }
 
-// ── Private: helpers ──────────────────────────────────────────────────────────
-
-std::string ClipboardMonitor::WideToUtf8(const wchar_t* w, int len) {
-    if (!w || !*w) return {};
-    int n = WideCharToMultiByte(CP_UTF8, 0, w, len, nullptr, 0, nullptr, nullptr);
-    if (n <= 0) return {};
-    std::string s(n, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w, len, s.data(), n, nullptr, nullptr);
-    // Remove null terminator if WideCharToMultiByte included it
-    if (!s.empty() && s.back() == '\0') s.pop_back();
-    return s;
-}
+// -- Private: helpers ----------------------------------------------------------
 
 std::string ClipboardMonitor::GetForegroundProcessName() {
-    HWND fg = GetForegroundWindow();
-    if (!fg) return {};
-
-    DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
-    if (!pid) return {};
-
-    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!hProc) return {};
-
-    wchar_t buf[MAX_PATH]{};
-    DWORD   sz = MAX_PATH;
-    BOOL    ok = QueryFullProcessImageNameW(hProc, 0, buf, &sz);
-    CloseHandle(hProc);
-    if (!ok) return {};
-
-    // Strip directory — keep only "app.exe"
-    std::wstring path(buf, sz);
-    auto pos = path.rfind(L'\\');
-    std::wstring name = (pos != std::wstring::npos) ? path.substr(pos + 1) : path;
-    return WideToUtf8(name.c_str());
+    return win32util::ProcessNameFromWindow(GetForegroundWindow());
 }

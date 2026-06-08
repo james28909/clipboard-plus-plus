@@ -1,4 +1,4 @@
-# Clipboard++ — Feature Specification v0.1
+# Clipboard++ - Feature Specification v0.1
 
 **Executable:** `clipboardpp.exe`  
 **Platform:** Windows 10+  
@@ -13,7 +13,7 @@
 - Supported content types: plain text, rich text (RTF), HTML, images (bitmap/DIB), URLs, file paths
 - Auto-tag each item on capture: `URL` | `Email` | `Code` | `JSON` | `XML` | `SQL` | `Image` | `ColorHex` | `FilePath` | `PhoneNumber` | `SecretPattern`
 - **Deduplication:** if incoming item matches existing, move existing to configured position (top or bottom) rather than adding a new copy
-- **History direction:** configurable — new items go to top or bottom of list
+- **History direction:** configurable - new items go to top or bottom of list
 - **Max active history:** configurable 1–500 (default: 100)
 - **Persistence:** ON by default; DPAPI-encrypted blob at `%APPDATA%\ClipboardPlusPlus\history.enc`
 
@@ -41,14 +41,14 @@
 - Resizable with mouse drag on edges; default size configurable in main GUI
 - Transparency: configurable 0–100% opacity (default: 95%)
 - Theme-aligned (colors, fonts, accents from active theme)
-- Follows mouse cursor on open — clamped to the active monitor's work area via `GetCursorPos` + `MonitorFromPoint` + `GetMonitorInfo`
+- Follows mouse cursor on open - clamped to the active monitor's work area via `GetCursorPos` + `MonitorFromPoint` + `GetMonitorInfo`
 
 ### Layout (left to right, top to bottom)
 ```
-┌─────────────────────────────────────────┐
+┌-----------------------------------------┐
 │  [ Search...                          ] │  ← search bar
 │  [All][Txt][Img][URL][Queue][⚙]         │  ← filter/mode strip
-├─────────────────────────────────────────┤
+├-----------------------------------------┤
 │  1  First copied item preview...        │
 │  2  Second item preview...              │
 │  3  https://example.com                 │
@@ -58,7 +58,7 @@
 │  b  Item eleven                         │
 │  ...                                    │
 │  z  Item thirty-five                    │
-└─────────────────────────────────────────┘
+└-----------------------------------------┘
 ```
 - Items numbered **1–9** then **a–z** (35 visible; scrollable beyond 35)
 - Each row: index key | content-type icon | truncated preview text
@@ -79,17 +79,17 @@
 ## 4. Paste Modes
 
 ### Standard Mode (default)
-- Hold configured **modifier key** + press item key (1–9, a–z) → instant paste at cursor
+- Hold configured **modifier key** + press item key (1–9, a–z) -> instant paste at cursor
 - Modifier key configurable (default: `Ctrl+Alt`)
 
 ### Queue Mode
 - Enter by clicking Queue icon in popup strip, or via hotkey
-- In popup: hold **Ctrl** and click/key items → each gets a numbered checkmark in selection order
-- Release Ctrl → items paste sequentially with configured **inter-paste delay** (0 ms = instant, default: 50 ms)
+- In popup: hold **Ctrl** and click/key items -> each gets a numbered checkmark in selection order
+- Release Ctrl -> items paste sequentially with configured **inter-paste delay** (0 ms = instant, default: 50 ms)
 
 ### Immediate Multi-Select Mode
 - Hotkey activates select mode within the popup
-- Click items one by one → each pastes **immediately** at the cursor's current position as soon as it is selected
+- Click items one by one -> each pastes **immediately** at the cursor's current position as soon as it is selected
 - No batching; each selection triggers a paste immediately
 
 ---
@@ -137,7 +137,7 @@ Implemented via `SetWindowsHookEx(WH_KEYBOARD_LL, ...)`.
 
 ### Storage Encryption
 - All disk files (`history.enc`, `vault.enc`) encrypted with Windows DPAPI (`CryptProtectData`)
-- Tied to the current Windows user account — not portable across users/machines
+- Tied to the current Windows user account - not portable across users/machines
 
 ---
 
@@ -199,15 +199,15 @@ Shown on first launch. After that: hidden until opened from tray or hotkey. Rend
 ## 9. System Tray
 
 - App lives in tray after first launch
-- Left double-click → open main settings window
+- Left double-click -> open main settings window
 - Right-click menu:
 
 ```
 Open Clipboard++
 Show Popup
-──────────────
+--------------
 ✓ Incognito Mode
-──────────────
+--------------
 About
 Exit
 ```
@@ -268,7 +268,7 @@ If the tray app is not running, CLI exits with: `Clipboard++ is not running.`
 
 ## 11. Developer Mode
 
-Toggled in Settings → Developer. Off by default.
+Toggled in Settings -> Developer. Off by default.
 
 | Feature | Description |
 |---------|-------------|
@@ -276,7 +276,7 @@ Toggled in Settings → Developer. Off by default.
 | **Hex Viewer** | Raw bytes view for any clipboard item |
 | **Source Process Tracking** | Each item tagged with the process name that copied it; filter by source |
 | **Named Persistent Slots** | Named non-sensitive text slots (e.g. `$MY_EMAIL`); permanent, not affected by history limits or auto-clear |
-| **Regex Transform Engine** | Named transforms (pattern → replacement) applied to items before paste; accessible via right-click in popup |
+| **Regex Transform Engine** | Named transforms (pattern -> replacement) applied to items before paste; accessible via right-click in popup |
 | **Template Paste** | Templates with `{{slot:name}}` or `{{1}}` interpolation pasted as a single composed string |
 | **Diff View** | Side-by-side character/word diff between any two selected items |
 | **Auto Pretty-Print** | Detect JSON/XML/SQL and offer formatted paste |
@@ -301,7 +301,7 @@ Toggled in Settings → Developer. Off by default.
 
 - **Toolchain:** MSVC via VS2022 + CMake 3.20+
 - **Standard:** C++17
-- **Runtime:** `/MT` (static) — no MSVC redistributable needed
+- **Runtime:** `/MT` (static) - no MSVC redistributable needed
 - **Release flags:** `/O2 /GL` + `/LTCG`
 - **Dependencies:** Dear ImGui docking (vendored `third_party/imgui`), nlohmann/json (vendored `third_party/nlohmann/json.hpp`)
 - **Minimum OS:** Windows 10 (1903+)

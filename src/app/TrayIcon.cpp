@@ -39,7 +39,7 @@ void TrayIcon::HandleMessage(WPARAM wParam, LPARAM lParam) {
     switch (LOWORD(lParam)) {
     case WM_LBUTTONDBLCLK:
         if (Application::Get())
-            Application::Get()->ShowMainWindow();
+            Application::Get()->OpenSettingsWindow();
         break;
     case WM_RBUTTONUP:
     case WM_CONTEXTMENU:
@@ -77,11 +77,12 @@ void TrayIcon::ShowContextMenu() {
         TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
                        pt.x, pt.y, 0, m_hwnd, nullptr));
     DestroyMenu(hMenu);
+    PostMessageW(m_hwnd, WM_NULL, 0, 0);
 
     Application* app = Application::Get();
     switch (cmd) {
     case TRAY_CMD_OPEN:
-        if (app) app->ShowMainWindow();
+        if (app) app->OpenSettingsWindow();
         break;
     case TRAY_CMD_POPUP:
         PostMessageW(m_hwnd, WM_SHOWPOPUP, 0, 0);

@@ -3,6 +3,7 @@
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
+#include "../util/Win32Util.h"
 #include "Appearance.h"
 
 #include <imgui.h>
@@ -21,6 +22,7 @@
 #include <cmath>
 #include <sstream>
 #include <string>
+#include <utility>
 #include "../hotkeys/HotkeyManager.h"  // kClipboardPasteMagic
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -60,74 +62,36 @@ static ClipboardHistory::MoveTarget NextPasteMoveTarget(ClipboardHistory::MoveTa
     }
 }
 
-static std::wstring Utf8ToWide(const std::string& value) {
-    if (value.empty()) return {};
-    int len = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
-    if (len <= 0) return {};
-    std::wstring out(static_cast<size_t>(len - 1), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, out.data(), len);
-    return out;
-}
-
-static std::wstring TrimPathToken(std::wstring value) {
-    auto isSpace = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
-    while (!value.empty() && isSpace(value.front())) value.erase(value.begin());
-    while (!value.empty() && isSpace(value.back())) value.pop_back();
-    if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"')
-        value = value.substr(1, value.size() - 2);
+static std::string TrimAscii(std::string value) {
+    auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
+    while (!value.empty() && isSpace(static_cast<unsigned char>(value.front())))
+        value.erase(value.begin());
+    while (!value.empty() && isSpace(static_cast<unsigned char>(value.back())))
+        value.pop_back();
     return value;
 }
 
-static std::vector<std::wstring> ExistingFileDropPaths(const std::string& text) {
-    std::vector<std::wstring> paths;
-    std::istringstream stream(text);
-    std::string line;
-    while (std::getline(stream, line)) {
-        std::wstring path = TrimPathToken(Utf8ToWide(line));
-        if (path.empty()) continue;
-        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
-            return {};
-        paths.push_back(std::move(path));
+static std::wstring UrlEncodeWide(const std::string& value) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::wstring out;
+    for (unsigned char c : value) {
+        if ((c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            out.push_back(static_cast<wchar_t>(c));
+        } else if (c == ' ') {
+            out.push_back(L'+');
+        } else {
+            out.push_back(L'%');
+            out.push_back(static_cast<wchar_t>(kHex[c >> 4]));
+            out.push_back(static_cast<wchar_t>(kHex[c & 0x0F]));
+        }
     }
-    return paths;
+    return out;
 }
 
-static bool SetClipboardFileDrop(const std::vector<std::wstring>& paths) {
-    if (paths.empty()) return false;
-
-    size_t chars = 1; // final extra null
-    for (const std::wstring& path : paths)
-        chars += path.size() + 1;
-
-    const SIZE_T bytes = sizeof(DROPFILES) + chars * sizeof(wchar_t);
-    HGLOBAL hm = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
-    if (!hm) return false;
-
-    auto* drop = static_cast<DROPFILES*>(GlobalLock(hm));
-    if (!drop) {
-        GlobalFree(hm);
-        return false;
-    }
-
-    drop->pFiles = sizeof(DROPFILES);
-    drop->fWide = TRUE;
-
-    wchar_t* out = reinterpret_cast<wchar_t*>(
-        reinterpret_cast<BYTE*>(drop) + sizeof(DROPFILES));
-    for (const std::wstring& path : paths) {
-        std::memcpy(out, path.c_str(), path.size() * sizeof(wchar_t));
-        out += path.size() + 1;
-    }
-
-    GlobalUnlock(hm);
-    if (!SetClipboardData(CF_HDROP, hm)) {
-        GlobalFree(hm);
-        return false;
-    }
-    return true;
-}
-
-// ── Create / Destroy ──────────────────────────────────────────────────────────
+// -- Create / Destroy ----------------------------------------------------------
 
 bool PopupWindow::Create(HINSTANCE hInstance,
                           ID3D11Device* device,
@@ -142,16 +106,16 @@ bool PopupWindow::Create(HINSTANCE hInstance,
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-    wc.hbrBackground = nullptr;  // D3D owns the background — prevents white flash on resize
+    wc.hbrBackground = nullptr;  // D3D owns the background - prevents white flash on resize
     wc.lpszClassName = kPopupClass;
     RegisterClassExW(&wc);
 
-    // WS_EX_TOPMOST  — always above other windows
-    // WS_EX_LAYERED  — needed for SetLayeredWindowAttributes (opacity)
-    // WS_EX_NOACTIVATE — don't steal focus from the app being pasted into.
+    // WS_EX_TOPMOST  - always above other windows
+    // WS_EX_LAYERED  - needed for SetLayeredWindowAttributes (opacity)
+    // WS_EX_NOACTIVATE - don't steal focus from the app being pasted into.
     //                    Keyboard input for the search bar will be handled
     //                    via WH_KEYBOARD_LL in Milestone 4.
-    // WS_POPUP + WS_THICKFRAME — borderless but resizable
+    // WS_POPUP + WS_THICKFRAME - borderless but resizable
     m_hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE,
         kPopupClass, nullptr,
@@ -168,7 +132,7 @@ bool PopupWindow::Create(HINSTANCE hInstance,
         return false;
     }
 
-    // ImGui context — independent from the main window's context
+    // ImGui context - independent from the main window's context
     ImGuiContext* prevCtx = ImGui::GetCurrentContext();
 
     m_imguiCtx = ImGui::CreateContext();
@@ -194,8 +158,8 @@ void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
     ImGuiContext* prevCtx = ImGui::GetCurrentContext();
     ImGui::SetCurrentContext(m_imguiCtx);
 
-    ApplyThemeStyle(settings.theme, true);
-    m_theme = settings.theme;
+    m_appearance = settings;
+    ApplyThemeStyle(m_appearance, true);
     ImGui_ImplDX11_InvalidateDeviceObjects();
     RebuildFontAtlas(ImGui::GetIO(), settings);
     ImGui_ImplDX11_CreateDeviceObjects();
@@ -232,7 +196,7 @@ void PopupWindow::Destroy() {
     }
 }
 
-// ── Show / Hide ───────────────────────────────────────────────────────────────
+// -- Show / Hide ---------------------------------------------------------------
 
 void PopupWindow::Show(bool focusSearch) {
     m_prevForeground = GetForegroundWindow();
@@ -258,10 +222,18 @@ void PopupWindow::Hide() {
     m_visible       = false;
     m_searchActive  = false;
     m_searchCapture = false;
+    m_dialogTextCapture = false;
+    m_newClipboardFocusPending = false;
     m_keyboardCapture = false;
     m_maximized = false;
     m_queueMode     = false;
     m_queue.clear();
+}
+
+void PopupWindow::OpenSettingsWindow() {
+    ActivateKeyboardCapture();
+    Application::Get()->ShowMainWindow();
+    Hide();
 }
 
 void PopupWindow::RequestSearchFocus() {
@@ -271,10 +243,13 @@ void PopupWindow::RequestSearchFocus() {
     m_justOpened = true;
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
+// -- Render --------------------------------------------------------------------
 
 void PopupWindow::Render() {
     if (!m_visible || !m_imguiCtx) return;
+
+    if (Application* app = Application::Get())
+        app->SyncClipboardForForegroundProcess();
 
     // Switch to popup ImGui context for this frame
     ImGuiContext* prevCtx = ImGui::GetCurrentContext();
@@ -284,7 +259,7 @@ void PopupWindow::Render() {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    // Full-window ImGui overlay — no title bar, fills the entire HWND
+    // Full-window ImGui overlay - no title bar, fills the entire HWND
     RECT rc{};
     GetClientRect(m_hwnd, &rc);
     ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
@@ -312,25 +287,53 @@ void PopupWindow::Render() {
         return;
     }
 
-    // ── Search bar ────────────────────────────────────────────────────────────
+    DrawSearchBar();
+    ImGui::Spacing();
+    DrawFilterStrip();
+    ImGui::Separator();
+    DrawItemList();
+
+    ImGui::End();
+    ImGui::Render();
+
+    // Clear + present
+    constexpr float bg[4] = {0.145f, 0.145f, 0.145f, 1.0f};
+    m_context->OMSetRenderTargets(1, &m_renderTarget, nullptr);
+    m_context->ClearRenderTargetView(m_renderTarget, bg);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    m_swapChain->Present(1, 0);
+
+    ImGui::SetCurrentContext(prevCtx);
+}
+
+// -- Filter strip --------------------------------------------------------------
+
+void PopupWindow::DrawSearchBar() {
     ImGui::SetNextItemWidth(-FLT_MIN);
     if ((m_justOpened && m_focusSearchOnOpen) ||
         (m_searchCapture && !ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
         ImGui::SetKeyboardFocusHere();
     }
     m_justOpened = false;
-    ImGui::InputTextWithHint("##search", "  Search...",
-                              m_searchBuf, sizeof(m_searchBuf));
+
+    ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue;
+    const bool enterPressed = ImGui::InputTextWithHint("##search", "  Search... Shift+Enter for web",
+                                                       m_searchBuf, sizeof(m_searchBuf),
+                                                       inputFlags);
     const bool searchHovered = ImGui::IsItemHovered();
     const bool searchInputActive = ImGui::IsItemActive();
     if (m_focusSearchOnOpen || ImGui::IsItemClicked()) {
         m_keyboardCapture = true;
         m_searchCapture = true;
     }
+
+    ImGuiIO& popupIo = ImGui::GetIO();
+    if (enterPressed && popupIo.KeyShift)
+        LaunchWebSearch();
+
     m_searchActive = searchInputActive || m_searchCapture;
     m_focusSearchOnOpen = false;
 
-    ImGuiIO& popupIo = ImGui::GetIO();
     const bool anyItemActive = ImGui::IsAnyItemActive();
     const size_t searchLen = std::strlen(m_searchBuf);
     if (m_searchActive != m_lastSearchActive ||
@@ -357,25 +360,7 @@ void PopupWindow::Render() {
         m_lastWantTextInput = popupIo.WantTextInput;
         m_lastSearchLen = searchLen;
     }
-    ImGui::Spacing();
-    DrawFilterStrip();
-    ImGui::Separator();
-    DrawItemList();
-
-    ImGui::End();
-    ImGui::Render();
-
-    // Clear + present
-    constexpr float bg[4] = {0.145f, 0.145f, 0.145f, 1.0f};
-    m_context->OMSetRenderTargets(1, &m_renderTarget, nullptr);
-    m_context->ClearRenderTargetView(m_renderTarget, bg);
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    m_swapChain->Present(1, 0);
-
-    ImGui::SetCurrentContext(prevCtx);
 }
-
-// ── Filter strip ──────────────────────────────────────────────────────────────
 
 void PopupWindow::DrawTitleBar() {
     const float height = static_cast<float>(kPopupTitleButton);
@@ -403,20 +388,104 @@ void PopupWindow::DrawTitleBar() {
     const ImVec2 max = ImGui::GetItemRectMax();
     const ImVec2 center = {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f};
     const float radius = knobSize * 0.33f;
-    const ImU32 ring = ImGui::GetColorU32(knobHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
-    const ImU32 fill = ImGui::GetColorU32(ImGuiCol_WindowBg);
-    dl->AddCircleFilled(center, radius, fill, 24);
-    dl->AddCircle(center, radius, ring, 24, 2.0f);
+    const AppearanceSettings effective = m_appearance.customColors ? m_appearance : ThemeDefaults(m_appearance.theme);
+    const ImVec4 ring = effective.opacityKnobRing;
+    const ImVec4 fill = effective.opacityKnobFill;
+    const ImU32 ringColor = ImGui::GetColorU32(knobHovered ? ImVec4(std::min(1.0f, ring.x + 0.12f),
+                                                                    std::min(1.0f, ring.y + 0.12f),
+                                                                    std::min(1.0f, ring.z + 0.12f), ring.w)
+                                                          : ring);
+    const ImU32 fillColor = ImGui::GetColorU32(knobHovered ? ImVec4(std::min(1.0f, fill.x + 0.08f),
+                                                                    std::min(1.0f, fill.y + 0.08f),
+                                                                    std::min(1.0f, fill.z + 0.08f), fill.w)
+                                                          : fill);
+    dl->AddCircleFilled(center, radius, fillColor, 24);
+    dl->AddCircle(center, radius, ringColor, 24, 2.0f);
     const float angle = -1.5708f + m_opacity * 6.28318f;
     dl->AddLine(center,
                 {center.x + std::cos(angle) * radius * 0.78f,
                  center.y + std::sin(angle) * radius * 0.78f},
-                ring, 2.0f);
+                ringColor, 2.0f);
     if (knobHovered)
         ImGui::SetTooltip("Opacity %.0f%%", m_opacity * 100.0f);
 
     ImGui::SameLine();
-    ImGui::Dummy({spacerWidth, height});
+    Application* app = Application::Get();
+    const ClipboardProfileConfig* active = app ? app->GetActiveClipboardProfile() : nullptr;
+    ImGui::SetNextItemWidth(std::max(140.0f, spacerWidth - 56.0f));
+    if (ImGui::BeginCombo("##clipboard_profile",
+                          active ? active->name.c_str() : "Clipboard")) {
+        if (app) {
+            for (const ClipboardProfileConfig& profile : app->GetClipboardProfiles()) {
+                const bool selected = active && profile.id == active->id;
+                std::string label = profile.name;
+                if (!profile.processName.empty())
+                    label += " (" + profile.processName + ")";
+                if (ImGui::Selectable(label.c_str(), selected))
+                    app->SetActiveClipboardProfile(profile.id);
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("+") && app) {
+        m_newClipboardName[0] = '\0';
+        ImGui::GetIO().ClearInputKeys();
+        ActivateKeyboardCapture();
+        m_dialogTextCapture = true;
+        m_newClipboardFocusPending = true;
+        ImGui::OpenPopup("##new_clipboard_popup");
+    }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+        ImGui::OpenPopup("##clipboard_plus_menu");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Left: name new clipboard\nRight: clipboard actions");
+    if (ImGui::BeginPopup("##clipboard_plus_menu")) {
+        if (app && ImGui::MenuItem("Name from foreground process"))
+            app->CreateClipboardFromForegroundProcess();
+        if (app && !app->CanDeleteActiveClipboardProfile())
+            ImGui::BeginDisabled();
+        if (app && ImGui::MenuItem("Delete current clipboard"))
+            app->DeleteActiveClipboardProfile();
+        if (app && !app->CanDeleteActiveClipboardProfile())
+            ImGui::EndDisabled();
+        ImGui::EndPopup();
+    }
+    if (ImGui::BeginPopup("##new_clipboard_popup")) {
+        ImGui::TextDisabled("New clipboard");
+        ImGui::SetNextItemWidth(180.0f);
+        if (m_newClipboardFocusPending) {
+            ImGui::SetKeyboardFocusHere();
+            m_newClipboardFocusPending = false;
+        }
+        ImGui::InputText("##new_clipboard_name", m_newClipboardName,
+                         sizeof(m_newClipboardName));
+        if (ImGui::IsItemActive() || ImGui::IsItemClicked()) {
+            ActivateKeyboardCapture();
+            m_dialogTextCapture = true;
+        }
+        if (ImGui::Button("Create") && app) {
+            std::string name = m_newClipboardName;
+            if (name.empty())
+                name = "Clipboard " + std::to_string(app->GetClipboardProfiles().size() + 1);
+            app->CreateClipboardProfile(name);
+            m_dialogTextCapture = false;
+            m_newClipboardFocusPending = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            m_dialogTextCapture = false;
+            m_newClipboardFocusPending = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    } else if (m_dialogTextCapture && !m_newClipboardFocusPending &&
+               !ImGui::IsPopupOpen("##new_clipboard_popup")) {
+        m_dialogTextCapture = false;
+    }
 
     ImGui::Spacing();
 }
@@ -431,10 +500,11 @@ static bool PopupToggleButton(const char* label, bool active, const PopupToggleC
 }
 
 void PopupWindow::DrawFilterStrip() {
-    const PopupToggleColors toggleColors = GetPopupToggleColors(m_theme);
+    const PopupToggleColors toggleColors = GetPopupToggleColors(m_appearance);
     struct Btn { const char* label; int mode; };
     static constexpr Btn kFilters[] = {
-        {"All",0},{"Text",1},{"Image",2},{"URL",3}
+        {"All",0},{"Text",1},{"Image",2},{"URL",3},{"File",4},
+        {"Code",5},{"Secret",6},{"JSON",7},{"Email",8},{"Color",9}
     };
     for (const auto& f : kFilters) {
         bool active = (m_filterMode == f.mode);
@@ -479,25 +549,29 @@ void PopupWindow::DrawFilterStrip() {
     ImGui::SameLine();
 
     if (ImGui::SmallButton(" @ ")) {       // gear placeholder
-        ActivateKeyboardCapture();
-        Application::Get()->ShowMainWindow();
-        Hide();
+        OpenSettingsWindow();
     }
     ImGui::Spacing();
 }
 
-// ── Item list ─────────────────────────────────────────────────────────────────
+// -- Item list -----------------------------------------------------------------
 
 bool PopupWindow::ItemPassesFilter(const ClipboardItem& item) const {
     switch (m_filterMode) {
     case 1: return item.IsText();
     case 2: return item.IsImage();
     case 3: return (item.tags & TAG_URL) != 0;
+    case 4: return item.type == ContentType::FilePaths || (item.tags & (TAG_FILE | TAG_FOLDER | TAG_PATH)) != 0;
+    case 5: return (item.tags & TAG_CODE) != 0;
+    case 6: return (item.tags & TAG_SECRET) != 0;
+    case 7: return (item.tags & TAG_JSON) != 0;
+    case 8: return (item.tags & TAG_EMAIL) != 0;
+    case 9: return (item.tags & TAG_HEX) != 0;
     default: return true;
     }
 }
 
-std::vector<size_t> PopupWindow::BuildVisibleHistoryIndices() const {
+std::vector<size_t> PopupWindow::BuildVisibleHistoryIndices(bool pinnedOnly) const {
     std::vector<size_t> indices;
     ClipboardHistory* hist = Application::Get()->GetHistory();
     if (!hist) return indices;
@@ -510,6 +584,7 @@ std::vector<size_t> PopupWindow::BuildVisibleHistoryIndices() const {
     for (size_t i = 0; i < hist->Size() && indices.size() < 35; ++i) {
         const ClipboardItem* item = hist->Get(i);
         if (!item || !ItemPassesFilter(*item)) continue;
+        if (item->pinned != pinnedOnly) continue;
 
         if (!lquery.empty()) {
             std::string lt = item->text;
@@ -531,79 +606,111 @@ void PopupWindow::DrawItemList() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
     ImGui::BeginChild("##items", {0.f, 0.f}, ImGuiChildFlags_None);
 
-    const std::vector<size_t> visible = BuildVisibleHistoryIndices();
+    const std::vector<size_t> pinned = BuildVisibleHistoryIndices(true);
+    const std::vector<size_t> regular = BuildVisibleHistoryIndices(false);
 
-    for (size_t slot = 0; slot < visible.size(); ++slot) {
-        const size_t i = visible[slot];
-        const ClipboardItem* item = hist->Get(i);
-        if (!item) continue;
+    auto drawSection = [&](const char* title,
+                           const std::vector<size_t>& indices,
+                           bool pinnedSection) -> bool {
+        if (indices.empty())
+            return false;
 
-        char key[2]{};
-        key[0] = HotkeyManager::SlotLabel(static_cast<int>(slot));
-
-        int qpos = -1;
-        for (size_t q = 0; q < m_queue.size(); ++q)
-            if (m_queue[q] == item->id) { qpos = (int)q + 1; break; }
-
-        const bool isSecret = (item->tags & TAG_SECRET) != 0;
-        if (isSecret)
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.42f, 0.42f, 1.f));
-
-        const float rowWidth = ImGui::GetContentRegionAvail().x;
-        const int previewChars = std::max(40, static_cast<int>((rowWidth - 72.0f) / 7.0f));
-        const std::string preview = item->Preview(static_cast<size_t>(previewChars));
-
-        char label[1024]{};
-        if (qpos >= 0)
-            std::snprintf(label, sizeof(label), " %s [%d]  %s##r%zu",
-                          key, qpos, preview.c_str(), i);
-        else
-            std::snprintf(label, sizeof(label), " %s   %s##r%zu",
-                          key, preview.c_str(), i);
-
-        if (ImGui::Selectable(label, qpos >= 0,
-                               ImGuiSelectableFlags_SpanAllColumns)) {
-            ActivateKeyboardCapture();
-            ReleaseSearchCapture();
-
-            // Check physical Ctrl state — ImGui's KeyCtrl is unreliable since
-            // the popup has WS_EX_NOACTIVATE and never receives raw key events.
-            const bool ctrlHeld = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-
-            if (ctrlHeld) {
-                // Ctrl+click: paste immediately and KEEP popup open so the
-                // user can keep clicking items one after another.
-                // The background window already has focus (WS_EX_NOACTIVATE),
-                // so we just write to clipboard and send V — Ctrl is already
-                // physically held, so the background app sees Ctrl+V.
-                if (isSecret) ImGui::PopStyleColor();
-                const uint64_t itemId = item->id;
-                PasteItemKeepOpen(*item);
-                hist->MoveItemById(itemId, m_pasteMoveTarget);
-                ImGui::EndChild();
-                ImGui::PopStyleColor();
-                return;
-            } else if (m_queueMode) {
-                if (qpos >= 0)
-                    m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), item->id),
-                                   m_queue.end());
-                else
-                    m_queue.push_back(item->id);
-            } else {
-                if (isSecret) ImGui::PopStyleColor();
-                const uint64_t itemId = item->id;
-                PasteItemKeepOpen(*item);
-                hist->MoveItemById(itemId, m_pasteMoveTarget);
-                ImGui::EndChild();
-                ImGui::PopStyleColor();
-                return;
+        if (pinnedSection) {
+            char header[128]{};
+            std::snprintf(header, sizeof(header), "%s (%zu)", title, indices.size());
+            if (!ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Spacing();
+                return false;
             }
+        } else {
+            ImGui::TextDisabled("%s (%zu)", title, indices.size());
+            ImGui::Separator();
         }
-        DrawItemDragDrop(item->id, qpos);
-        if (isSecret) ImGui::PopStyleColor();
+
+        for (size_t sectionSlot = 0; sectionSlot < indices.size(); ++sectionSlot) {
+            const size_t i = indices[sectionSlot];
+            const ClipboardItem* item = hist->Get(i);
+            if (!item) continue;
+
+            const std::string key = HotkeyManager::SlotLabelText(static_cast<int>(sectionSlot));
+
+            int qpos = -1;
+            for (size_t q = 0; q < m_queue.size(); ++q)
+                if (m_queue[q] == item->id) { qpos = (int)q + 1; break; }
+
+            const bool isSecret = (item->tags & TAG_SECRET) != 0;
+            if (isSecret)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.42f, 0.42f, 1.f));
+
+            const float rowWidth = ImGui::GetContentRegionAvail().x;
+            const int previewChars = std::max(40, static_cast<int>((rowWidth - 92.0f) / 7.0f));
+            const std::string preview = item->Preview(static_cast<size_t>(previewChars));
+
+            char label[1024]{};
+            const char* pin = pinnedSection ? "[P] " : "";
+            if (qpos >= 0)
+                std::snprintf(label, sizeof(label), " %s [%d]  %s%s##r%zu",
+                              key.c_str(), qpos, pin, preview.c_str(), i);
+            else
+                std::snprintf(label, sizeof(label), " %s   %s%s##r%zu",
+                              key.c_str(), pin, preview.c_str(), i);
+
+            if (ImGui::Selectable(label, qpos >= 0,
+                                   ImGuiSelectableFlags_SpanAllColumns)) {
+                ActivateKeyboardCapture();
+                ReleaseSearchCapture();
+
+                const bool ctrlHeld = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+
+                if (ctrlHeld) {
+                    if (isSecret) ImGui::PopStyleColor();
+                    const uint64_t itemId = item->id;
+                    PasteItemKeepOpen(*item);
+                    hist->MoveItemById(itemId, m_pasteMoveTarget);
+                    return true;
+                } else if (m_queueMode) {
+                    if (qpos >= 0)
+                        m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), item->id),
+                                       m_queue.end());
+                    else
+                        m_queue.push_back(item->id);
+                } else {
+                    if (isSecret) ImGui::PopStyleColor();
+                    const uint64_t itemId = item->id;
+                    PasteItemKeepOpen(*item);
+                    hist->MoveItemById(itemId, m_pasteMoveTarget);
+                    return true;
+                }
+            }
+
+            if (pinnedSection) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 a = ImGui::GetItemRectMin();
+                const ImVec2 b = ImGui::GetItemRectMax();
+                dl->AddCircleFilled({a.x + 7.0f, (a.y + b.y) * 0.5f},
+                                    3.0f, IM_COL32(255, 196, 64, 255), 12);
+            }
+
+            if (DrawItemContextMenu(*item, qpos)) {
+                if (isSecret) ImGui::PopStyleColor();
+                return true;
+            }
+            DrawItemDragDrop(item->id, qpos);
+            if (isSecret) ImGui::PopStyleColor();
+        }
+
+        ImGui::Spacing();
+        return false;
+    };
+
+    if (drawSection("Pinned entries", pinned, true) ||
+        drawSection("History", regular, false)) {
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        return;
     }
 
-    if (!visible.empty()) {
+    if (!pinned.empty() || !regular.empty()) {
         ImGui::InvisibleButton("##drop_end", {ImGui::GetContentRegionAvail().x, 8.0f});
         if (ImGui::BeginDragDropTarget()) {
             if (ImGui::AcceptDragDropPayload("CPP_HISTORY_IDS")) {
@@ -614,7 +721,7 @@ void PopupWindow::DrawItemList() {
         }
     }
 
-    if (visible.empty())
+    if (pinned.empty() && regular.empty())
         ImGui::TextDisabled("  No items match.");
 
     if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
@@ -627,7 +734,72 @@ void PopupWindow::DrawItemList() {
     ImGui::PopStyleColor();
 }
 
-// ── Paste ─────────────────────────────────────────────────────────────────────
+bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item, int qpos) {
+    ClipboardHistory* hist = Application::Get()->GetHistory();
+    if (!hist)
+        return false;
+
+    bool changed = false;
+    const uint64_t itemId = item.id;
+
+    if (ImGui::BeginPopupContextItem()) {
+        ActivateKeyboardCapture();
+        ReleaseSearchCapture();
+
+        ImGui::TextDisabled("Item %llu", static_cast<unsigned long long>(itemId));
+        ImGui::Separator();
+
+        if (ImGui::MenuItem("Paste")) {
+            PasteItemKeepOpen(item);
+            hist->MoveItemById(itemId, m_pasteMoveTarget);
+            changed = true;
+        }
+        if (ImGui::MenuItem("Copy to clipboard")) {
+            WriteToClipboard(item);
+        }
+
+        ImGui::Separator();
+        if (qpos >= 0) {
+            if (ImGui::MenuItem("Remove from queue")) {
+                m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), itemId),
+                              m_queue.end());
+                changed = true;
+            }
+        } else {
+            if (ImGui::MenuItem("Add to queue")) {
+                m_queue.push_back(itemId);
+                changed = true;
+            }
+        }
+
+        if (ImGui::MenuItem("Move to top")) {
+            hist->MoveItemById(itemId, ClipboardHistory::MoveTarget::Top);
+            changed = true;
+        }
+        if (ImGui::MenuItem("Move to bottom")) {
+            hist->MoveItemById(itemId, ClipboardHistory::MoveTarget::Bottom);
+            changed = true;
+        }
+        if (ImGui::MenuItem(item.pinned ? "Unpin" : "Pin")) {
+            hist->SetPinnedById(itemId, !item.pinned);
+            changed = true;
+        }
+
+        ImGui::Separator();
+        if (ImGui::MenuItem("Delete")) {
+            m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), itemId),
+                          m_queue.end());
+            hist->RemoveItemById(itemId);
+            changed = true;
+        }
+
+        ImGui::EndPopup();
+    }
+
+    return changed;
+}
+
+// -- Paste ---------------------------------------------------------------------
 
 void PopupWindow::ReleaseSearchCapture() {
     m_searchCapture = false;
@@ -652,8 +824,11 @@ void PopupWindow::NoteExternalMouseDown(POINT screenPoint) {
     HWND clicked = WindowFromPoint(screenPoint);
     HWND main = Application::Get() ? Application::Get()->GetHwnd() : nullptr;
     if (clicked) clicked = GetAncestor(clicked, GA_ROOT);
-    if (clicked && clicked != m_hwnd && clicked != main)
+    if (clicked && clicked != m_hwnd && clicked != main) {
         m_prevForeground = clicked;
+        if (Application* app = Application::Get())
+            app->SyncClipboardForWindow(clicked);
+    }
 }
 
 void PopupWindow::DrawItemDragDrop(uint64_t itemId, int qpos) {
@@ -688,7 +863,7 @@ void PopupWindow::PasteHistorySlot(int slot, HWND targetWindow) {
     if (!hist) return;
 
     ClipboardItem item;
-    if (!hist->GetCopy(static_cast<size_t>(slot), item)) return;
+    if (!hist->GetRegularCopy(static_cast<size_t>(slot), item)) return;
 
     m_prevForeground = targetWindow;
     WriteToClipboard(item);
@@ -696,14 +871,29 @@ void PopupWindow::PasteHistorySlot(int slot, HWND targetWindow) {
     hist->MoveItemById(item.id, m_pasteMoveTarget);
 }
 
-void PopupWindow::PasteVisibleSlot(int slot) {
-    const std::vector<size_t> visible = BuildVisibleHistoryIndices();
-    if (slot < 0 || static_cast<size_t>(slot) >= visible.size()) return;
+void PopupWindow::PastePinnedSlot(int slot, HWND targetWindow) {
+    if (slot < 0) return;
+
     ClipboardHistory* hist = Application::Get()->GetHistory();
     if (!hist) return;
 
     ClipboardItem item;
-    if (!hist->GetCopy(visible[static_cast<size_t>(slot)], item)) return;
+    if (!hist->GetPinnedCopy(static_cast<size_t>(slot), item)) return;
+
+    m_prevForeground = targetWindow;
+    WriteToClipboard(item);
+    RestoreFocusAndPaste(targetWindow);
+    hist->MoveItemById(item.id, ClipboardHistory::MoveTarget::None);
+}
+
+void PopupWindow::PasteVisibleSlot(int slot) {
+    const std::vector<size_t> regular = BuildVisibleHistoryIndices(false);
+    if (slot < 0 || static_cast<size_t>(slot) >= regular.size()) return;
+    ClipboardHistory* hist = Application::Get()->GetHistory();
+    if (!hist) return;
+
+    ClipboardItem item;
+    if (!hist->GetCopy(regular[static_cast<size_t>(slot)], item)) return;
 
     PasteItemKeepOpen(item);
     hist->MoveItemById(item.id, m_pasteMoveTarget);
@@ -732,11 +922,46 @@ void PopupWindow::PasteQueue() {
     }
 }
 
+void PopupWindow::LaunchWebSearch() {
+    LaunchWebSearchForText(m_searchBuf, true);
+}
+
+void PopupWindow::LaunchClipboardWebSearch() {
+    LaunchWebSearchForText(win32util::ClipboardUnicodeText(), m_visible);
+}
+
+bool PopupWindow::LaunchWebSearchForText(const std::string& text, bool hideOnSuccess) {
+    const std::string query = TrimAscii(text);
+    if (query.empty())
+        return false;
+
+    const std::wstring url = L"https://www.google.com/search?q=" + UrlEncodeWide(query);
+    HINSTANCE result = ShellExecuteW(nullptr, L"open", url.c_str(),
+                                     nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) > 32) {
+        if (hideOnSuccess)
+            Hide();
+        return true;
+    }
+    return false;
+}
+
 void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
-    if (!OpenClipboard(nullptr)) return;
     if (Application::Get() && Application::Get()->GetMonitor())
         Application::Get()->GetMonitor()->SuppressNextUpdate();
 
+    std::string text = item.text;
+    const bool isFileDrop = item.type == ContentType::FilePaths || (item.tags & TAG_PATH) != 0;
+    if (isFileDrop) {
+        std::vector<std::wstring> filePaths = win32util::ExistingPathListUtf8(text);
+        if (!filePaths.empty() && win32util::SetClipboardFileDrop(nullptr, filePaths))
+            return;
+    }
+
+    if (m_appendNewlineAfterPaste && !isFileDrop)
+        text += "\r\n";
+
+    if (!OpenClipboard(nullptr)) return;
     EmptyClipboard();
 
     if (item.type == ContentType::Image && !item.imageData.empty()) {
@@ -747,20 +972,6 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
             SetClipboardData(CF_DIB, hm);
         }
     } else {
-        std::string text = item.text;
-        if (m_appendNewlineAfterPaste)
-            text += "\r\n";
-
-        std::vector<std::wstring> filePaths;
-        if (!m_appendNewlineAfterPaste &&
-            (item.type == ContentType::FilePaths || (item.tags & TAG_PATH) != 0)) {
-            filePaths = ExistingFileDropPaths(text);
-        }
-        if (!filePaths.empty() && SetClipboardFileDrop(filePaths)) {
-            CloseClipboard();
-            return;
-        }
-
         int wlen = MultiByteToWideChar(CP_UTF8, 0,
                                         text.c_str(), -1, nullptr, 0);
         if (wlen > 0) {
@@ -810,10 +1021,11 @@ void PopupWindow::RestoreFocusAndPaste(HWND preferredTarget) {
     }
 
     // All injected events carry kClipboardPasteMagic so our LL hook ignores them.
-    const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-    const bool altDown  = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+    const bool ctrlDown  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    const bool shiftDown = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+    const bool altDown   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
 
-    INPUT in[8]{};
+    INPUT in[10]{};
     for (auto& i : in) {
         i.type = INPUT_KEYBOARD;
         i.ki.dwExtraInfo = kClipboardPasteMagic;
@@ -822,6 +1034,11 @@ void PopupWindow::RestoreFocusAndPaste(HWND preferredTarget) {
     int n = 0;
     if (altDown) {
         in[n].ki.wVk = VK_MENU;
+        in[n].ki.dwFlags = KEYEVENTF_KEYUP;
+        ++n;
+    }
+    if (shiftDown) {
+        in[n].ki.wVk = VK_SHIFT;
         in[n].ki.dwFlags = KEYEVENTF_KEYUP;
         ++n;
     }
@@ -841,6 +1058,10 @@ void PopupWindow::RestoreFocusAndPaste(HWND preferredTarget) {
         in[n].ki.dwFlags = KEYEVENTF_KEYUP;
         ++n;
     }
+    if (shiftDown) {
+        in[n].ki.wVk = VK_SHIFT;
+        ++n;
+    }
     if (altDown) {
         in[n].ki.wVk = VK_MENU;
         ++n;
@@ -849,7 +1070,7 @@ void PopupWindow::RestoreFocusAndPaste(HWND preferredTarget) {
     SendInput(static_cast<UINT>(n), in, sizeof(INPUT));
 }
 
-// ── D3D11 swap chain ──────────────────────────────────────────────────────────
+// -- D3D11 swap chain ----------------------------------------------------------
 
 bool PopupWindow::CreateSwapChain() {
     // Get DXGI factory from the existing device so we share the same adapter
@@ -926,7 +1147,7 @@ void PopupWindow::DestroyRenderTarget() {
     if (m_renderTarget) { m_renderTarget->Release(); m_renderTarget = nullptr; }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
 
 void PopupWindow::PositionAtCursor() {
     POINT pt{};
@@ -965,7 +1186,7 @@ void PopupWindow::ApplyWindowCorners() {
                           &noBorder, sizeof(noBorder));
 }
 
-// ── Win32 message handler ─────────────────────────────────────────────────────
+// -- Win32 message handler -----------------------------------------------------
 
 void PopupWindow::ToggleMaximized() {
     if (m_maximized) {
@@ -1056,37 +1277,8 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
         if (onT)        return HTTOP;
         if (onB)        return HTBOTTOM;
 
-        const int closeLeft = kPopupTitlePad;
-        const int closeRight = closeLeft + kPopupTitleButton;
-        const int knobLeft = closeRight + kPopupTitleGap;
-        const int knobRight = knobLeft + kPopupTitleButton;
-        const int closeBottom = kPopupTitlePad + kPopupTitleButton;
-        const bool overClose = pt.x >= closeLeft && pt.x < closeRight &&
-                               pt.y >= kPopupTitlePad && pt.y < closeBottom;
-        const bool overKnob = pt.x >= knobLeft && pt.x < knobRight &&
-                              pt.y >= kPopupTitlePad && pt.y < closeBottom;
-        if (!overClose && !overKnob &&
-            pt.y >= kPopupResizeBorder && pt.y < kPopupTitleHeight)
-            return HTCAPTION;
-
         return HTCLIENT;
     }
-
-    case WM_NCLBUTTONDOWN:
-        if (pw && wParam == HTCAPTION) {
-            pw->ActivateKeyboardCapture();
-            pw->ReleaseSearchCapture();
-        }
-        break;
-
-    case WM_NCLBUTTONDBLCLK:
-        if (pw && wParam == HTCAPTION) {
-            pw->ActivateKeyboardCapture();
-            pw->ReleaseSearchCapture();
-            pw->ToggleMaximized();
-            return 0;
-        }
-        break;
 
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;

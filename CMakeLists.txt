@@ -5,11 +5,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(CLIPBOARDPP_RESTART_AFTER_BUILD "Stop running clipboardpp.exe before build and launch the new build afterward" ON)
 
-# ── Third-party paths ─────────────────────────────────────────────────────────
+# -- Third-party paths ---------------------------------------------------------
 set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")
 set(NLOHMANN_DIR "${CMAKE_SOURCE_DIR}/third_party/nlohmann")
 
-# ── ImGui (vendored docking branch) ──────────────────────────────────────────
+# -- ImGui (vendored docking branch) ------------------------------------------
 set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
@@ -20,26 +20,29 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
 )
 
-# ── App sources ───────────────────────────────────────────────────────────────
+# -- App sources ---------------------------------------------------------------
 set(APP_SOURCES
     src/main.cpp
+    src/cli/CLI.cpp
+    src/ipc/IpcClient.cpp
+    src/util/Win32Util.cpp
     src/app/Application.cpp
     src/app/ConfigStore.cpp
     src/app/TrayIcon.cpp
-    src/ui/Renderer.cpp
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
     src/ui/PopupWindow.cpp
-    # Milestone 4 — hotkeys
+    # Milestone 4 - hotkeys
     src/hotkeys/HotkeyManager.cpp
-    # Milestone 2 — clipboard core
+    # Milestone 2 - clipboard core
     src/clipboard/ClipboardItem.cpp
     src/clipboard/ClipboardHistory.cpp
+    src/clipboard/ClipboardHistoryStore.cpp
     src/clipboard/ClipboardMonitor.cpp
     src/clipboard/ContentDetector.cpp
 )
 
-# ── Executable ────────────────────────────────────────────────────────────────
+# -- Executable ----------------------------------------------------------------
 add_executable(clipboardpp WIN32
     ${APP_SOURCES}
     ${IMGUI_SOURCES}
@@ -82,11 +85,11 @@ if(WIN32 AND CLIPBOARDPP_RESTART_AFTER_BUILD)
     )
 endif()
 
-# ── Static runtime (no MSVC redist needed) ────────────────────────────────────
+# -- Static runtime (no MSVC redist needed) ------------------------------------
 set_property(TARGET clipboardpp PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# ── Windows Unicode + lean headers ───────────────────────────────────────────
+# -- Windows Unicode + lean headers -------------------------------------------
 target_compile_definitions(clipboardpp PRIVATE
     UNICODE
     _UNICODE
@@ -95,7 +98,7 @@ target_compile_definitions(clipboardpp PRIVATE
     _CRT_SECURE_NO_WARNINGS
 )
 
-# ── Compiler options ──────────────────────────────────────────────────────────
+# -- Compiler options ----------------------------------------------------------
 if(MSVC)
     target_compile_options(clipboardpp PRIVATE
         /W3

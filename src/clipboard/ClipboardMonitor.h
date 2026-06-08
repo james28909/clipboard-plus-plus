@@ -26,7 +26,6 @@ private:
     void OnClipboardUpdate();
     ClipboardItem ReadClipboard() const;
     static std::string GetForegroundProcessName();
-    static std::string WideToUtf8(const wchar_t* w, int len = -1);
 
     HWND         m_hwnd{};
     HINSTANCE    m_hInstance{};

@@ -23,6 +23,13 @@ static ImVec4 Darken(ImVec4 color, float amount) {
     return Mix(color, ImVec4(0.0f, 0.0f, 0.0f, color.w), amount);
 }
 
+static bool IsLightTheme(ThemeId theme) {
+    return theme == ThemeId::GitHubLight ||
+           theme == ThemeId::SolarizedLight ||
+           theme == ThemeId::VSLight ||
+           theme == ThemeId::QuietLight;
+}
+
 const char* ThemeName(ThemeId theme) {
     switch (theme) {
     case ThemeId::Dracula:        return "Dracula";
@@ -40,40 +47,148 @@ const char* ThemeName(ThemeId theme) {
     }
 }
 
-PopupToggleColors GetPopupToggleColors(ThemeId theme) {
-    const bool light = theme == ThemeId::GitHubLight ||
-                       theme == ThemeId::SolarizedLight ||
-                       theme == ThemeId::VSLight ||
-                       theme == ThemeId::QuietLight;
+AppearanceSettings ThemeDefaults(ThemeId theme) {
+    AppearanceSettings settings;
+    settings.theme = theme;
+    settings.customColors = false;
 
-    ImVec4 off = light ? Color(224, 229, 235) : Color(47, 50, 56);
-    ImVec4 offHovered = light ? Color(211, 219, 228) : Color(58, 62, 70);
-    ImVec4 offActive = light ? Color(197, 207, 219) : Color(68, 74, 84);
-    ImVec4 on = Color(38, 121, 255);
+    const bool light = IsLightTheme(theme);
+    settings.windowBg = light ? Color(246, 248, 250) : Color(30, 30, 30);
+    settings.panelBg = light ? Color(255, 255, 255) : Color(37, 37, 38);
+    settings.text = light ? Color(36, 41, 47) : Color(220, 220, 220);
+    settings.mutedText = light ? Color(87, 96, 106) : Color(150, 150, 150);
+    settings.accent = Color(38, 121, 255);
+    settings.buttonOff = light ? Color(224, 229, 235) : Color(47, 50, 56);
+    settings.buttonOn = settings.accent;
+
+    ImVec4 knobFill = Color(20, 38, 54);
+    ImVec4 knobRing = Color(92, 178, 255);
 
     switch (theme) {
-    case ThemeId::Dracula:        off = Color(68, 71, 90); offHovered = Color(78, 82, 104); offActive = Color(88, 92, 116); on = Color(80, 250, 123); break;
-    case ThemeId::Nord:           off = Color(59, 66, 82); offHovered = Color(67, 76, 94); offActive = Color(76, 86, 106); on = Color(136, 192, 208); break;
-    case ThemeId::Monokai:        off = Color(55, 56, 48); offHovered = Color(66, 68, 57); offActive = Color(75, 77, 65); on = Color(166, 226, 46); break;
-    case ThemeId::OneDark:        off = Color(40, 44, 52); offHovered = Color(50, 56, 66); offActive = Color(60, 66, 78); on = Color(97, 175, 239); break;
-    case ThemeId::TokyoNight:     off = Color(36, 40, 59); offHovered = Color(45, 50, 72); offActive = Color(54, 60, 86); on = Color(187, 154, 247); break;
-    case ThemeId::SolarizedDark:  off = Color(7, 54, 66); offHovered = Color(18, 68, 82); offActive = Color(28, 82, 96); on = Color(38, 139, 210); break;
-    case ThemeId::GitHubDark:     off = Color(22, 27, 34); offHovered = Color(33, 38, 45); offActive = Color(44, 51, 61); on = Color(88, 166, 255); break;
-    case ThemeId::SolarizedLight: off = Color(238, 232, 213); offHovered = Color(228, 222, 203); offActive = Color(218, 211, 193); on = Color(38, 139, 210); break;
-    case ThemeId::VSLight:        off = Color(230, 230, 230); offHovered = Color(218, 228, 238); offActive = Color(205, 219, 235); on = Color(0, 122, 204); break;
-    case ThemeId::QuietLight:     off = Color(235, 235, 235); offHovered = Color(224, 229, 238); offActive = Color(210, 220, 235); on = Color(64, 120, 242); break;
-    default:                      break;
+    case ThemeId::Dracula:
+        settings.windowBg = Color(40, 42, 54); settings.panelBg = Color(68, 71, 90);
+        settings.text = Color(248, 248, 242); settings.mutedText = Color(189, 147, 249);
+        settings.accent = Color(80, 250, 123); settings.buttonOff = Color(68, 71, 90);
+        settings.buttonOn = Color(80, 250, 123); knobFill = Color(50, 40, 64); knobRing = Color(255, 121, 198); break;
+    case ThemeId::Nord:
+        settings.windowBg = Color(46, 52, 64); settings.panelBg = Color(59, 66, 82);
+        settings.text = Color(236, 239, 244); settings.mutedText = Color(216, 222, 233);
+        settings.accent = Color(136, 192, 208); settings.buttonOff = Color(59, 66, 82);
+        settings.buttonOn = Color(136, 192, 208); knobFill = Color(49, 62, 76); knobRing = Color(180, 142, 173); break;
+    case ThemeId::Monokai:
+        settings.windowBg = Color(39, 40, 34); settings.panelBg = Color(55, 56, 48);
+        settings.text = Color(248, 248, 242); settings.mutedText = Color(166, 226, 46);
+        settings.accent = Color(102, 217, 239); settings.buttonOff = Color(55, 56, 48);
+        settings.buttonOn = Color(166, 226, 46); knobFill = Color(45, 45, 36); knobRing = Color(249, 38, 114); break;
+    case ThemeId::OneDark:
+        settings.windowBg = Color(33, 37, 43); settings.panelBg = Color(40, 44, 52);
+        settings.text = Color(171, 178, 191); settings.mutedText = Color(130, 137, 151);
+        settings.accent = Color(97, 175, 239); settings.buttonOff = Color(40, 44, 52);
+        settings.buttonOn = Color(97, 175, 239); knobFill = Color(35, 45, 54); knobRing = Color(198, 120, 221); break;
+    case ThemeId::TokyoNight:
+        settings.windowBg = Color(26, 27, 38); settings.panelBg = Color(36, 40, 59);
+        settings.text = Color(192, 202, 245); settings.mutedText = Color(122, 162, 247);
+        settings.accent = Color(187, 154, 247); settings.buttonOff = Color(36, 40, 59);
+        settings.buttonOn = Color(187, 154, 247); knobFill = Color(36, 40, 59); knobRing = Color(247, 118, 142); break;
+    case ThemeId::SolarizedDark:
+        settings.windowBg = Color(0, 43, 54); settings.panelBg = Color(7, 54, 66);
+        settings.text = Color(131, 148, 150); settings.mutedText = Color(88, 110, 117);
+        settings.accent = Color(38, 139, 210); settings.buttonOff = Color(7, 54, 66);
+        settings.buttonOn = Color(38, 139, 210); knobFill = Color(0, 55, 68); knobRing = Color(181, 137, 0); break;
+    case ThemeId::GitHubDark:
+        settings.windowBg = Color(13, 17, 23); settings.panelBg = Color(22, 27, 34);
+        settings.text = Color(201, 209, 217); settings.mutedText = Color(139, 148, 158);
+        settings.accent = Color(88, 166, 255); settings.buttonOff = Color(22, 27, 34);
+        settings.buttonOn = Color(88, 166, 255); knobFill = Color(25, 36, 48); knobRing = Color(210, 153, 34); break;
+    case ThemeId::SolarizedLight:
+        settings.windowBg = Color(253, 246, 227); settings.panelBg = Color(238, 232, 213);
+        settings.text = Color(101, 123, 131); settings.mutedText = Color(147, 161, 161);
+        settings.accent = Color(38, 139, 210); settings.buttonOff = Color(238, 232, 213);
+        settings.buttonOn = Color(38, 139, 210); knobFill = Color(245, 236, 205); knobRing = Color(203, 75, 22); break;
+    case ThemeId::VSLight:
+        settings.windowBg = Color(245, 245, 245); settings.panelBg = Color(255, 255, 255);
+        settings.text = Color(30, 30, 30); settings.mutedText = Color(104, 104, 104);
+        settings.accent = Color(0, 122, 204); settings.buttonOff = Color(230, 230, 230);
+        settings.buttonOn = Color(0, 122, 204); knobFill = Color(230, 240, 248); knobRing = Color(208, 89, 36); break;
+    case ThemeId::QuietLight:
+        settings.windowBg = Color(250, 250, 250); settings.panelBg = Color(243, 243, 243);
+        settings.text = Color(51, 51, 51); settings.mutedText = Color(110, 110, 110);
+        settings.accent = Color(64, 120, 242); settings.buttonOff = Color(235, 235, 235);
+        settings.buttonOn = Color(64, 120, 242); knobFill = Color(235, 239, 247); knobRing = Color(202, 82, 101); break;
+    default:
+        break;
     }
+
+    settings.opacityKnobFill = knobFill;
+    settings.opacityKnobRing = knobRing;
+    return settings;
+}
+
+static AppearanceSettings EffectiveSettings(const AppearanceSettings& settings) {
+    if (settings.customColors)
+        return settings;
+
+    AppearanceSettings defaults = ThemeDefaults(settings.theme);
+    defaults.popupOpacity = settings.popupOpacity;
+    defaults.popupWidth = settings.popupWidth;
+    defaults.popupHeight = settings.popupHeight;
+    defaults.fontPath = settings.fontPath;
+    defaults.fontSize = settings.fontSize;
+    defaults.customColors = false;
+    return defaults;
+}
+
+SavedAppearanceTheme ToSavedTheme(const AppearanceSettings& settings, const std::string& name) {
+    const AppearanceSettings effective = EffectiveSettings(settings);
+    SavedAppearanceTheme saved;
+    saved.name = name.empty() ? "Custom" : name;
+    saved.windowBg = effective.windowBg;
+    saved.panelBg = effective.panelBg;
+    saved.text = effective.text;
+    saved.mutedText = effective.mutedText;
+    saved.accent = effective.accent;
+    saved.buttonOff = effective.buttonOff;
+    saved.buttonOn = effective.buttonOn;
+    saved.opacityKnobFill = effective.opacityKnobFill;
+    saved.opacityKnobRing = effective.opacityKnobRing;
+    return saved;
+}
+
+void ApplySavedTheme(AppearanceSettings& settings, const SavedAppearanceTheme& saved) {
+    settings.customColors = true;
+    settings.customThemeName = saved.name.empty() ? "Custom" : saved.name;
+    settings.windowBg = saved.windowBg;
+    settings.panelBg = saved.panelBg;
+    settings.text = saved.text;
+    settings.mutedText = saved.mutedText;
+    settings.accent = saved.accent;
+    settings.buttonOff = saved.buttonOff;
+    settings.buttonOn = saved.buttonOn;
+    settings.opacityKnobFill = saved.opacityKnobFill;
+    settings.opacityKnobRing = saved.opacityKnobRing;
+}
+
+PopupToggleColors GetPopupToggleColors(ThemeId theme) {
+    return GetPopupToggleColors(ThemeDefaults(theme));
+}
+
+PopupToggleColors GetPopupToggleColors(const AppearanceSettings& settings) {
+    const AppearanceSettings effective = EffectiveSettings(settings);
+    const bool light = IsLightTheme(effective.theme);
+    const ImVec4 off = effective.buttonOff;
+    const ImVec4 on = effective.buttonOn;
 
     return { off, Brighten(off, light ? 0.10f : 0.16f), Brighten(off, light ? 0.16f : 0.24f),
              on, Brighten(on, 0.16f), Darken(on, 0.12f) };
 }
 
 void ApplyThemeStyle(ThemeId theme, bool popupContext) {
-    const bool light = theme == ThemeId::GitHubLight ||
-                       theme == ThemeId::SolarizedLight ||
-                       theme == ThemeId::VSLight ||
-                       theme == ThemeId::QuietLight;
+    ApplyThemeStyle(ThemeDefaults(theme), popupContext);
+}
+
+void ApplyThemeStyle(const AppearanceSettings& settings, bool popupContext) {
+    const AppearanceSettings effective = EffectiveSettings(settings);
+    const bool light = IsLightTheme(effective.theme);
 
     if (light)
         ImGui::StyleColorsLight();
@@ -90,36 +205,11 @@ void ApplyThemeStyle(ThemeId theme, bool popupContext) {
     style.WindowPadding = popupContext ? ImVec2(8.0f, 8.0f) : ImVec2(0.0f, 0.0f);
 
     ImVec4* c = style.Colors;
-    ImVec4 bg = light ? Color(246, 248, 250) : Color(30, 30, 30);
-    ImVec4 panel = light ? Color(255, 255, 255) : Color(37, 37, 38);
-    ImVec4 text = light ? Color(36, 41, 47) : Color(220, 220, 220);
-    ImVec4 muted = light ? Color(87, 96, 106) : Color(150, 150, 150);
-    ImVec4 accent = Color(38, 121, 255);
-
-    switch (theme) {
-    case ThemeId::Dracula:
-        bg = Color(40, 42, 54); panel = Color(68, 71, 90); text = Color(248, 248, 242); muted = Color(189, 147, 249); accent = Color(80, 250, 123); break;
-    case ThemeId::Nord:
-        bg = Color(46, 52, 64); panel = Color(59, 66, 82); text = Color(236, 239, 244); muted = Color(216, 222, 233); accent = Color(136, 192, 208); break;
-    case ThemeId::Monokai:
-        bg = Color(39, 40, 34); panel = Color(55, 56, 48); text = Color(248, 248, 242); muted = Color(166, 226, 46); accent = Color(102, 217, 239); break;
-    case ThemeId::OneDark:
-        bg = Color(33, 37, 43); panel = Color(40, 44, 52); text = Color(171, 178, 191); muted = Color(130, 137, 151); accent = Color(97, 175, 239); break;
-    case ThemeId::TokyoNight:
-        bg = Color(26, 27, 38); panel = Color(36, 40, 59); text = Color(192, 202, 245); muted = Color(122, 162, 247); accent = Color(187, 154, 247); break;
-    case ThemeId::SolarizedDark:
-        bg = Color(0, 43, 54); panel = Color(7, 54, 66); text = Color(131, 148, 150); muted = Color(88, 110, 117); accent = Color(38, 139, 210); break;
-    case ThemeId::GitHubDark:
-        bg = Color(13, 17, 23); panel = Color(22, 27, 34); text = Color(201, 209, 217); muted = Color(139, 148, 158); accent = Color(88, 166, 255); break;
-    case ThemeId::SolarizedLight:
-        bg = Color(253, 246, 227); panel = Color(238, 232, 213); text = Color(101, 123, 131); muted = Color(147, 161, 161); accent = Color(38, 139, 210); break;
-    case ThemeId::VSLight:
-        bg = Color(245, 245, 245); panel = Color(255, 255, 255); text = Color(30, 30, 30); muted = Color(104, 104, 104); accent = Color(0, 122, 204); break;
-    case ThemeId::QuietLight:
-        bg = Color(250, 250, 250); panel = Color(243, 243, 243); text = Color(51, 51, 51); muted = Color(110, 110, 110); accent = Color(64, 120, 242); break;
-    default:
-        break;
-    }
+    ImVec4 bg = effective.windowBg;
+    ImVec4 panel = effective.panelBg;
+    ImVec4 text = effective.text;
+    ImVec4 muted = effective.mutedText;
+    ImVec4 accent = effective.accent;
 
     c[ImGuiCol_WindowBg] = bg;
     c[ImGuiCol_ChildBg] = popupContext ? bg : panel;
@@ -130,7 +220,7 @@ void ApplyThemeStyle(ThemeId theme, bool popupContext) {
     c[ImGuiCol_FrameBg] = light ? Darken(panel, 0.04f) : Brighten(panel, 0.08f);
     c[ImGuiCol_FrameBgHovered] = Brighten(c[ImGuiCol_FrameBg], light ? 0.08f : 0.14f);
     c[ImGuiCol_FrameBgActive] = Brighten(c[ImGuiCol_FrameBg], light ? 0.14f : 0.22f);
-    PopupToggleColors toggles = GetPopupToggleColors(theme);
+    PopupToggleColors toggles = GetPopupToggleColors(effective);
     c[ImGuiCol_Button] = toggles.off;
     c[ImGuiCol_ButtonHovered] = toggles.offHovered;
     c[ImGuiCol_ButtonActive] = toggles.offActive;

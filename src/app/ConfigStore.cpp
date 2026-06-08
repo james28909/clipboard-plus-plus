@@ -6,8 +6,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <string>
 
 using json = nlohmann::json;
@@ -34,6 +37,55 @@ int ThemeToInt(ThemeId theme) {
 
 ThemeId ThemeFromInt(int value) {
     return static_cast<ThemeId>(std::clamp(value, 0, static_cast<int>(ThemeId::Count) - 1));
+}
+
+json ColorToJson(const ImVec4& color) {
+    return json::array({color.x, color.y, color.z, color.w});
+}
+
+ImVec4 ColorFromJson(const json& j, const ImVec4& fallback) {
+    if (!j.is_array() || j.size() < 3)
+        return fallback;
+    auto at = [&](size_t index, float value) {
+        return j.size() > index && j[index].is_number()
+            ? std::clamp(j[index].get<float>(), 0.0f, 1.0f)
+            : value;
+    };
+    return ImVec4(
+        at(0, fallback.x),
+        at(1, fallback.y),
+        at(2, fallback.z),
+        at(3, fallback.w));
+}
+
+SavedAppearanceTheme SavedThemeFromJson(const json& item) {
+    SavedAppearanceTheme saved;
+    saved.name = item.value("name", saved.name);
+    saved.windowBg = ColorFromJson(item.value("windowBg", json::array()), saved.windowBg);
+    saved.panelBg = ColorFromJson(item.value("panelBg", json::array()), saved.panelBg);
+    saved.text = ColorFromJson(item.value("text", json::array()), saved.text);
+    saved.mutedText = ColorFromJson(item.value("mutedText", json::array()), saved.mutedText);
+    saved.accent = ColorFromJson(item.value("accent", json::array()), saved.accent);
+    saved.buttonOff = ColorFromJson(item.value("buttonOff", json::array()), saved.buttonOff);
+    saved.buttonOn = ColorFromJson(item.value("buttonOn", json::array()), saved.buttonOn);
+    saved.opacityKnobFill = ColorFromJson(item.value("opacityKnobFill", json::array()), saved.opacityKnobFill);
+    saved.opacityKnobRing = ColorFromJson(item.value("opacityKnobRing", json::array()), saved.opacityKnobRing);
+    return saved;
+}
+
+json SavedThemeToJson(const SavedAppearanceTheme& saved) {
+    return {
+        {"name", saved.name},
+        {"windowBg", ColorToJson(saved.windowBg)},
+        {"panelBg", ColorToJson(saved.panelBg)},
+        {"text", ColorToJson(saved.text)},
+        {"mutedText", ColorToJson(saved.mutedText)},
+        {"accent", ColorToJson(saved.accent)},
+        {"buttonOff", ColorToJson(saved.buttonOff)},
+        {"buttonOn", ColorToJson(saved.buttonOn)},
+        {"opacityKnobFill", ColorToJson(saved.opacityKnobFill)},
+        {"opacityKnobRing", ColorToJson(saved.opacityKnobRing)},
+    };
 }
 
 json BindingToJson(const KeyBinding& b) {
@@ -95,6 +147,27 @@ void LoadAppearance(const json& root, AppConfig& config) {
     config.appearance.popupHeight = std::max(260, a.value("popupHeight", config.appearance.popupHeight));
     config.appearance.fontPath = a.value("fontPath", config.appearance.fontPath);
     config.appearance.fontSize = std::clamp(a.value("fontSize", config.appearance.fontSize), 9.0f, 32.0f);
+    config.appearance.customColors = a.value("customColors", config.appearance.customColors);
+    config.appearance.customThemeName = a.value("customThemeName", config.appearance.customThemeName);
+    config.appearance.windowBg = ColorFromJson(a.value("windowBg", json::array()), config.appearance.windowBg);
+    config.appearance.panelBg = ColorFromJson(a.value("panelBg", json::array()), config.appearance.panelBg);
+    config.appearance.text = ColorFromJson(a.value("text", json::array()), config.appearance.text);
+    config.appearance.mutedText = ColorFromJson(a.value("mutedText", json::array()), config.appearance.mutedText);
+    config.appearance.accent = ColorFromJson(a.value("accent", json::array()), config.appearance.accent);
+    config.appearance.buttonOff = ColorFromJson(a.value("buttonOff", json::array()), config.appearance.buttonOff);
+    config.appearance.buttonOn = ColorFromJson(a.value("buttonOn", json::array()), config.appearance.buttonOn);
+    config.appearance.opacityKnobFill =
+        ColorFromJson(a.value("opacityKnobFill", json::array()), config.appearance.opacityKnobFill);
+    config.appearance.opacityKnobRing =
+        ColorFromJson(a.value("opacityKnobRing", json::array()), config.appearance.opacityKnobRing);
+    config.appearance.savedThemes.clear();
+    if (a.contains("savedThemes") && a["savedThemes"].is_array()) {
+        for (const json& item : a["savedThemes"]) {
+            SavedAppearanceTheme saved = SavedThemeFromJson(item);
+            if (!saved.name.empty())
+                config.appearance.savedThemes.push_back(std::move(saved));
+        }
+    }
 }
 
 void LoadHotkeys(const json& root, AppConfig& config) {
@@ -119,6 +192,71 @@ void LoadHotkeys(const json& root, AppConfig& config) {
     }
 }
 
+void LoadDeveloper(const json& root, AppConfig& config) {
+    const json& d = root.value("developer", json::object());
+    config.developer.enabled = d.value("enabled", config.developer.enabled);
+    config.developer.cliEnabled = d.value("cliEnabled", config.developer.cliEnabled);
+    config.developer.showSourceProcess =
+        d.value("showSourceProcess", config.developer.showSourceProcess);
+    config.developer.eventLogEnabled =
+        d.value("eventLogEnabled", config.developer.eventLogEnabled);
+}
+
+ClipboardProfileConfig DefaultClipboardProfile() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    localtime_s(&tm, &t);
+    std::ostringstream ts;
+    ts << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    return {
+        "default",
+        "Default",
+        ts.str(),
+        ts.str(),
+        "",
+    };
+}
+
+void EnsureClipboardProfiles(AppConfig& config) {
+    if (config.clipboards.empty())
+        config.clipboards.push_back(DefaultClipboardProfile());
+
+    auto active = std::find_if(config.clipboards.begin(), config.clipboards.end(),
+        [&](const ClipboardProfileConfig& c) { return c.id == config.activeClipboardId; });
+    if (active == config.clipboards.end())
+        config.activeClipboardId = config.clipboards.front().id;
+}
+
+void LoadClipboards(const json& root, AppConfig& config) {
+    config.activeClipboardId = root.value("activeClipboardId", config.activeClipboardId);
+    config.autoSwitchClipboardByProcess =
+        root.value("autoSwitchClipboardByProcess", config.autoSwitchClipboardByProcess);
+    config.autoCreateClipboardByProcess =
+        root.value("autoCreateClipboardByProcess", config.autoCreateClipboardByProcess);
+
+    if (!root.contains("clipboards") || !root["clipboards"].is_array()) {
+        EnsureClipboardProfiles(config);
+        return;
+    }
+
+    config.clipboards.clear();
+    for (const json& item : root["clipboards"]) {
+        ClipboardProfileConfig profile;
+        profile.id = item.value("id", "");
+        profile.name = item.value("name", "");
+        profile.createdAt = item.value("createdAt", "");
+        profile.updatedAt = item.value("updatedAt", profile.createdAt);
+        profile.processName = item.value("processName", "");
+        if (profile.id.empty())
+            continue;
+        if (profile.name.empty())
+            profile.name = profile.id;
+        config.clipboards.push_back(std::move(profile));
+    }
+
+    EnsureClipboardProfiles(config);
+}
+
 } // namespace
 
 namespace ConfigStore {
@@ -127,18 +265,25 @@ AppConfig Load() {
     AppConfig config;
     const std::filesystem::path path = ResolveConfigPath();
     std::ifstream in(path);
-    if (!in) return config;
+    if (!in) {
+        EnsureClipboardProfiles(config);
+        return config;
+    }
 
     try {
         json root = json::parse(in, nullptr, true, true);
         LoadAppearance(root, config);
         LoadHotkeys(root, config);
+        LoadDeveloper(root, config);
         config.newItemsAtTop = root.value("newItemsAtTop", config.newItemsAtTop);
         config.appendNewlineAfterPaste = root.value("appendNewlineAfterPaste", config.appendNewlineAfterPaste);
         config.pasteMoveTarget = std::clamp(root.value("pasteMoveTarget", config.pasteMoveTarget), 0, 2);
+        LoadClipboards(root, config);
     } catch (...) {
         return AppConfig{};
     }
+
+    EnsureClipboardProfiles(config);
 
     return config;
 }
@@ -153,6 +298,21 @@ bool Save(const AppConfig& config) {
     for (const KeyBinding& b : config.hotkeys.bindings)
         bindings.push_back(BindingToJson(b));
 
+    json savedThemes = json::array();
+    for (const SavedAppearanceTheme& saved : config.appearance.savedThemes)
+        savedThemes.push_back(SavedThemeToJson(saved));
+
+    json clipboards = json::array();
+    for (const ClipboardProfileConfig& profile : config.clipboards) {
+        clipboards.push_back({
+            {"id", profile.id},
+            {"name", profile.name},
+            {"createdAt", profile.createdAt},
+            {"updatedAt", profile.updatedAt},
+            {"processName", profile.processName},
+        });
+    }
+
     json root = {
         {"version", 1},
         {"appearance", {
@@ -162,6 +322,18 @@ bool Save(const AppConfig& config) {
             {"popupHeight", config.appearance.popupHeight},
             {"fontPath", config.appearance.fontPath},
             {"fontSize", config.appearance.fontSize},
+            {"customColors", config.appearance.customColors},
+            {"customThemeName", config.appearance.customThemeName},
+            {"windowBg", ColorToJson(config.appearance.windowBg)},
+            {"panelBg", ColorToJson(config.appearance.panelBg)},
+            {"text", ColorToJson(config.appearance.text)},
+            {"mutedText", ColorToJson(config.appearance.mutedText)},
+            {"accent", ColorToJson(config.appearance.accent)},
+            {"buttonOff", ColorToJson(config.appearance.buttonOff)},
+            {"buttonOn", ColorToJson(config.appearance.buttonOn)},
+            {"opacityKnobFill", ColorToJson(config.appearance.opacityKnobFill)},
+            {"opacityKnobRing", ColorToJson(config.appearance.opacityKnobRing)},
+            {"savedThemes", savedThemes},
         }},
         {"hotkeys", {
             {"bindings", bindings},
@@ -170,9 +342,19 @@ bool Save(const AppConfig& config) {
             {"hiddenPasteAlt", config.hotkeys.hiddenPasteAlt},
             {"hiddenPasteFunctionKeys", config.hotkeys.hiddenPasteFunctionKeys},
         }},
+        {"developer", {
+            {"enabled", config.developer.enabled},
+            {"cliEnabled", config.developer.cliEnabled},
+            {"showSourceProcess", config.developer.showSourceProcess},
+            {"eventLogEnabled", config.developer.eventLogEnabled},
+        }},
         {"newItemsAtTop", config.newItemsAtTop},
         {"appendNewlineAfterPaste", config.appendNewlineAfterPaste},
         {"pasteMoveTarget", config.pasteMoveTarget},
+        {"activeClipboardId", config.activeClipboardId},
+        {"autoSwitchClipboardByProcess", config.autoSwitchClipboardByProcess},
+        {"autoCreateClipboardByProcess", config.autoCreateClipboardByProcess},
+        {"clipboards", clipboards},
     };
 
     std::ofstream out(path);

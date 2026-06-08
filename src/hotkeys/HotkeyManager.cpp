@@ -55,6 +55,7 @@ std::vector<KeyBinding> HotkeyManager::DefaultBindings() {
         {true, true, false, 'S',          HotkeyAction::ShowPopupSearch, 0}, // Ctrl+Shift+S
         {true, true, false, 'I',          HotkeyAction::Incognito,       0}, // Ctrl+Shift+I
         {true, true, false, VK_OEM_COMMA, HotkeyAction::OpenSettings,    0}, // Ctrl+Shift+,
+        {true, true, false, 'G',          HotkeyAction::LaunchClipboardWebSearch, 0}, // Ctrl+Shift+G
     };
 }
 
@@ -82,12 +83,23 @@ char HotkeyManager::SlotLabel(int slot) {
     return '?';
 }
 
+std::string HotkeyManager::SlotLabelText(int slot) {
+    if (slot >= 0 && slot < 9) return std::string(1, static_cast<char>('1' + slot));
+    if (slot >= 9 && slot < 35) return std::string(1, static_cast<char>('A' + (slot - 9)));
+    if (slot >= 35 && slot < 47) return "F" + std::to_string(slot - 34);
+    return "?";
+}
+
 const char* HotkeyManager::ActionName(HotkeyAction action) {
     switch (action) {
     case HotkeyAction::TogglePopup:     return "Toggle popup";
     case HotkeyAction::ShowPopupSearch: return "Focus popup search";
     case HotkeyAction::Incognito:       return "Toggle incognito mode";
     case HotkeyAction::OpenSettings:    return "Open settings";
+    case HotkeyAction::PastePinnedSlot: return "Paste pinned slot";
+    case HotkeyAction::SelectClipboardProfileSlot: return "Select clipboard";
+    case HotkeyAction::LaunchWebSearch: return "Search web";
+    case HotkeyAction::LaunchClipboardWebSearch: return "Search clipboard web";
     default:                            return "Unassigned";
     }
 }
@@ -153,6 +165,8 @@ LRESULT CALLBACK HotkeyManager::LLProc(int nCode, WPARAM wParam, LPARAM lParam) 
         const bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
         if (isDown || isUp)
             s_instance->UpdateModifierState(kb->vkCode, isDown);
+        if (isUp)
+            s_instance->ReleaseActionPress(kb->vkCode);
 
         if (isDown) {
             bool ctrl  = s_instance->m_ctrlDown;
@@ -185,6 +199,20 @@ void HotkeyManager::UpdateModifierState(UINT vk, bool isDown) {
     default:
         break;
     }
+}
+
+bool HotkeyManager::ConsumeActionPress(UINT vk) {
+    if (vk >= 256)
+        return true;
+    if (m_actionKeyDown[vk])
+        return false;
+    m_actionKeyDown[vk] = true;
+    return true;
+}
+
+void HotkeyManager::ReleaseActionPress(UINT vk) {
+    if (vk < 256)
+        m_actionKeyDown[vk] = false;
 }
 
 LRESULT CALLBACK HotkeyManager::MouseLLProc(int nCode, WPARAM wParam, LPARAM lParam) {
@@ -224,6 +252,8 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
 
     for (const auto& b : m_bindings) {
         if (b.Matches(ctrl, shift, alt, vk)) {
+            if (!ConsumeActionPress(vk))
+                return true;
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(b.action),
                          static_cast<LPARAM>(b.data));
@@ -231,8 +261,30 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         }
     }
 
+    const int pinnedSlot = SlotFromVKey(vk, true);
+    if (ctrl && shift && !alt && pinnedSlot >= 0) {
+        if (!ConsumeActionPress(vk))
+            return true;
+        PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                     static_cast<WPARAM>(HotkeyAction::PastePinnedSlot),
+                     static_cast<LPARAM>(pinnedSlot));
+        return true;
+    }
+
+    const int clipboardSlot = SlotFromVKey(vk, true);
+    if (!ctrl && shift && alt && clipboardSlot >= 0) {
+        if (!ConsumeActionPress(vk))
+            return true;
+        PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                     static_cast<WPARAM>(HotkeyAction::SelectClipboardProfileSlot),
+                     static_cast<LPARAM>(clipboardSlot));
+        return true;
+    }
+
     if (popupOpen) {
         if (vk == VK_ESCAPE) {
+            if (!ConsumeActionPress(vk))
+                return true;
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(HotkeyAction::TogglePopup), 0);
             return true;
@@ -245,8 +297,18 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         if (!popup->IsKeyboardCaptureActive())
             return false;
 
+        if (!ctrl && shift && !alt && vk == VK_RETURN && popup->IsSearchActive()) {
+            if (!ConsumeActionPress(vk))
+                return true;
+            PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                         static_cast<WPARAM>(HotkeyAction::LaunchWebSearch), 0);
+            return true;
+        }
+
         const int visibleSlot = SlotFromVKey(vk, false);
-        if (!ctrl && !shift && !alt && visibleSlot >= 0 && !popup->IsSearchActive()) {
+        if (!ctrl && !shift && !alt && visibleSlot >= 0 && !popup->IsTextEntryActive()) {
+            if (!ConsumeActionPress(vk))
+                return true;
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(HotkeyAction::PasteVisibleSlot),
                          static_cast<LPARAM>(visibleSlot));
@@ -267,6 +329,8 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         shift == m_settings.hiddenPasteShift &&
         alt == m_settings.hiddenPasteAlt &&
         historySlot >= 0) {
+        if (!ConsumeActionPress(vk))
+            return true;
         PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                      static_cast<WPARAM>(HotkeyAction::PasteHistorySlot),
                      static_cast<LPARAM>(historySlot));
@@ -291,6 +355,7 @@ void HotkeyManager::ForwardKeyToPopup(UINT vk, bool shift) const {
     case VK_UP:
     case VK_DOWN:
         PostMessageW(hw, WM_KEYDOWN, vk, 0);
+        PostMessageW(hw, WM_KEYUP, vk, 0);
         return;
     default: break;
     }

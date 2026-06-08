@@ -8,6 +8,7 @@ public:
 
     // Draw all panels. Called once per frame when the window is visible.
     static void Draw(bool& open);
+    static void RequestFocus();
 
 private:
     static void DrawTitleBar();

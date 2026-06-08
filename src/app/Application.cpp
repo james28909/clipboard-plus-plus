@@ -3,11 +3,14 @@
 #include "../ui/MainWindow.h"
 #include "../ui/PopupWindow.h"
 #include "../clipboard/ClipboardHistory.h"
+#include "../clipboard/ClipboardHistoryStore.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
 #include "../hotkeys/HotkeyManager.h"
+#include "../util/Win32Util.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
 #include <dxgi.h>
@@ -16,8 +19,11 @@
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 #include <algorithm>
 #include <cstddef>
+#include <ctime>
 #include <cstring>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -32,46 +38,39 @@ static constexpr UINT_PTR kResizeRenderTimerId = 1;
 
 namespace {
 
-bool SetUnicodeClipboardText(HWND owner, const wchar_t* text, size_t chars) {
-    if (!OpenClipboard(owner))
-        return false;
+void ClearMainInputState() {
+    ImGui::ClearActiveID();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ClearInputKeys();
+    for (int i = 0; i < IM_ARRAYSIZE(io.MouseDown); ++i)
+        io.MouseDown[i] = false;
+}
 
-    if (!EmptyClipboard()) {
-        CloseClipboard();
-        return false;
-    }
+std::string NowIsoLocal() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    localtime_s(&tm, &t);
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    return out.str();
+}
 
-    const size_t bytes = (chars + 1) * sizeof(wchar_t);
-    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!mem) {
-        CloseClipboard();
-        return false;
-    }
+std::string MakeClipboardId() {
+    static unsigned int sequence = 0;
+    std::ostringstream out;
+    out << "cb-" << std::hex << GetTickCount64() << "-" << ++sequence;
+    return out.str();
+}
 
-    void* data = GlobalLock(mem);
-    if (!data) {
-        GlobalFree(mem);
-        CloseClipboard();
-        return false;
-    }
-
-    std::memcpy(data, text, chars * sizeof(wchar_t));
-    static_cast<wchar_t*>(data)[chars] = L'\0';
-    GlobalUnlock(mem);
-
-    if (!SetClipboardData(CF_UNICODETEXT, mem)) {
-        GlobalFree(mem);
-        CloseClipboard();
-        return false;
-    }
-
-    CloseClipboard();
-    return true;
+std::string Hex32(uint32_t value) {
+    std::ostringstream out;
+    out << "0x" << std::hex << std::uppercase << value;
+    return out.str();
 }
 
 } // namespace
 
-// ── Construction / destruction ────────────────────────────────────────────────
+// -- Construction / destruction ------------------------------------------------
 
 Application::Application(HINSTANCE hInstance)
     : m_hInstance(hInstance)
@@ -84,7 +83,7 @@ Application::~Application() {
     s_instance = nullptr;
 }
 
-// ── Public ────────────────────────────────────────────────────────────────────
+// -- Public --------------------------------------------------------------------
 
 int Application::Run() {
     if (!Init()) return 1;
@@ -107,28 +106,38 @@ int Application::Run() {
 }
 
 void Application::ShowMainWindow() {
+    ClearMainInputState();
     m_mainVisible = true;
+    MainWindow::RequestFocus();
 
     if (IsIconic(m_hwnd))
         ShowWindow(m_hwnd, SW_RESTORE);
     else
         ShowWindow(m_hwnd, SW_SHOWNORMAL);
 
-    SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-    SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-    SetForegroundWindow(m_hwnd);
     BringWindowToTop(m_hwnd);
+    SetForegroundWindow(m_hwnd);
+    SetActiveWindow(m_hwnd);
     SetFocus(m_hwnd);
 }
 
+void Application::OpenSettingsWindow() {
+    if (m_popup) {
+        m_popup->OpenSettingsWindow();
+        return;
+    }
+
+    ShowMainWindow();
+}
+
 void Application::HideMainWindow() {
+    ClearMainInputState();
     m_mainVisible = false;
     ShowWindow(m_hwnd, SW_HIDE);
 }
 
 void Application::ShowPopup() {
+    SyncClipboardForForegroundProcess();
     if (m_popup) m_popup->Show();
 }
 
@@ -157,10 +166,34 @@ void Application::RequestHotkeySettings(const HotkeySettings& settings) {
     SaveConfig();
 }
 
+void Application::SetDeveloperSettings(const DeveloperSettings& settings) {
+    const bool logWasEnabled = m_config.developer.eventLogEnabled;
+    m_config.developer = settings;
+    SaveConfig();
+    if (!logWasEnabled && settings.eventLogEnabled)
+        AddDeveloperEvent("developer event log enabled");
+}
+
+void Application::AddDeveloperEvent(const std::string& event) {
+    if (!m_config.developer.eventLogEnabled)
+        return;
+
+    std::string line = NowIsoLocal();
+    line += "  ";
+    line += event;
+    m_developerEvents.push_back(std::move(line));
+    if (m_developerEvents.size() > 300)
+        m_developerEvents.erase(m_developerEvents.begin(),
+                                m_developerEvents.begin() +
+                                    static_cast<std::ptrdiff_t>(m_developerEvents.size() - 300));
+}
+
 void Application::SetNewItemsAtTop(bool value) {
     m_config.newItemsAtTop = value;
-    if (m_history)
-        m_history->SetNewItemsAtTop(value);
+    for (auto& history : m_histories) {
+        if (history)
+            history->SetNewItemsAtTop(value);
+    }
     SaveConfig();
 }
 
@@ -190,8 +223,157 @@ void Application::SetPasteMoveTarget(ClipboardHistory::MoveTarget target) {
     SaveConfig();
 }
 
+const ClipboardProfileConfig* Application::GetActiveClipboardProfile() const {
+    auto it = std::find_if(m_config.clipboards.begin(), m_config.clipboards.end(),
+        [&](const ClipboardProfileConfig& c) { return c.id == m_config.activeClipboardId; });
+    return it == m_config.clipboards.end() ? nullptr : &(*it);
+}
+
+void Application::SetActiveClipboardProfile(const std::string& id) {
+    auto it = std::find_if(m_config.clipboards.begin(), m_config.clipboards.end(),
+        [&](const ClipboardProfileConfig& c) { return c.id == id; });
+    if (it == m_config.clipboards.end())
+        return;
+
+    m_config.activeClipboardId = id;
+    m_history = HistoryForActiveClipboard();
+    SaveConfig();
+    AddDeveloperEvent("selected clipboard profile: " + it->name + " (" + it->id + ")");
+}
+
+void Application::SelectClipboardProfileSlot(int slot) {
+    if (slot < 0)
+        return;
+
+    const size_t index = static_cast<size_t>(slot);
+    if (index >= m_config.clipboards.size())
+        return;
+
+    SetActiveClipboardProfile(m_config.clipboards[index].id);
+    m_manualClipboardProcessOverride = ForegroundProcessName();
+}
+
+void Application::CreateClipboardProfile(const std::string& name, const std::string& processName) {
+    const std::string now = NowIsoLocal();
+    ClipboardProfileConfig profile;
+    profile.id = MakeClipboardId();
+    profile.name = name.empty() ? "New Clipboard" : name;
+    profile.createdAt = now;
+    profile.updatedAt = now;
+    profile.processName = processName;
+
+    m_config.clipboards.push_back(std::move(profile));
+    m_histories.push_back(std::make_unique<ClipboardHistory>(500));
+    m_histories.back()->SetNewItemsAtTop(m_config.newItemsAtTop);
+    ClipboardHistoryStore::Load(m_config.clipboards.back().id, *m_histories.back());
+    const std::string savedId = m_config.clipboards.back().id;
+    m_histories.back()->SetChangedCallback([this, savedId]() {
+        SaveClipboardHistory(savedId);
+    });
+    m_config.activeClipboardId = m_config.clipboards.back().id;
+    m_history = m_histories.back().get();
+    SaveConfig();
+    SaveActiveClipboardHistory();
+    AddDeveloperEvent("created clipboard profile: " + m_config.clipboards.back().name);
+}
+
+void Application::RenameActiveClipboardProfile(const std::string& name) {
+    if (name.empty())
+        return;
+
+    for (ClipboardProfileConfig& profile : m_config.clipboards) {
+        if (profile.id == m_config.activeClipboardId) {
+            profile.name = name;
+            profile.updatedAt = NowIsoLocal();
+            SaveConfig();
+            AddDeveloperEvent("renamed clipboard profile: " + profile.name);
+            return;
+        }
+    }
+}
+
+bool Application::DeleteActiveClipboardProfile() {
+    if (m_config.clipboards.size() <= 1)
+        return false;
+
+    const std::string deletedId = m_config.activeClipboardId;
+    auto it = std::find_if(m_config.clipboards.begin(), m_config.clipboards.end(),
+        [&](const ClipboardProfileConfig& c) { return c.id == deletedId; });
+    if (it == m_config.clipboards.end())
+        return false;
+
+    const size_t index = static_cast<size_t>(std::distance(m_config.clipboards.begin(), it));
+    m_config.clipboards.erase(it);
+    if (index < m_histories.size())
+        m_histories.erase(m_histories.begin() + static_cast<std::ptrdiff_t>(index));
+
+    std::error_code ec;
+    std::filesystem::remove(ClipboardHistoryStore::PathForProfile(deletedId), ec);
+
+    const size_t nextIndex = std::min(index, m_config.clipboards.size() - 1);
+    m_config.activeClipboardId = m_config.clipboards[nextIndex].id;
+    m_history = HistoryForActiveClipboard();
+    SaveConfig();
+    AddDeveloperEvent("deleted clipboard profile: " + deletedId);
+    return true;
+}
+
+void Application::CreateClipboardFromForegroundProcess() {
+    const std::string process = ForegroundProcessName();
+    if (process.empty())
+        return;
+
+    if (ClipboardProfileConfig* existing = FindClipboardForProcess(process)) {
+        SetActiveClipboardProfile(existing->id);
+        return;
+    }
+
+    CreateClipboardProfile(process, process);
+}
+
+void Application::BindActiveClipboardToForegroundProcess() {
+    const std::string process = ForegroundProcessName();
+    if (process.empty())
+        return;
+
+    for (ClipboardProfileConfig& profile : m_config.clipboards) {
+        if (profile.id == m_config.activeClipboardId) {
+            profile.processName = process;
+            profile.updatedAt = NowIsoLocal();
+            SaveConfig();
+            AddDeveloperEvent("bound active clipboard to process: " + process);
+            return;
+        }
+    }
+}
+
+void Application::SetAutoSwitchClipboardByProcess(bool value) {
+    m_config.autoSwitchClipboardByProcess = value;
+    SaveConfig();
+    AddDeveloperEvent(std::string("auto-switch clipboard by process: ") + (value ? "on" : "off"));
+}
+
+void Application::SetAutoCreateClipboardByProcess(bool value) {
+    m_config.autoCreateClipboardByProcess = value;
+    SaveConfig();
+    AddDeveloperEvent(std::string("auto-create clipboard by process: ") + (value ? "on" : "off"));
+}
+
 void Application::SaveConfig() {
     ConfigStore::Save(m_config);
+}
+
+void Application::SaveClipboardHistory(const std::string& profileId) {
+    for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
+        if (m_config.clipboards[i].id == profileId && m_histories[i]) {
+            ClipboardHistoryStore::Save(profileId, *m_histories[i]);
+            return;
+        }
+    }
+}
+
+void Application::SaveActiveClipboardHistory() {
+    SaveClipboardHistory(m_config.activeClipboardId);
 }
 
 void Application::ApplyLoadedConfig(const AppConfig& config) {
@@ -199,6 +381,7 @@ void Application::ApplyLoadedConfig(const AppConfig& config) {
     m_appearance = m_config.appearance;
     m_hotkeySettings = m_config.hotkeys;
     m_appearanceDirty = true;
+    RebuildClipboardHistories();
 
     if (m_history)
         m_history->SetNewItemsAtTop(m_config.newItemsAtTop);
@@ -208,6 +391,117 @@ void Application::ApplyLoadedConfig(const AppConfig& config) {
     }
     if (m_hotkeys)
         m_hotkeys->ApplySettings(m_hotkeySettings);
+}
+
+std::string Application::ForegroundProcessName() const {
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == m_hwnd)
+        return m_lastForegroundProcess;
+    if (m_popup && fg == m_popup->GetHwnd())
+        return m_lastForegroundProcess;
+
+    m_lastForegroundProcess = win32util::ProcessNameFromWindow(fg);
+    return m_lastForegroundProcess;
+}
+
+std::string Application::ExecutablePath() const {
+    return win32util::ModulePath();
+}
+
+std::string Application::WorkingDirectory() const {
+    return win32util::CurrentDirectory();
+}
+
+void Application::SyncClipboardForForegroundProcess() {
+    SwitchClipboardForProcess(ForegroundProcessName());
+}
+
+void Application::SyncClipboardForWindow(HWND hwnd) {
+    if (!hwnd || hwnd == m_hwnd)
+        return;
+    if (m_popup && hwnd == m_popup->GetHwnd())
+        return;
+
+    std::string process = win32util::ProcessNameFromWindow(hwnd);
+    if (process.empty())
+        return;
+
+    m_lastForegroundProcess = process;
+    SwitchClipboardForProcess(process);
+}
+
+void Application::RebuildClipboardHistories() {
+    if (m_config.clipboards.empty()) {
+        const std::string now = NowIsoLocal();
+        m_config.clipboards.push_back({"default", "Default", now, now, ""});
+        m_config.activeClipboardId = "default";
+    }
+
+    m_histories.clear();
+    m_histories.reserve(m_config.clipboards.size());
+    for (size_t i = 0; i < m_config.clipboards.size(); ++i) {
+        auto history = std::make_unique<ClipboardHistory>(500);
+        history->SetNewItemsAtTop(m_config.newItemsAtTop);
+        ClipboardHistoryStore::Load(m_config.clipboards[i].id, *history);
+        const std::string savedId = m_config.clipboards[i].id;
+        history->SetChangedCallback([this, savedId]() {
+            SaveClipboardHistory(savedId);
+        });
+        m_histories.push_back(std::move(history));
+    }
+
+    m_history = HistoryForActiveClipboard();
+}
+
+ClipboardHistory* Application::HistoryForActiveClipboard() const {
+    for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
+        if (m_config.clipboards[i].id == m_config.activeClipboardId)
+            return m_histories[i].get();
+    }
+    return m_histories.empty() ? nullptr : m_histories.front().get();
+}
+
+ClipboardProfileConfig* Application::FindClipboardForProcess(const std::string& processName) {
+    if (processName.empty())
+        return nullptr;
+
+    auto it = std::find_if(m_config.clipboards.begin(), m_config.clipboards.end(),
+        [&](const ClipboardProfileConfig& c) {
+            return !c.processName.empty() &&
+                   _stricmp(c.processName.c_str(), processName.c_str()) == 0;
+        });
+    return it == m_config.clipboards.end() ? nullptr : &(*it);
+}
+
+void Application::CreateClipboardForProcess(const std::string& processName) {
+    if (processName.empty())
+        return;
+
+    CreateClipboardProfile(processName, processName);
+}
+
+void Application::SwitchClipboardForProcess(const std::string& processName) {
+    if (!m_config.autoSwitchClipboardByProcess || processName.empty())
+        return;
+
+    if (!m_manualClipboardProcessOverride.empty()) {
+        if (_stricmp(m_manualClipboardProcessOverride.c_str(), processName.c_str()) == 0)
+            return;
+        m_manualClipboardProcessOverride.clear();
+    }
+
+    ClipboardProfileConfig* profile = FindClipboardForProcess(processName);
+    if (!profile && m_config.autoCreateClipboardByProcess) {
+        CreateClipboardForProcess(processName);
+        return;
+    }
+
+    if (!profile || profile->id == m_config.activeClipboardId)
+        return;
+
+    m_config.activeClipboardId = profile->id;
+    m_history = HistoryForActiveClipboard();
+    SaveConfig();
 }
 
 bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
@@ -226,13 +520,15 @@ bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
     if (chars == 0)
         return false;
 
+    const std::vector<std::wstring> filePaths = win32util::ExistingPathList(cmd->text);
+
     int utf8Bytes = WideCharToMultiByte(CP_UTF8, 0, cmd->text, static_cast<int>(chars),
                                         nullptr, 0, nullptr, nullptr);
     if (utf8Bytes <= 0)
         return false;
 
     ClipboardItem item;
-    item.type = ContentType::Text;
+    item.type = filePaths.empty() ? ContentType::Text : ContentType::FilePaths;
     item.text.resize(static_cast<size_t>(utf8Bytes));
     WideCharToMultiByte(CP_UTF8, 0, cmd->text, static_cast<int>(chars),
                         item.text.data(), utf8Bytes, nullptr, nullptr);
@@ -249,14 +545,17 @@ bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
     if (cmd->setSystemClipboard) {
         if (m_monitor)
             m_monitor->SuppressNextUpdate();
-        SetUnicodeClipboardText(m_hwnd, cmd->text, chars);
+        if (!filePaths.empty())
+            win32util::SetClipboardFileDrop(m_hwnd, filePaths);
+        else
+            win32util::SetClipboardUnicodeText(m_hwnd, cmd->text, chars);
     }
 
     m_history->Insert(std::move(item), index);
     return true;
 }
 
-// ── Private: initialisation ───────────────────────────────────────────────────
+// -- Private: initialisation ---------------------------------------------------
 
 bool Application::Init() {
     ApplyLoadedConfig(ConfigStore::Load());
@@ -268,7 +567,7 @@ bool Application::Init() {
     wc.hInstance     = m_hInstance;
     wc.hIcon         = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));   // IDI_APPLICATION
     wc.hCursor       = LoadCursorW(nullptr, MAKEINTRESOURCEW(32514)); // IDC_ARROW
-    wc.hbrBackground = nullptr; // D3D owns the background — prevents white flash on resize
+    wc.hbrBackground = nullptr; // D3D owns the background - prevents white flash on resize
     wc.lpszClassName = L"ClipboardPlusPlus_Main";
     RegisterClassExW(&wc);
 
@@ -307,7 +606,7 @@ bool Application::Init() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename  = nullptr;
 
-    ApplyThemeStyle(m_appearance.theme, false);
+    ApplyThemeStyle(m_appearance, false);
 
     ImGui_ImplWin32_Init(m_hwnd);
     ImGui_ImplDX11_Init(m_d3dDevice, m_d3dContext);
@@ -317,12 +616,22 @@ bool Application::Init() {
     m_tray = std::make_unique<TrayIcon>(m_hwnd, m_hInstance);
     if (!m_tray->Create()) return false;
 
-    // Clipboard history + monitor
-    m_history = std::make_unique<ClipboardHistory>(500);
-    m_history->SetNewItemsAtTop(m_config.newItemsAtTop);
+    // Clipboard histories + monitor
+    RebuildClipboardHistories();
     m_monitor = std::make_unique<ClipboardMonitor>();
     m_monitor->Start(m_hInstance, [this](ClipboardItem item) {
-        m_history->Push(std::move(item));
+        if (!item.sourceProcess.empty())
+            m_lastForegroundProcess = item.sourceProcess;
+        SwitchClipboardForProcess(item.sourceProcess);
+        if (m_history) {
+            const std::string source = item.sourceProcess.empty() ? "unknown" : item.sourceProcess;
+            const std::string preview = item.Preview(80);
+            AddDeveloperEvent("captured " + std::string(ContentTypeName(item.type)) +
+                              " from " + source +
+                              " tags=" + Hex32(item.tags) +
+                              " preview=\"" + preview + "\"");
+            m_history->Push(std::move(item));
+        }
     });
 
     m_popup = std::make_unique<PopupWindow>();
@@ -362,7 +671,7 @@ void Application::Shutdown() {
     }
 }
 
-// ── Private: render ───────────────────────────────────────────────────────────
+// -- Private: render -----------------------------------------------------------
 
 void Application::RenderFrame() {
     if (m_appearanceDirty)
@@ -385,7 +694,7 @@ void Application::RenderFrame() {
         m_swapChain->Present(1, 0);
     }
 
-    // Popup has its own context + swap chain — rendered separately
+    // Popup has its own context + swap chain - rendered separately
     if (m_popup) m_popup->Render();
 }
 
@@ -399,18 +708,17 @@ void Application::ApplyAppearanceNow() {
     m_appearanceDirty = false;
 
     ImGuiContext* prevCtx = ImGui::GetCurrentContext();
-    ApplyThemeStyle(m_appearance.theme, false);
+    ApplyThemeStyle(m_appearance, false);
     ImGui_ImplDX11_InvalidateDeviceObjects();
     RebuildFontAtlas(ImGui::GetIO(), m_appearance);
     ImGui_ImplDX11_CreateDeviceObjects();
 
     if (m_popup)
         m_popup->ApplyAppearance(m_appearance);
-
     ImGui::SetCurrentContext(prevCtx);
 }
 
-// ── Private: D3D11 ───────────────────────────────────────────────────────────
+// -- Private: D3D11 -----------------------------------------------------------
 
 bool Application::CreateD3D() {
     DXGI_SWAP_CHAIN_DESC sd{};
@@ -466,9 +774,12 @@ void Application::DestroyRenderTarget() {
     if (m_renderTarget) { m_renderTarget->Release(); m_renderTarget = nullptr; }
 }
 
-// ── Win32 message handler ─────────────────────────────────────────────────────
+// -- Win32 message handler -----------------------------------------------------
 
 LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_MOUSEACTIVATE)
+        return MA_ACTIVATE;
+
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
         return TRUE;
 
@@ -476,7 +787,7 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     switch (msg) {
 
-    // ── Remove all native non-client area so we own every pixel ──────────────
+    // -- Remove all native non-client area so we own every pixel --------------
     case WM_NCCALCSIZE:
         if (wParam == TRUE) {
             // When maximized, Windows inflates the window rect by the border
@@ -495,7 +806,7 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         }
         break;
 
-    // ── Tell Windows which part of our window each pixel belongs to ──────────
+    // -- Tell Windows which part of our window each pixel belongs to ----------
     case WM_NCPAINT:
         return 0;
 
@@ -529,14 +840,14 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (onB)        return HTBOTTOM;
         }
 
-        // Title bar — drag region excludes the three button slots on the right
+        // Title bar - drag region excludes the three button slots on the right
         if (pt.y >= 0 && pt.y < titleH && pt.x < btnZoneX)
             return HTCAPTION;
 
         return HTCLIENT;
     }
 
-    // ── Enforce a minimum window size ────────────────────────────────────────
+    // -- Enforce a minimum window size ----------------------------------------
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
         mmi->ptMinTrackSize = {800, 500};
@@ -585,7 +896,7 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
 
     case WM_SHOWCPP_MAIN:
-        if (app) app->ShowMainWindow();
+        if (app) app->OpenSettingsWindow();
         return 0;
 
     case WM_SHOWPOPUP:
@@ -622,19 +933,38 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             }
             break;
         case HotkeyAction::OpenSettings:
-            app->ShowMainWindow();
+            app->OpenSettingsWindow();
             break;
         case HotkeyAction::Incognito:
             // TODO Milestone 9
             break;
         case HotkeyAction::PasteHistorySlot: {
-            // Direct paste — no popup shown.
+            // Direct paste - no popup shown.
             // Capture foreground window now, before any focus changes.
             HWND target = GetForegroundWindow();
+            app->SyncClipboardForWindow(target);
             if (app->m_popup)
                 app->m_popup->PasteHistorySlot(data, target);
             break;
         }
+        case HotkeyAction::PastePinnedSlot: {
+            HWND target = GetForegroundWindow();
+            app->SyncClipboardForWindow(target);
+            if (app->m_popup)
+                app->m_popup->PastePinnedSlot(data, target);
+            break;
+        }
+        case HotkeyAction::SelectClipboardProfileSlot:
+            app->SelectClipboardProfileSlot(data);
+            break;
+        case HotkeyAction::LaunchWebSearch:
+            if (app->m_popup)
+                app->m_popup->LaunchWebSearch();
+            break;
+        case HotkeyAction::LaunchClipboardWebSearch:
+            if (app->m_popup)
+                app->m_popup->LaunchClipboardWebSearch();
+            break;
         case HotkeyAction::PasteVisibleSlot:
             if (app->m_popup)
                 app->m_popup->PasteVisibleSlot(data);

@@ -17,6 +17,10 @@ enum class HotkeyAction : WPARAM {
     OpenSettings     = 4,
     PasteHistorySlot = 5,
     PasteVisibleSlot = 6,
+    PastePinnedSlot  = 7,
+    SelectClipboardProfileSlot = 8,
+    LaunchWebSearch = 9,
+    LaunchClipboardWebSearch = 10,
 };
 
 struct KeyBinding {
@@ -63,6 +67,7 @@ public:
     static HotkeySettings DefaultSettings();
     static int SlotFromVKey(UINT vk, bool includeFunctionKeys);
     static char SlotLabel(int slot);
+    static std::string SlotLabelText(int slot);
     static const char* ActionName(HotkeyAction action);
     static std::string BindingText(const KeyBinding& binding);
     static std::string ModifiersText(bool ctrl, bool shift, bool alt);
@@ -78,6 +83,8 @@ private:
     // Forward a raw key event to the popup's HWND so ImGui can process it.
     void ForwardKeyToPopup(UINT vk, bool shift) const;
     void UpdateModifierState(UINT vk, bool isDown);
+    bool ConsumeActionPress(UINT vk);
+    void ReleaseActionPress(UINT vk);
 
     HHOOK                   m_hook{};
     HHOOK                   m_mouseHook{};
@@ -90,6 +97,7 @@ private:
     bool                    m_ctrlDown{false};
     bool                    m_shiftDown{false};
     bool                    m_altDown{false};
+    bool                    m_actionKeyDown[256]{};
 
     static HotkeyManager*   s_instance;
 };

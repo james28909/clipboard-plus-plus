@@ -4,6 +4,7 @@
 #include "Appearance.h"
 #include <windows.h>
 #include <d3d11.h>
+#include <string>
 #include <vector>
 
 struct ImGuiContext;
@@ -19,18 +20,23 @@ public:
 
     void Show(bool focusSearch = false);
     void Hide();
+    void OpenSettingsWindow();
     bool IsVisible() const { return m_visible; }
     bool IsSearchActive() const { return m_searchActive || m_searchCapture || m_focusSearchOnOpen; }
-    bool IsKeyboardCaptureActive() const { return m_keyboardCapture || IsSearchActive(); }
+    bool IsTextEntryActive() const { return IsSearchActive() || m_dialogTextCapture; }
+    bool IsKeyboardCaptureActive() const { return m_keyboardCapture || IsTextEntryActive(); }
     HWND GetHwnd()   const { return m_hwnd; }
 
-    // Called each frame from Application — renders the popup if visible.
+    // Called each frame from Application - renders the popup if visible.
     void Render();
     void ApplyAppearance(const AppearanceSettings& settings);
 
     void PasteHistorySlot(int slot, HWND targetWindow);
+    void PastePinnedSlot(int slot, HWND targetWindow);
     void PasteVisibleSlot(int slot);
     void RequestSearchFocus();
+    void LaunchWebSearch();
+    void LaunchClipboardWebSearch();
     void ActivateKeyboardCapture();
     void ReleaseSearchCapture();
     void NoteExternalMouseDown(POINT screenPoint);
@@ -38,7 +44,7 @@ public:
     void SetAppendNewlineAfterPaste(bool value) { m_appendNewlineAfterPaste = value; }
     ClipboardHistory::MoveTarget GetPasteMoveTarget() const { return m_pasteMoveTarget; }
     void SetPasteMoveTarget(ClipboardHistory::MoveTarget target) { m_pasteMoveTarget = target; }
-    void SetTheme(ThemeId theme) { m_theme = theme; }
+    void SetTheme(ThemeId theme) { m_appearance.theme = theme; }
 
     // Configurable
     float m_opacity{0.95f};
@@ -47,7 +53,7 @@ public:
     int   m_queueDelayMs{50};
 
 private:
-    // ── D3D / window setup ────────────────────────────────────────────────────
+    // -- D3D / window setup ----------------------------------------------------
     bool CreateSwapChain();
     void ResizeSwapChainToClient();
     void DestroySwapChain();
@@ -60,48 +66,54 @@ private:
 
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
-    // ── ImGui UI ──────────────────────────────────────────────────────────────
+    // -- ImGui UI --------------------------------------------------------------
     void DrawFilterStrip();
+    void DrawSearchBar();
     void DrawItemList();
     bool ItemPassesFilter(const ClipboardItem& item) const;
-    std::vector<size_t> BuildVisibleHistoryIndices() const;
+    std::vector<size_t> BuildVisibleHistoryIndices(bool pinnedOnly) const;
     void DrawItemDragDrop(uint64_t itemId, int qpos);
+    bool DrawItemContextMenu(const ClipboardItem& item, int qpos);
     void DrawTitleBar();
 
-    // ── Paste ─────────────────────────────────────────────────────────────────
+    // -- Paste -----------------------------------------------------------------
     void PasteItemKeepOpen(const ClipboardItem& item);
     void PasteQueue();
     void WriteToClipboard(const ClipboardItem& item) const;
     HWND ResolvePasteTarget() const;
     bool WaitForForeground(HWND target, DWORD timeoutMs) const;
     void RestoreFocusAndPaste(HWND preferredTarget = nullptr);
+    bool LaunchWebSearchForText(const std::string& query, bool hideOnSuccess);
 
-    // ── Win32 + D3D11 ─────────────────────────────────────────────────────────
+    // -- Win32 + D3D11 ---------------------------------------------------------
     HWND                    m_hwnd{};
     HINSTANCE               m_hInstance{};
-    ID3D11Device*           m_device{};       // borrowed — not owned
-    ID3D11DeviceContext*    m_context{};      // borrowed — not owned
+    ID3D11Device*           m_device{};       // borrowed - not owned
+    ID3D11DeviceContext*    m_context{};      // borrowed - not owned
     IDXGISwapChain*         m_swapChain{};
     ID3D11RenderTargetView* m_renderTarget{};
 
-    // ── ImGui ─────────────────────────────────────────────────────────────────
+    // -- ImGui -----------------------------------------------------------------
     ImGuiContext* m_imguiCtx{};
 
-    // ── State ─────────────────────────────────────────────────────────────────
+    // -- State -----------------------------------------------------------------
     bool  m_visible{false};
     bool  m_justOpened{false};
     bool  m_focusSearchOnOpen{false};
     bool  m_searchActive{false};
     bool  m_searchCapture{false};
+    bool  m_dialogTextCapture{false};
+    bool  m_newClipboardFocusPending{false};
     bool  m_keyboardCapture{false};
     bool  m_maximized{false};
     RECT  m_restoreRect{};
     bool  m_queueMode{false};
     bool  m_appendNewlineAfterPaste{false};
     ClipboardHistory::MoveTarget m_pasteMoveTarget{ClipboardHistory::MoveTarget::None};
-    ThemeId m_theme{ThemeId::DarkDefault};
+    AppearanceSettings m_appearance{};
     int   m_filterMode{0};      // 0=All 1=Text 2=Image 3=URL
     char  m_searchBuf[256]{};
+    char  m_newClipboardName[96]{};
     char  m_searchDebug[256]{};
     bool  m_lastSearchActive{false};
     bool  m_lastSearchInputActive{false};
