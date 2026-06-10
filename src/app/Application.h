@@ -27,7 +27,7 @@ constexpr UINT WM_SHOWTRAYPOPUP = WM_APP + 6;
 constexpr ULONG_PTR CD_CLIPBOARD_TEXT = 0x43505031; // "CPP1"
 
 struct ClipboardTextCommand {
-    int position; // 0=top, -1=bottom, 1..500=one-based history slot
+    int position; // 0=top, -1=bottom, 1..kMaxClipboardHistoryItems=one-based history slot
     BOOL setSystemClipboard;
     wchar_t text[1];
 };
@@ -103,6 +103,7 @@ private:
     void RenderFrame();
     void ApplyAppearanceNow();
     void SaveConfig();
+    void CommitAppearanceChange();
     bool HasRenderableUi() const;
     void ApplyLoadedConfig(const AppConfig& config);
     bool HandleClipboardTextCommand(const COPYDATASTRUCT& cds);

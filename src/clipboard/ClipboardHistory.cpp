@@ -1,4 +1,5 @@
 #include "ClipboardHistory.h"
+#include "../util/Win32Util.h"
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -183,16 +184,10 @@ std::vector<size_t> ClipboardHistory::Search(const std::string& query) const {
     std::vector<size_t> results;
     if (query.empty()) return results;
 
-    // Lower-case the query once
-    std::string lq = query;
-    std::transform(lq.begin(), lq.end(), lq.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
+    const std::string lq = win32util::ToLower(query);
 
     for (size_t i = 0; i < m_items.size(); ++i) {
-        std::string lt = m_items[i].text;
-        std::transform(lt.begin(), lt.end(), lt.begin(),
-                       [](unsigned char c) { return (char)std::tolower(c); });
-        if (lt.find(lq) != std::string::npos)
+        if (win32util::ToLower(m_items[i].text).find(lq) != std::string::npos)
             results.push_back(i);
     }
     return results;

@@ -1,5 +1,6 @@
 #include "DebugWindow.h"
 #include "../app/Application.h"
+#include "../util/Win32Util.h"
 
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
@@ -12,11 +13,6 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM,
 
 namespace {
 constexpr wchar_t kDebugWindowClass[] = L"ClipboardPlusPlus_DebugWindow";
-
-float DpiScaleForWindow(HWND hwnd) {
-    UINT dpi = hwnd ? GetDpiForWindow(hwnd) : GetDpiForSystem();
-    return std::clamp(static_cast<float>(dpi) / 96.0f, 0.5f, 4.0f);
-}
 }
 
 bool DebugWindow::Create(HINSTANCE hInstance,
@@ -127,7 +123,7 @@ void DebugWindow::ApplyAppearance(const AppearanceSettings& settings) {
     ImGui::SetCurrentContext(m_imguiCtx);
 
     m_appearance = settings;
-    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
+    m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
     ApplyThemeStyle(m_appearance, false);
     ImGui_ImplDX11_InvalidateDeviceObjects();
     RebuildFontAtlas(ImGui::GetIO(), m_appearance);

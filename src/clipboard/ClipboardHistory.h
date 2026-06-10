@@ -4,6 +4,8 @@
 #include <functional>
 #include <mutex>
 
+static constexpr int kMaxClipboardHistoryItems = 500;
+
 class ClipboardHistory {
 public:
     using OverflowCb = std::function<void(ClipboardItem)>;

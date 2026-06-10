@@ -24,10 +24,6 @@
 
 namespace {
 
-bool Eq(const wchar_t* a, const wchar_t* b) {
-    return _wcsicmp(a, b) == 0;
-}
-
 std::wstring ToWide(const std::filesystem::path& path) {
     return path.wstring();
 }
@@ -50,11 +46,11 @@ void DetachConsoleForCli() {
 bool CliGateExempt(int argc, wchar_t** argv) {
     if (argc <= 1)
         return true;
-    return Eq(argv[1], L"--help") || Eq(argv[1], L"-h") || Eq(argv[1], L"/?") ||
-           Eq(argv[1], L"status") || Eq(argv[1], L"config") || Eq(argv[1], L"set") ||
-           Eq(argv[1], L"--set") || Eq(argv[1], L"--config-path") ||
-           Eq(argv[1], L"--open-config-folder") || Eq(argv[1], L"--reset-config") ||
-           Eq(argv[1], L"--diagnostics");
+    return win32util::EqW(argv[1], L"--help") || win32util::EqW(argv[1], L"-h") || win32util::EqW(argv[1], L"/?") ||
+           win32util::EqW(argv[1], L"status") || win32util::EqW(argv[1], L"config") || win32util::EqW(argv[1], L"set") ||
+           win32util::EqW(argv[1], L"--set") || win32util::EqW(argv[1], L"--config-path") ||
+           win32util::EqW(argv[1], L"--open-config-folder") || win32util::EqW(argv[1], L"--reset-config") ||
+           win32util::EqW(argv[1], L"--diagnostics");
 }
 
 void PrintHelp() {
@@ -365,11 +361,11 @@ struct ClipboardCliOptions {
 
 bool ParseClipboardOptions(int argc, wchar_t** argv, int start, ClipboardCliOptions& options) {
     for (int i = start; i < argc; ++i) {
-        if (Eq(argv[i], L"--top")) {
+        if (win32util::EqW(argv[i], L"--top")) {
             options.position = 0;
-        } else if (Eq(argv[i], L"--bottom")) {
+        } else if (win32util::EqW(argv[i], L"--bottom")) {
             options.position = -1;
-        } else if (Eq(argv[i], L"--index")) {
+        } else if (win32util::EqW(argv[i], L"--index")) {
             if (i + 1 >= argc) {
                 std::wcerr << L"--index requires a value from 1 to 500.\n";
                 return false;
@@ -380,7 +376,7 @@ bool ParseClipboardOptions(int argc, wchar_t** argv, int start, ClipboardCliOpti
                 std::wcerr << L"--index requires a value from 1 to 500.\n";
                 return false;
             }
-        } else if (Eq(argv[i], L"--system")) {
+        } else if (win32util::EqW(argv[i], L"--system")) {
             options.setSystemClipboard = true;
         } else {
             std::wcerr << L"Unknown clipboard option: " << argv[i] << L"\n";
@@ -645,35 +641,35 @@ bool SaveAndReload(const AppConfig& config) {
 }
 
 int RunConfigCommand(int argc, wchar_t** argv) {
-    if (argc < 3 || Eq(argv[2], L"--help") || Eq(argv[2], L"-h") || Eq(argv[2], L"/?")) {
+    if (argc < 3 || win32util::EqW(argv[2], L"--help") || win32util::EqW(argv[2], L"-h") || win32util::EqW(argv[2], L"/?")) {
         PrintHelp();
         return 0;
     }
 
-    if (Eq(argv[2], L"--path")) {
+    if (win32util::EqW(argv[2], L"--path")) {
         std::wcout << ToWide(ConfigStore::Path()) << L"\n";
         return 0;
     }
-    if (Eq(argv[2], L"--open-folder")) {
+    if (win32util::EqW(argv[2], L"--open-folder")) {
         std::filesystem::create_directories(ConfigStore::Directory());
         const std::filesystem::path dir = ConfigStore::Directory();
         ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return 0;
     }
-    if (Eq(argv[2], L"--reset")) {
+    if (win32util::EqW(argv[2], L"--reset")) {
         return SaveAndReload(AppConfig{}) ? 0 : 1;
     }
-    if (Eq(argv[2], L"--reset-font")) {
+    if (win32util::EqW(argv[2], L"--reset-font")) {
         AppConfig config = ConfigStore::Load();
         config.appearance.fontPath = "C:\\Windows\\Fonts\\segoeui.ttf";
         config.appearance.fontSize = 15.0f;
         return SaveAndReload(config) ? 0 : 1;
     }
-    if (Eq(argv[2], L"--list")) {
+    if (win32util::EqW(argv[2], L"--list")) {
         PrintConfigList(ConfigStore::Load());
         return 0;
     }
-    if (Eq(argv[2], L"--get")) {
+    if (win32util::EqW(argv[2], L"--get")) {
         if (argc < 4) {
             std::wcerr << L"config --get requires a key. See --help.\n";
             return 1;
@@ -687,7 +683,7 @@ int RunConfigCommand(int argc, wchar_t** argv) {
         std::wcout << value << L"\n";
         return 0;
     }
-    if (Eq(argv[2], L"--set")) {
+    if (win32util::EqW(argv[2], L"--set")) {
         if (argc < 4) {
             std::wcerr << L"config --set requires key/value. See --help.\n";
             return 1;
@@ -718,12 +714,12 @@ int RunConfigCommand(int argc, wchar_t** argv) {
 }
 
 int RunSetCommand(int argc, wchar_t** argv) {
-    if (argc < 3 || Eq(argv[2], L"--help") || Eq(argv[2], L"-h") || Eq(argv[2], L"/?")) {
+    if (argc < 3 || win32util::EqW(argv[2], L"--help") || win32util::EqW(argv[2], L"-h") || win32util::EqW(argv[2], L"/?")) {
         PrintHelp();
         return 0;
     }
 
-    if (Eq(argv[2], L"--clipboard")) {
+    if (win32util::EqW(argv[2], L"--clipboard")) {
         if (argc < 4) {
             std::wcerr << L"set --clipboard requires text. See --help.\n";
             return 1;
@@ -734,7 +730,7 @@ int RunSetCommand(int argc, wchar_t** argv) {
         return InsertClipboardText(argv[3], options);
     }
 
-    if (Eq(argv[2], L"--clipboard-file")) {
+    if (win32util::EqW(argv[2], L"--clipboard-file")) {
         if (argc < 4) {
             std::wcerr << L"set --clipboard-file requires a path. See --help.\n";
             return 1;
@@ -757,16 +753,16 @@ int RunSetCommand(int argc, wchar_t** argv) {
 }
 
 int RunClipboardCommand(int argc, wchar_t** argv) {
-    if (argc < 3 || Eq(argv[2], L"--help") || Eq(argv[2], L"-h") || Eq(argv[2], L"/?")) {
+    if (argc < 3 || win32util::EqW(argv[2], L"--help") || win32util::EqW(argv[2], L"-h") || win32util::EqW(argv[2], L"/?")) {
         PrintHelp();
         return 0;
     }
 
-    if (Eq(argv[2], L"get")) {
+    if (win32util::EqW(argv[2], L"get")) {
         return PrintSystemClipboard();
     }
 
-    if (Eq(argv[2], L"set")) {
+    if (win32util::EqW(argv[2], L"set")) {
         if (argc < 4) {
             std::wcerr << L"--clipboard set requires text or file/folder paths. See --help.\n";
             return 1;
@@ -779,7 +775,7 @@ int RunClipboardCommand(int argc, wchar_t** argv) {
         return 0;
     }
 
-    if (Eq(argv[2], L"insert")) {
+    if (win32util::EqW(argv[2], L"insert")) {
         if (argc < 4) {
             std::wcerr << L"--clipboard insert requires text. See --help.\n";
             return 1;
@@ -801,7 +797,7 @@ int RunClipboardCommand(int argc, wchar_t** argv) {
 int RunCLI(int argc, wchar_t** argv) {
     int result = 0;
 
-    if (argc <= 1 || Eq(argv[1], L"--help") || Eq(argv[1], L"-h") || Eq(argv[1], L"/?")) {
+    if (argc <= 1 || win32util::EqW(argv[1], L"--help") || win32util::EqW(argv[1], L"-h") || win32util::EqW(argv[1], L"/?")) {
         PrintHelp();
         DetachConsoleForCli();
         return 0;
@@ -817,19 +813,19 @@ int RunCLI(int argc, wchar_t** argv) {
     }
 #endif
 
-    if (Eq(argv[1], L"--show") || Eq(argv[1], L"--settings")) {
+    if (win32util::EqW(argv[1], L"--show") || win32util::EqW(argv[1], L"--settings")) {
         ipc::SignalRunning(WM_SHOWCPP_MAIN);
         DetachConsoleForCli();
         return 0;
     }
-    if (Eq(argv[1], L"--popup")) {
+    if (win32util::EqW(argv[1], L"--popup")) {
         ipc::SignalRunning(WM_SHOWPOPUP);
         DetachConsoleForCli();
         return 0;
     }
-    if (Eq(argv[1], L"status")) {
+    if (win32util::EqW(argv[1], L"status")) {
         std::wstring format = L"text";
-        if (argc >= 4 && Eq(argv[2], L"--format"))
+        if (argc >= 4 && win32util::EqW(argv[2], L"--format"))
             format = argv[3];
         if (Normalize(format) != L"text" && Normalize(format) != L"json") {
             std::wcerr << L"status --format expects text or json.\n";
@@ -840,22 +836,22 @@ int RunCLI(int argc, wchar_t** argv) {
         DetachConsoleForCli();
         return 0;
     }
-    if (Eq(argv[1], L"config")) {
+    if (win32util::EqW(argv[1], L"config")) {
         result = RunConfigCommand(argc, argv);
         DetachConsoleForCli();
         return result;
     }
-    if (Eq(argv[1], L"set")) {
+    if (win32util::EqW(argv[1], L"set")) {
         result = RunSetCommand(argc, argv);
         DetachConsoleForCli();
         return result;
     }
-    if (Eq(argv[1], L"--clipboard")) {
+    if (win32util::EqW(argv[1], L"--clipboard")) {
         result = RunClipboardCommand(argc, argv);
         DetachConsoleForCli();
         return result;
     }
-    if (Eq(argv[1], L"--clipboard-file")) {
+    if (win32util::EqW(argv[1], L"--clipboard-file")) {
         if (argc < 3) {
             std::wcerr << L"--clipboard-file requires a path. See --help.\n";
             DetachConsoleForCli();
@@ -877,24 +873,24 @@ int RunCLI(int argc, wchar_t** argv) {
         DetachConsoleForCli();
         return result;
     }
-    if (Eq(argv[1], L"--config-path")) {
+    if (win32util::EqW(argv[1], L"--config-path")) {
         std::wcout << ToWide(ConfigStore::Path()) << L"\n";
         DetachConsoleForCli();
         return 0;
     }
-    if (Eq(argv[1], L"--open-config-folder")) {
+    if (win32util::EqW(argv[1], L"--open-config-folder")) {
         std::filesystem::create_directories(ConfigStore::Directory());
         const std::filesystem::path dir = ConfigStore::Directory();
         ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         DetachConsoleForCli();
         return 0;
     }
-    if (Eq(argv[1], L"--reset-config")) {
+    if (win32util::EqW(argv[1], L"--reset-config")) {
         result = SaveAndReload(AppConfig{}) ? 0 : 1;
         DetachConsoleForCli();
         return result;
     }
-    if (Eq(argv[1], L"--set")) {
+    if (win32util::EqW(argv[1], L"--set")) {
         if (argc < 3) {
             std::wcerr << L"--set requires key=value. See --help.\n";
             DetachConsoleForCli();
@@ -911,7 +907,7 @@ int RunCLI(int argc, wchar_t** argv) {
         DetachConsoleForCli();
         return result;
     }
-    if (Eq(argv[1], L"--diagnostics")) {
+    if (win32util::EqW(argv[1], L"--diagnostics")) {
         PrintStatus(L"text");
         DetachConsoleForCli();
         return 0;

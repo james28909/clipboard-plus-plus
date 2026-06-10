@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "ImGuiWidgets.h"
 #include "../app/Application.h"
 #include "../app/ConfigStore.h"
 #include "../clipboard/ClipboardHistory.h"
@@ -144,42 +145,9 @@ static float S(float value) {
     return value * UiScale();
 }
 
-static void KeepMouseWheelOnLastItem() {
-    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-}
-
-static bool SliderFloatWheel(const char* label, float* value, float min, float max,
-                             const char* format, float wheelStep,
-                             ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp) {
-    bool changed = ImGui::SliderFloat(label, value, min, max, format, flags);
-    KeepMouseWheelOnLastItem();
-    if (ImGui::IsItemHovered()) {
-        ImGuiIO& io = ImGui::GetIO();
-        if (io.MouseWheel != 0.0f) {
-            *value = std::clamp(*value + io.MouseWheel * wheelStep, min, max);
-            io.MouseWheel = 0.0f;
-            changed = true;
-        }
-    }
-    return changed;
-}
-
-static bool SliderIntWheel(const char* label, int* value, int min, int max,
-                           const char* format, int wheelStep,
-                           ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp) {
-    bool changed = ImGui::SliderInt(label, value, min, max, format, flags);
-    KeepMouseWheelOnLastItem();
-    if (ImGui::IsItemHovered()) {
-        ImGuiIO& io = ImGui::GetIO();
-        if (io.MouseWheel != 0.0f) {
-            const int delta = io.MouseWheel > 0.0f ? wheelStep : -wheelStep;
-            *value = std::clamp(*value + delta, min, max);
-            io.MouseWheel = 0.0f;
-            changed = true;
-        }
-    }
-    return changed;
-}
+using ImGuiWidgets::KeepMouseWheelOnLastItem;
+using ImGuiWidgets::SliderFloatWheel;
+using ImGuiWidgets::SliderIntWheel;
 
 // -- Title bar helpers ---------------------------------------------------------
 
@@ -1302,7 +1270,7 @@ void MainWindow::DrawHistory() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    static int  activeLimit    = 500;
+    static int  activeLimit    = kMaxClipboardHistoryItems;
     static bool persistHistory = true;
     static bool sessionOnly    = false;
     static bool vaultUnlimited = true;
@@ -1310,7 +1278,7 @@ void MainWindow::DrawHistory() {
 
     ImGui::Text("Active history size (items)");
     ImGui::SetNextItemWidth(120.0f);
-    SliderIntWheel("##active", &activeLimit, 1, 500, "%d", 1);
+    SliderIntWheel("##active", &activeLimit, 1, kMaxClipboardHistoryItems, "%d", 1);
 
     ImGui::Spacing();
     ImGui::Checkbox("Persist history across sessions", &persistHistory);

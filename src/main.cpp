@@ -3,16 +3,13 @@
 #include "app/Application.h"
 #include "cli/CLI.h"
 #include "ipc/IpcClient.h"
+#include "util/Win32Util.h"
 
 #include <cwchar>
 #include <string>
 #include <vector>
 
 namespace {
-
-bool Eq(const wchar_t* a, const wchar_t* b) {
-    return _wcsicmp(a, b) == 0;
-}
 
 void ConfigureDpiAwareness() {
 #ifdef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
@@ -26,7 +23,7 @@ int wmain(int argc, wchar_t** argv) {
     ConfigureDpiAwareness();
     HINSTANCE hInstance = GetModuleHandleW(nullptr);
 
-    if (argc > 1 && !Eq(argv[1], L"--clipboardpp-run-gui"))
+    if (argc > 1 && !win32util::EqW(argv[1], L"--clipboardpp-run-gui"))
         return RunCLI(argc, argv);
 
     if (argc <= 1) {

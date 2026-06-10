@@ -22,4 +22,8 @@ std::string ProcessNameFromWindow(HWND hwnd);
 std::string ModulePath();
 std::string CurrentDirectory();
 
+float DpiScaleForWindow(HWND hwnd);
+bool EqW(const wchar_t* a, const wchar_t* b);
+std::string ToLower(std::string s);
+
 } // namespace win32util

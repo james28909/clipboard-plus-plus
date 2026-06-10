@@ -2,6 +2,8 @@
 
 #include <shlobj.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <sstream>
 
@@ -222,6 +224,21 @@ std::string CurrentDirectory() {
     while (!dir.empty() && dir.back() == L'\0')
         dir.pop_back();
     return WideToUtf8(dir.c_str());
+}
+
+float DpiScaleForWindow(HWND hwnd) {
+    const UINT dpi = hwnd ? GetDpiForWindow(hwnd) : GetDpiForSystem();
+    return std::clamp(static_cast<float>(dpi) / 96.0f, 0.5f, 4.0f);
+}
+
+bool EqW(const wchar_t* a, const wchar_t* b) {
+    return _wcsicmp(a, b) == 0;
+}
+
+std::string ToLower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
 }
 
 } // namespace win32util

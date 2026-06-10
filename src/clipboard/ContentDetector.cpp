@@ -1,4 +1,5 @@
 #include "ContentDetector.h"
+#include "../util/Win32Util.h"
 #include <regex>
 #include <cctype>
 #include <algorithm>
@@ -17,9 +18,7 @@ std::string ContentDetector::Trim(const std::string& s) {
 }
 
 std::string ContentDetector::Lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
+    return win32util::ToLower(std::move(s));
 }
 
 static std::string StripQuotes(std::string s) {

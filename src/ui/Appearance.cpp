@@ -140,32 +140,31 @@ static AppearanceSettings EffectiveSettings(const AppearanceSettings& settings) 
     if (settings.customColors)
         return settings;
 
-    AppearanceSettings defaults = ThemeDefaults(settings.theme);
-    defaults.popupOpacity = settings.popupOpacity;
-    defaults.popupOutlineStrength = settings.popupOutlineStrength;
-    defaults.popupOutlineAnimated = settings.popupOutlineAnimated;
-    defaults.popupOutlineAnimationSpeed = settings.popupOutlineAnimationSpeed;
-    defaults.popupOutlineColorSharpness = settings.popupOutlineColorSharpness;
-    defaults.popupOutlineColorSpread = settings.popupOutlineColorSpread;
-    defaults.popupOutlineSaturation = settings.popupOutlineSaturation;
-    defaults.popupOutlineBrightness = settings.popupOutlineBrightness;
-    defaults.popupOutlineReverse = settings.popupOutlineReverse;
-    defaults.popupWidth = settings.popupWidth;
-    defaults.popupHeight = settings.popupHeight;
-    defaults.mainWindowWidth = settings.mainWindowWidth;
-    defaults.mainWindowHeight = settings.mainWindowHeight;
-    defaults.fontPath = settings.fontPath;
-    defaults.fontSize = settings.fontSize;
-    defaults.uiScale = 1.0f;
-    defaults.dpiScale = settings.dpiScale;
-    defaults.showScrollbars = settings.showScrollbars;
-    defaults.scrollbarSize = settings.scrollbarSize;
-    defaults.scrollbarRounding = settings.scrollbarRounding;
-    defaults.scrollbarPadding = settings.scrollbarPadding;
-    defaults.popupRounding = settings.popupRounding;
-    defaults.controlRounding = settings.controlRounding;
-    defaults.customColors = false;
-    return defaults;
+    // Start from settings to preserve all user preferences, then overlay theme colors.
+    // New user-setting fields flow through automatically without touching this function.
+    AppearanceSettings effective = settings;
+    const AppearanceSettings theme = ThemeDefaults(settings.theme);
+    effective.windowBg        = theme.windowBg;
+    effective.panelBg         = theme.panelBg;
+    effective.text            = theme.text;
+    effective.mutedText       = theme.mutedText;
+    effective.accent          = theme.accent;
+    effective.hover           = theme.hover;
+    effective.selectedTab     = theme.selectedTab;
+    effective.buttonOff       = theme.buttonOff;
+    effective.buttonOn        = theme.buttonOn;
+    effective.closeButton     = theme.closeButton;
+    effective.closeButtonHover = theme.closeButtonHover;
+    effective.closeButtonText = theme.closeButtonText;
+    effective.opacityKnobFill = theme.opacityKnobFill;
+    effective.opacityKnobRing = theme.opacityKnobRing;
+    effective.scrollbarBg          = theme.scrollbarBg;
+    effective.scrollbarGrab        = theme.scrollbarGrab;
+    effective.scrollbarGrabHover   = theme.scrollbarGrabHover;
+    effective.scrollbarGrabActive  = theme.scrollbarGrabActive;
+    effective.uiScale = 1.0f;
+    effective.customColors = false;
+    return effective;
 }
 
 SavedAppearanceTheme ToSavedTheme(const AppearanceSettings& settings, const std::string& name) {

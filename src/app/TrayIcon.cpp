@@ -54,7 +54,5 @@ void TrayIcon::SetIncognito(bool on) {
 }
 
 void TrayIcon::UpdateIcon() {
-    // TODO (Milestone 8): swap to incognito icon when m_incognito is true
-    // For now, keep the placeholder icon
     Shell_NotifyIconW(NIM_MODIFY, &m_nid);
 }

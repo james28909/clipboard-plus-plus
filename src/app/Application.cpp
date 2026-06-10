@@ -75,20 +75,6 @@ int ScaledPx(float value, const AppearanceSettings& appearance) {
     return static_cast<int>(std::lround(value * EffectiveUiScale(appearance)));
 }
 
-float DpiScaleForWindow(HWND hwnd) {
-#ifdef _WIN32
-    UINT dpi = 96;
-    if (hwnd)
-        dpi = GetDpiForWindow(hwnd);
-    else
-        dpi = GetDpiForSystem();
-    return std::clamp(static_cast<float>(dpi) / 96.0f, 0.5f, 4.0f);
-#else
-    (void)hwnd;
-    return 1.0f;
-#endif
-}
-
 } // namespace
 
 // -- Construction / destruction ------------------------------------------------
@@ -202,15 +188,13 @@ void Application::RequestAppearance(const AppearanceSettings& settings) {
     }
     m_appearance = settings;
     m_appearance.uiScale = 1.0f;
-    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
+    m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
     std::filesystem::path imported = ConfigStore::ImportFontFile(m_appearance.fontPath);
     if (!imported.empty()) {
         LogDebug("RequestAppearance: imported font to \"" + imported.u8string() + "\"");
         m_appearance.fontPath = imported.u8string();
     }
-    m_config.appearance = m_appearance;
-    m_appearanceDirty = true;
-    SaveConfig();
+    CommitAppearanceChange();
     {
         std::ostringstream out;
         out << "RequestAppearance: queued apply"
@@ -223,17 +207,13 @@ void Application::RequestAppearance(const AppearanceSettings& settings) {
 void Application::SetPopupOpacity(float opacity) {
     m_appearance.popupOpacity = std::clamp(opacity, 0.1f, 1.0f);
     LogDebug("SetPopupOpacity: " + std::to_string(m_appearance.popupOpacity));
-    m_config.appearance = m_appearance;
-    m_appearanceDirty = true;
-    SaveConfig();
+    CommitAppearanceChange();
 }
 
 void Application::SetPopupOutlineStrength(float strength) {
     m_appearance.popupOutlineStrength = std::clamp(strength, 0.0f, 1.0f);
     LogDebug("SetPopupOutlineStrength: " + std::to_string(m_appearance.popupOutlineStrength));
-    m_config.appearance = m_appearance;
-    m_appearanceDirty = true;
-    SaveConfig();
+    CommitAppearanceChange();
 }
 
 void Application::RequestHotkeySettings(const HotkeySettings& settings) {
@@ -352,7 +332,7 @@ void Application::CreateClipboardProfile(const std::string& name, const std::str
     profile.processName = processName;
 
     m_config.clipboards.push_back(std::move(profile));
-    m_histories.push_back(std::make_unique<ClipboardHistory>(500));
+    m_histories.push_back(std::make_unique<ClipboardHistory>(kMaxClipboardHistoryItems));
     m_histories.back()->SetNewItemsAtTop(m_config.newItemsAtTop);
     ClipboardHistoryStore::Load(m_config.clipboards.back().id, *m_histories.back());
     const std::string savedId = m_config.clipboards.back().id;
@@ -475,6 +455,12 @@ void Application::SaveConfig() {
     ConfigStore::Save(m_config);
 }
 
+void Application::CommitAppearanceChange() {
+    m_config.appearance = m_appearance;
+    m_appearanceDirty = true;
+    SaveConfig();
+}
+
 void Application::SaveClipboardHistory(const std::string& profileId) {
     for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
         if (m_config.clipboards[i].id == profileId && m_histories[i]) {
@@ -492,7 +478,7 @@ void Application::ApplyLoadedConfig(const AppConfig& config) {
     m_config = config;
     m_appearance = m_config.appearance;
     m_appearance.uiScale = 1.0f;
-    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
+    m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
     m_hotkeySettings = m_config.hotkeys;
     m_appearanceDirty = true;
     RebuildClipboardHistories();
@@ -530,7 +516,7 @@ SIZE Application::MainWindowCurrentSize() const {
     if (m_hwnd) {
         RECT rc{};
         if (GetWindowRect(m_hwnd, &rc)) {
-            const float dpiScale = DpiScaleForWindow(m_hwnd);
+            const float dpiScale = win32util::DpiScaleForWindow(m_hwnd);
             return {
                 static_cast<LONG>(std::lround((rc.right - rc.left) / dpiScale)),
                 static_cast<LONG>(std::lround((rc.bottom - rc.top) / dpiScale))
@@ -547,8 +533,7 @@ void Application::UseCurrentMainWindowSizeAsDefault() {
 
     m_appearance.mainWindowWidth = static_cast<int>(size.cx);
     m_appearance.mainWindowHeight = static_cast<int>(size.cy);
-    m_config.appearance = m_appearance;
-    SaveConfig();
+    CommitAppearanceChange();
     AddDeveloperEvent("saved settings window size as default: " +
                       std::to_string(m_appearance.mainWindowWidth) + "x" +
                       std::to_string(m_appearance.mainWindowHeight));
@@ -557,7 +542,7 @@ void Application::UseCurrentMainWindowSizeAsDefault() {
 SIZE Application::PopupCurrentSize() const {
     if (m_popup) {
         SIZE size = m_popup->GetCurrentSize();
-        const float dpiScale = DpiScaleForWindow(m_popup->GetHwnd());
+        const float dpiScale = win32util::DpiScaleForWindow(m_popup->GetHwnd());
         return {
             static_cast<LONG>(std::lround(size.cx / dpiScale)),
             static_cast<LONG>(std::lround(size.cy / dpiScale))
@@ -573,8 +558,7 @@ void Application::UseCurrentPopupSizeAsDefault() {
 
     m_appearance.popupWidth = static_cast<int>(size.cx);
     m_appearance.popupHeight = static_cast<int>(size.cy);
-    m_config.appearance = m_appearance;
-    SaveConfig();
+    CommitAppearanceChange();
     AddDeveloperEvent("saved popup size as default: " +
                       std::to_string(m_appearance.popupWidth) + "x" +
                       std::to_string(m_appearance.popupHeight));
@@ -617,7 +601,7 @@ void Application::RebuildClipboardHistories() {
     m_histories.clear();
     m_histories.reserve(m_config.clipboards.size());
     for (size_t i = 0; i < m_config.clipboards.size(); ++i) {
-        auto history = std::make_unique<ClipboardHistory>(500);
+        auto history = std::make_unique<ClipboardHistory>(kMaxClipboardHistoryItems);
         history->SetNewItemsAtTop(m_config.newItemsAtTop);
         ClipboardHistoryStore::Load(m_config.clipboards[i].id, *history);
         const std::string savedId = m_config.clipboards[i].id;
@@ -721,7 +705,7 @@ bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
     if (cmd->position == -1) {
         index = m_history->Size();
     } else if (cmd->position > 0) {
-        index = static_cast<size_t>(std::clamp(cmd->position, 1, 500) - 1);
+        index = static_cast<size_t>(std::clamp(cmd->position, 1, kMaxClipboardHistoryItems) - 1);
     }
 
     if (cmd->setSystemClipboard) {
@@ -767,7 +751,7 @@ bool Application::Init() {
     );
 
     if (!m_hwnd) return false;
-    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
+    m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
 
     // DWM drop-shadow for borderless window (1px inset on all sides is enough)
     MARGINS shadow = {1, 1, 1, 1};
@@ -1087,7 +1071,7 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     case WM_DPICHANGED:
         if (app) {
-            app->m_appearance.dpiScale = DpiScaleForWindow(hwnd);
+            app->m_appearance.dpiScale = win32util::DpiScaleForWindow(hwnd);
             app->m_appearanceDirty = true;
             if (RECT* suggested = reinterpret_cast<RECT*>(lParam)) {
                 SetWindowPos(hwnd, nullptr,
@@ -1176,7 +1160,8 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             app->OpenSettingsWindow();
             break;
         case HotkeyAction::Incognito:
-            // TODO Milestone 9
+            if (app->m_tray)
+                app->m_tray->SetIncognito(!app->m_tray->IsIncognito());
             break;
         case HotkeyAction::PasteHistorySlot: {
             // Direct paste - no popup shown.

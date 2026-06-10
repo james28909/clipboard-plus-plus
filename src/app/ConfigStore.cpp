@@ -73,64 +73,78 @@ ImVec4 ColorFromJson(const json& j, const ImVec4& fallback) {
         at(3, fallback.w));
 }
 
+// Load/save the shared color + shape fields that appear in both AppearanceSettings
+// and SavedAppearanceTheme.  Adding a new color field means touching only these two
+// helpers instead of every load/save site.
+template<typename T>
+void LoadColorFields(T& s, const json& j) {
+    s.windowBg        = ColorFromJson(j.value("windowBg",         json::array()), s.windowBg);
+    s.panelBg         = ColorFromJson(j.value("panelBg",          json::array()), s.panelBg);
+    s.text            = ColorFromJson(j.value("text",             json::array()), s.text);
+    s.mutedText       = ColorFromJson(j.value("mutedText",        json::array()), s.mutedText);
+    s.accent          = ColorFromJson(j.value("accent",           json::array()), s.accent);
+    s.hover           = ColorFromJson(j.value("hover",            json::array()), s.hover);
+    s.selectedTab     = ColorFromJson(j.value("selectedTab",      json::array()), s.selectedTab);
+    s.buttonOff       = ColorFromJson(j.value("buttonOff",        json::array()), s.buttonOff);
+    s.buttonOn        = ColorFromJson(j.value("buttonOn",         json::array()), s.buttonOn);
+    s.closeButton     = ColorFromJson(j.value("closeButton",      json::array()), s.closeButton);
+    s.closeButtonHover= ColorFromJson(j.value("closeButtonHover", json::array()), s.closeButtonHover);
+    s.closeButtonText = ColorFromJson(j.value("closeButtonText",  json::array()), s.closeButtonText);
+    s.opacityKnobFill = ColorFromJson(j.value("opacityKnobFill",  json::array()), s.opacityKnobFill);
+    s.opacityKnobRing = ColorFromJson(j.value("opacityKnobRing",  json::array()), s.opacityKnobRing);
+    s.scrollbarBg         = ColorFromJson(j.value("scrollbarBg",         json::array()), s.scrollbarBg);
+    s.scrollbarGrab       = ColorFromJson(j.value("scrollbarGrab",       json::array()), s.scrollbarGrab);
+    s.scrollbarGrabHover  = ColorFromJson(j.value("scrollbarGrabHover",  json::array()), s.scrollbarGrabHover);
+    s.scrollbarGrabActive = ColorFromJson(j.value("scrollbarGrabActive", json::array()), s.scrollbarGrabActive);
+    s.showScrollbars   = j.value("showScrollbars",   s.showScrollbars);
+    s.scrollbarSize    = std::clamp(j.value("scrollbarSize",    s.scrollbarSize),    0.0f, 24.0f);
+    s.scrollbarRounding= std::clamp(j.value("scrollbarRounding",s.scrollbarRounding),0.0f, 16.0f);
+    s.scrollbarPadding = std::clamp(j.value("scrollbarPadding", s.scrollbarPadding), 0.0f,  8.0f);
+    s.popupRounding    = std::clamp(j.value("popupRounding",    s.popupRounding),    0.0f, 18.0f);
+    s.controlRounding  = std::clamp(j.value("controlRounding",  s.controlRounding),  0.0f, 12.0f);
+}
+
+template<typename T>
+json SaveColorFields(const T& s) {
+    return {
+        {"windowBg",          ColorToJson(s.windowBg)},
+        {"panelBg",           ColorToJson(s.panelBg)},
+        {"text",              ColorToJson(s.text)},
+        {"mutedText",         ColorToJson(s.mutedText)},
+        {"accent",            ColorToJson(s.accent)},
+        {"hover",             ColorToJson(s.hover)},
+        {"selectedTab",       ColorToJson(s.selectedTab)},
+        {"buttonOff",         ColorToJson(s.buttonOff)},
+        {"buttonOn",          ColorToJson(s.buttonOn)},
+        {"closeButton",       ColorToJson(s.closeButton)},
+        {"closeButtonHover",  ColorToJson(s.closeButtonHover)},
+        {"closeButtonText",   ColorToJson(s.closeButtonText)},
+        {"opacityKnobFill",   ColorToJson(s.opacityKnobFill)},
+        {"opacityKnobRing",   ColorToJson(s.opacityKnobRing)},
+        {"scrollbarBg",           ColorToJson(s.scrollbarBg)},
+        {"scrollbarGrab",         ColorToJson(s.scrollbarGrab)},
+        {"scrollbarGrabHover",    ColorToJson(s.scrollbarGrabHover)},
+        {"scrollbarGrabActive",   ColorToJson(s.scrollbarGrabActive)},
+        {"showScrollbars",   s.showScrollbars},
+        {"scrollbarSize",    s.scrollbarSize},
+        {"scrollbarRounding",s.scrollbarRounding},
+        {"scrollbarPadding", s.scrollbarPadding},
+        {"popupRounding",    s.popupRounding},
+        {"controlRounding",  s.controlRounding},
+    };
+}
+
 SavedAppearanceTheme SavedThemeFromJson(const json& item) {
     SavedAppearanceTheme saved;
     saved.name = item.value("name", saved.name);
-    saved.windowBg = ColorFromJson(item.value("windowBg", json::array()), saved.windowBg);
-    saved.panelBg = ColorFromJson(item.value("panelBg", json::array()), saved.panelBg);
-    saved.text = ColorFromJson(item.value("text", json::array()), saved.text);
-    saved.mutedText = ColorFromJson(item.value("mutedText", json::array()), saved.mutedText);
-    saved.accent = ColorFromJson(item.value("accent", json::array()), saved.accent);
-    saved.hover = ColorFromJson(item.value("hover", json::array()), saved.hover);
-    saved.selectedTab = ColorFromJson(item.value("selectedTab", json::array()), saved.selectedTab);
-    saved.buttonOff = ColorFromJson(item.value("buttonOff", json::array()), saved.buttonOff);
-    saved.buttonOn = ColorFromJson(item.value("buttonOn", json::array()), saved.buttonOn);
-    saved.closeButton = ColorFromJson(item.value("closeButton", json::array()), saved.closeButton);
-    saved.closeButtonHover = ColorFromJson(item.value("closeButtonHover", json::array()), saved.closeButtonHover);
-    saved.closeButtonText = ColorFromJson(item.value("closeButtonText", json::array()), saved.closeButtonText);
-    saved.opacityKnobFill = ColorFromJson(item.value("opacityKnobFill", json::array()), saved.opacityKnobFill);
-    saved.opacityKnobRing = ColorFromJson(item.value("opacityKnobRing", json::array()), saved.opacityKnobRing);
-    saved.scrollbarBg = ColorFromJson(item.value("scrollbarBg", json::array()), saved.scrollbarBg);
-    saved.scrollbarGrab = ColorFromJson(item.value("scrollbarGrab", json::array()), saved.scrollbarGrab);
-    saved.scrollbarGrabHover = ColorFromJson(item.value("scrollbarGrabHover", json::array()), saved.scrollbarGrabHover);
-    saved.scrollbarGrabActive = ColorFromJson(item.value("scrollbarGrabActive", json::array()), saved.scrollbarGrabActive);
-    saved.showScrollbars = item.value("showScrollbars", saved.showScrollbars);
-    saved.scrollbarSize = std::clamp(item.value("scrollbarSize", saved.scrollbarSize), 0.0f, 24.0f);
-    saved.scrollbarRounding = std::clamp(item.value("scrollbarRounding", saved.scrollbarRounding), 0.0f, 16.0f);
-    saved.scrollbarPadding = std::clamp(item.value("scrollbarPadding", saved.scrollbarPadding), 0.0f, 8.0f);
-    saved.popupRounding = std::clamp(item.value("popupRounding", saved.popupRounding), 0.0f, 18.0f);
-    saved.controlRounding = std::clamp(item.value("controlRounding", saved.controlRounding), 0.0f, 12.0f);
+    LoadColorFields(saved, item);
     return saved;
 }
 
 json SavedThemeToJson(const SavedAppearanceTheme& saved) {
-    return {
-        {"name", saved.name},
-        {"windowBg", ColorToJson(saved.windowBg)},
-        {"panelBg", ColorToJson(saved.panelBg)},
-        {"text", ColorToJson(saved.text)},
-        {"mutedText", ColorToJson(saved.mutedText)},
-        {"accent", ColorToJson(saved.accent)},
-        {"hover", ColorToJson(saved.hover)},
-        {"selectedTab", ColorToJson(saved.selectedTab)},
-        {"buttonOff", ColorToJson(saved.buttonOff)},
-        {"buttonOn", ColorToJson(saved.buttonOn)},
-        {"closeButton", ColorToJson(saved.closeButton)},
-        {"closeButtonHover", ColorToJson(saved.closeButtonHover)},
-        {"closeButtonText", ColorToJson(saved.closeButtonText)},
-        {"opacityKnobFill", ColorToJson(saved.opacityKnobFill)},
-        {"opacityKnobRing", ColorToJson(saved.opacityKnobRing)},
-        {"scrollbarBg", ColorToJson(saved.scrollbarBg)},
-        {"scrollbarGrab", ColorToJson(saved.scrollbarGrab)},
-        {"scrollbarGrabHover", ColorToJson(saved.scrollbarGrabHover)},
-        {"scrollbarGrabActive", ColorToJson(saved.scrollbarGrabActive)},
-        {"showScrollbars", saved.showScrollbars},
-        {"scrollbarSize", saved.scrollbarSize},
-        {"scrollbarRounding", saved.scrollbarRounding},
-        {"scrollbarPadding", saved.scrollbarPadding},
-        {"popupRounding", saved.popupRounding},
-        {"controlRounding", saved.controlRounding},
-    };
+    json result = SaveColorFields(saved);
+    result["name"] = saved.name;
+    return result;
 }
 
 json BindingToJson(const KeyBinding& b) {
@@ -213,44 +227,7 @@ void LoadAppearance(const json& root, AppConfig& config) {
     config.appearance.uiScale = 1.0f;
     config.appearance.customColors = a.value("customColors", config.appearance.customColors);
     config.appearance.customThemeName = a.value("customThemeName", config.appearance.customThemeName);
-    config.appearance.windowBg = ColorFromJson(a.value("windowBg", json::array()), config.appearance.windowBg);
-    config.appearance.panelBg = ColorFromJson(a.value("panelBg", json::array()), config.appearance.panelBg);
-    config.appearance.text = ColorFromJson(a.value("text", json::array()), config.appearance.text);
-    config.appearance.mutedText = ColorFromJson(a.value("mutedText", json::array()), config.appearance.mutedText);
-    config.appearance.accent = ColorFromJson(a.value("accent", json::array()), config.appearance.accent);
-    config.appearance.hover = ColorFromJson(a.value("hover", json::array()), config.appearance.hover);
-    config.appearance.selectedTab = ColorFromJson(a.value("selectedTab", json::array()), config.appearance.selectedTab);
-    config.appearance.buttonOff = ColorFromJson(a.value("buttonOff", json::array()), config.appearance.buttonOff);
-    config.appearance.buttonOn = ColorFromJson(a.value("buttonOn", json::array()), config.appearance.buttonOn);
-    config.appearance.closeButton = ColorFromJson(a.value("closeButton", json::array()), config.appearance.closeButton);
-    config.appearance.closeButtonHover =
-        ColorFromJson(a.value("closeButtonHover", json::array()), config.appearance.closeButtonHover);
-    config.appearance.closeButtonText =
-        ColorFromJson(a.value("closeButtonText", json::array()), config.appearance.closeButtonText);
-    config.appearance.opacityKnobFill =
-        ColorFromJson(a.value("opacityKnobFill", json::array()), config.appearance.opacityKnobFill);
-    config.appearance.opacityKnobRing =
-        ColorFromJson(a.value("opacityKnobRing", json::array()), config.appearance.opacityKnobRing);
-    config.appearance.scrollbarBg =
-        ColorFromJson(a.value("scrollbarBg", json::array()), config.appearance.scrollbarBg);
-    config.appearance.scrollbarGrab =
-        ColorFromJson(a.value("scrollbarGrab", json::array()), config.appearance.scrollbarGrab);
-    config.appearance.scrollbarGrabHover =
-        ColorFromJson(a.value("scrollbarGrabHover", json::array()), config.appearance.scrollbarGrabHover);
-    config.appearance.scrollbarGrabActive =
-        ColorFromJson(a.value("scrollbarGrabActive", json::array()), config.appearance.scrollbarGrabActive);
-    config.appearance.showScrollbars =
-        a.value("showScrollbars", config.appearance.showScrollbars);
-    config.appearance.scrollbarSize =
-        std::clamp(a.value("scrollbarSize", config.appearance.scrollbarSize), 0.0f, 24.0f);
-    config.appearance.scrollbarRounding =
-        std::clamp(a.value("scrollbarRounding", config.appearance.scrollbarRounding), 0.0f, 16.0f);
-    config.appearance.scrollbarPadding =
-        std::clamp(a.value("scrollbarPadding", config.appearance.scrollbarPadding), 0.0f, 8.0f);
-    config.appearance.popupRounding =
-        std::clamp(a.value("popupRounding", config.appearance.popupRounding), 0.0f, 18.0f);
-    config.appearance.controlRounding =
-        std::clamp(a.value("controlRounding", config.appearance.controlRounding), 0.0f, 12.0f);
+    LoadColorFields(config.appearance, a);
     config.appearance.savedThemes.clear();
     if (a.contains("savedThemes") && a["savedThemes"].is_array()) {
         for (const json& item : a["savedThemes"]) {
@@ -430,30 +407,6 @@ bool Save(const AppConfig& config) {
             {"uiScale", 1.0f},
             {"customColors", config.appearance.customColors},
             {"customThemeName", config.appearance.customThemeName},
-            {"windowBg", ColorToJson(config.appearance.windowBg)},
-            {"panelBg", ColorToJson(config.appearance.panelBg)},
-            {"text", ColorToJson(config.appearance.text)},
-            {"mutedText", ColorToJson(config.appearance.mutedText)},
-            {"accent", ColorToJson(config.appearance.accent)},
-            {"hover", ColorToJson(config.appearance.hover)},
-            {"selectedTab", ColorToJson(config.appearance.selectedTab)},
-            {"buttonOff", ColorToJson(config.appearance.buttonOff)},
-            {"buttonOn", ColorToJson(config.appearance.buttonOn)},
-            {"closeButton", ColorToJson(config.appearance.closeButton)},
-            {"closeButtonHover", ColorToJson(config.appearance.closeButtonHover)},
-            {"closeButtonText", ColorToJson(config.appearance.closeButtonText)},
-            {"opacityKnobFill", ColorToJson(config.appearance.opacityKnobFill)},
-            {"opacityKnobRing", ColorToJson(config.appearance.opacityKnobRing)},
-            {"scrollbarBg", ColorToJson(config.appearance.scrollbarBg)},
-            {"scrollbarGrab", ColorToJson(config.appearance.scrollbarGrab)},
-            {"scrollbarGrabHover", ColorToJson(config.appearance.scrollbarGrabHover)},
-            {"scrollbarGrabActive", ColorToJson(config.appearance.scrollbarGrabActive)},
-            {"showScrollbars", config.appearance.showScrollbars},
-            {"scrollbarSize", config.appearance.scrollbarSize},
-            {"scrollbarRounding", config.appearance.scrollbarRounding},
-            {"scrollbarPadding", config.appearance.scrollbarPadding},
-            {"popupRounding", config.appearance.popupRounding},
-            {"controlRounding", config.appearance.controlRounding},
             {"savedThemes", savedThemes},
         }},
         {"hotkeys", {
@@ -477,6 +430,7 @@ bool Save(const AppConfig& config) {
         {"autoCreateClipboardByProcess", config.autoCreateClipboardByProcess},
         {"clipboards", clipboards},
     };
+    root["appearance"].update(SaveColorFields(config.appearance));
 
     std::ofstream out(path);
     if (!out) return false;

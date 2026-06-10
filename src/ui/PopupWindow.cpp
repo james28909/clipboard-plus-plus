@@ -35,11 +35,6 @@ static constexpr int kPopupTitleButton = 22;
 static constexpr int kPopupTitleGap = 4;
 static constexpr int kPopupTitleHeight = kPopupTitlePad + kPopupTitleButton + 8;
 
-static float DpiScaleForWindow(HWND hwnd) {
-    UINT dpi = hwnd ? GetDpiForWindow(hwnd) : GetDpiForSystem();
-    return std::clamp(static_cast<float>(dpi) / 96.0f, 0.5f, 4.0f);
-}
-
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
 #define DWMWA_WINDOW_CORNER_PREFERENCE 33
 #endif
@@ -164,7 +159,7 @@ void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
     ImGui::SetCurrentContext(m_imguiCtx);
 
     m_appearance = settings;
-    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
+    m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
     ApplyThemeStyle(m_appearance, true);
     ImGui_ImplDX11_InvalidateDeviceObjects();
     RebuildFontAtlas(ImGui::GetIO(), m_appearance);
@@ -1416,7 +1411,7 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     case WM_GETMINMAXINFO: {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
-        const float dpiScale = DpiScaleForWindow(hwnd);
+        const float dpiScale = win32util::DpiScaleForWindow(hwnd);
         mmi->ptMinTrackSize = {
             static_cast<LONG>(std::lround(360.0f * dpiScale)),
             static_cast<LONG>(std::lround(260.0f * dpiScale))
@@ -1435,7 +1430,7 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     case WM_DPICHANGED:
         if (pw) {
-            pw->m_appearance.dpiScale = DpiScaleForWindow(hwnd);
+            pw->m_appearance.dpiScale = win32util::DpiScaleForWindow(hwnd);
             ApplyThemeStyle(pw->m_appearance, true);
             if (RECT* suggested = reinterpret_cast<RECT*>(lParam)) {
                 SetWindowPos(hwnd, HWND_TOPMOST,
