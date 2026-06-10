@@ -22,6 +22,9 @@ Makefile
 # User data (never commit encrypted personal clipboard data)
 *.enc
 
+# Third-party vendored libraries (managed separately)
+third_party/imgui/
+
 # OS
 Thumbs.db
 desktop.ini

@@ -1,6 +1,9 @@
 #include "HotkeyManager.h"
+
+#ifdef _WIN32
 #include "../app/Application.h"
 #include "../ui/PopupWindow.h"
+#endif
 
 #include <algorithm>
 #include <sstream>
@@ -8,6 +11,7 @@
 
 HotkeyManager* HotkeyManager::s_instance = nullptr;
 
+#ifdef _WIN32
 bool HotkeyManager::Install(HWND msgTarget) {
     m_msgTarget = msgTarget;
     ApplySettings(DefaultSettings());
@@ -22,6 +26,16 @@ void HotkeyManager::Uninstall() {
     if (m_mouseHook) { UnhookWindowsHookEx(m_mouseHook); m_mouseHook = nullptr; }
     if (s_instance == this) s_instance = nullptr;
 }
+#else
+bool HotkeyManager::Install(HWND) {
+    ApplySettings(DefaultSettings());
+    return false;
+}
+
+void HotkeyManager::Uninstall() {
+    if (s_instance == this) s_instance = nullptr;
+}
+#endif
 
 void HotkeyManager::SetBindings(std::vector<KeyBinding> bindings) {
     m_bindings = std::move(bindings);
@@ -37,9 +51,15 @@ void HotkeyManager::BeginCapture() {
     m_captureActive = true;
     m_captureReady = false;
     m_capturedBinding = {};
+#ifdef _WIN32
     m_ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     m_shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     m_altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+#else
+    m_ctrlDown = false;
+    m_shiftDown = false;
+    m_altDown = false;
+#endif
 }
 
 bool HotkeyManager::ConsumeCapturedBinding(KeyBinding& binding) {
@@ -56,6 +76,7 @@ std::vector<KeyBinding> HotkeyManager::DefaultBindings() {
         {true, true, false, 'I',          HotkeyAction::Incognito,       0}, // Ctrl+Shift+I
         {true, true, false, VK_OEM_COMMA, HotkeyAction::OpenSettings,    0}, // Ctrl+Shift+,
         {true, true, false, 'G',          HotkeyAction::LaunchClipboardWebSearch, 0}, // Ctrl+Shift+G
+        {false, true, true, 'D',          HotkeyAction::ToggleDebugWindow, 0}, // Alt+Shift+D
     };
 }
 
@@ -100,6 +121,7 @@ const char* HotkeyManager::ActionName(HotkeyAction action) {
     case HotkeyAction::SelectClipboardProfileSlot: return "Select clipboard";
     case HotkeyAction::LaunchWebSearch: return "Search web";
     case HotkeyAction::LaunchClipboardWebSearch: return "Search clipboard web";
+    case HotkeyAction::ToggleDebugWindow: return "Toggle debug output";
     default:                            return "Unassigned";
     }
 }
@@ -154,6 +176,7 @@ std::string HotkeyManager::BindingText(const KeyBinding& binding) {
     return text;
 }
 
+#ifdef _WIN32
 LRESULT CALLBACK HotkeyManager::LLProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && s_instance) {
         auto* kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
@@ -373,3 +396,26 @@ void HotkeyManager::ForwardKeyToPopup(UINT vk, bool shift) const {
     for (int i = 0; i < n; ++i)
         PostMessageW(hw, WM_CHAR, static_cast<WPARAM>(chars[i]), 0);
 }
+#else
+LRESULT CALLBACK HotkeyManager::LLProc(int, WPARAM, LPARAM) {
+    return 0;
+}
+
+LRESULT CALLBACK HotkeyManager::MouseLLProc(int, WPARAM, LPARAM) {
+    return 0;
+}
+
+void HotkeyManager::UpdateModifierState(UINT, bool) {}
+
+bool HotkeyManager::ConsumeActionPress(UINT) {
+    return true;
+}
+
+void HotkeyManager::ReleaseActionPress(UINT) {}
+
+bool HotkeyManager::HandleKeyDown(UINT, bool, bool, bool) {
+    return false;
+}
+
+void HotkeyManager::ForwardKeyToPopup(UINT, bool) const {}
+#endif

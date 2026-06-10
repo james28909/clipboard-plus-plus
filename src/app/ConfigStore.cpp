@@ -1,11 +1,14 @@
 #include "ConfigStore.h"
 
 #include <json.hpp>
+#ifdef _WIN32
 #include <shlobj.h>
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +21,7 @@ using json = nlohmann::json;
 namespace {
 
 std::filesystem::path ResolveConfigPath() {
+#ifdef _WIN32
     PWSTR roaming = nullptr;
     std::filesystem::path base;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &roaming))) {
@@ -29,6 +33,17 @@ std::filesystem::path ResolveConfigPath() {
         base = n > 0 ? std::filesystem::path(buf) : std::filesystem::current_path();
     }
     return base / "Clipboard++" / "config.json";
+#else
+    const char* configHome = std::getenv("XDG_CONFIG_HOME");
+    if (configHome && configHome[0] != '\0')
+        return std::filesystem::path(configHome) / "clipboardpp" / "config.json";
+
+    const char* home = std::getenv("HOME");
+    std::filesystem::path base = home && home[0] != '\0'
+        ? std::filesystem::path(home) / ".config"
+        : std::filesystem::current_path();
+    return base / "clipboardpp" / "config.json";
+#endif
 }
 
 int ThemeToInt(ThemeId theme) {
@@ -66,10 +81,17 @@ SavedAppearanceTheme SavedThemeFromJson(const json& item) {
     saved.text = ColorFromJson(item.value("text", json::array()), saved.text);
     saved.mutedText = ColorFromJson(item.value("mutedText", json::array()), saved.mutedText);
     saved.accent = ColorFromJson(item.value("accent", json::array()), saved.accent);
+    saved.hover = ColorFromJson(item.value("hover", json::array()), saved.hover);
+    saved.selectedTab = ColorFromJson(item.value("selectedTab", json::array()), saved.selectedTab);
     saved.buttonOff = ColorFromJson(item.value("buttonOff", json::array()), saved.buttonOff);
     saved.buttonOn = ColorFromJson(item.value("buttonOn", json::array()), saved.buttonOn);
+    saved.closeButton = ColorFromJson(item.value("closeButton", json::array()), saved.closeButton);
+    saved.closeButtonHover = ColorFromJson(item.value("closeButtonHover", json::array()), saved.closeButtonHover);
+    saved.closeButtonText = ColorFromJson(item.value("closeButtonText", json::array()), saved.closeButtonText);
     saved.opacityKnobFill = ColorFromJson(item.value("opacityKnobFill", json::array()), saved.opacityKnobFill);
     saved.opacityKnobRing = ColorFromJson(item.value("opacityKnobRing", json::array()), saved.opacityKnobRing);
+    saved.popupRounding = std::clamp(item.value("popupRounding", saved.popupRounding), 0.0f, 18.0f);
+    saved.controlRounding = std::clamp(item.value("controlRounding", saved.controlRounding), 0.0f, 12.0f);
     return saved;
 }
 
@@ -81,10 +103,17 @@ json SavedThemeToJson(const SavedAppearanceTheme& saved) {
         {"text", ColorToJson(saved.text)},
         {"mutedText", ColorToJson(saved.mutedText)},
         {"accent", ColorToJson(saved.accent)},
+        {"hover", ColorToJson(saved.hover)},
+        {"selectedTab", ColorToJson(saved.selectedTab)},
         {"buttonOff", ColorToJson(saved.buttonOff)},
         {"buttonOn", ColorToJson(saved.buttonOn)},
+        {"closeButton", ColorToJson(saved.closeButton)},
+        {"closeButtonHover", ColorToJson(saved.closeButtonHover)},
+        {"closeButtonText", ColorToJson(saved.closeButtonText)},
         {"opacityKnobFill", ColorToJson(saved.opacityKnobFill)},
         {"opacityKnobRing", ColorToJson(saved.opacityKnobRing)},
+        {"popupRounding", saved.popupRounding},
+        {"controlRounding", saved.controlRounding},
     };
 }
 
@@ -143,10 +172,13 @@ void LoadAppearance(const json& root, AppConfig& config) {
     const json& a = root.value("appearance", json::object());
     config.appearance.theme = ThemeFromInt(a.value("theme", ThemeToInt(config.appearance.theme)));
     config.appearance.popupOpacity = std::clamp(a.value("popupOpacity", config.appearance.popupOpacity), 0.1f, 1.0f);
+    config.appearance.popupOutlineStrength =
+        std::clamp(a.value("popupOutlineStrength", config.appearance.popupOutlineStrength), 0.0f, 1.0f);
     config.appearance.popupWidth = std::max(360, a.value("popupWidth", config.appearance.popupWidth));
     config.appearance.popupHeight = std::max(260, a.value("popupHeight", config.appearance.popupHeight));
     config.appearance.fontPath = a.value("fontPath", config.appearance.fontPath);
     config.appearance.fontSize = std::clamp(a.value("fontSize", config.appearance.fontSize), 9.0f, 32.0f);
+    config.appearance.uiScale = std::clamp(a.value("uiScale", config.appearance.uiScale), 0.75f, 2.0f);
     config.appearance.customColors = a.value("customColors", config.appearance.customColors);
     config.appearance.customThemeName = a.value("customThemeName", config.appearance.customThemeName);
     config.appearance.windowBg = ColorFromJson(a.value("windowBg", json::array()), config.appearance.windowBg);
@@ -154,12 +186,23 @@ void LoadAppearance(const json& root, AppConfig& config) {
     config.appearance.text = ColorFromJson(a.value("text", json::array()), config.appearance.text);
     config.appearance.mutedText = ColorFromJson(a.value("mutedText", json::array()), config.appearance.mutedText);
     config.appearance.accent = ColorFromJson(a.value("accent", json::array()), config.appearance.accent);
+    config.appearance.hover = ColorFromJson(a.value("hover", json::array()), config.appearance.hover);
+    config.appearance.selectedTab = ColorFromJson(a.value("selectedTab", json::array()), config.appearance.selectedTab);
     config.appearance.buttonOff = ColorFromJson(a.value("buttonOff", json::array()), config.appearance.buttonOff);
     config.appearance.buttonOn = ColorFromJson(a.value("buttonOn", json::array()), config.appearance.buttonOn);
+    config.appearance.closeButton = ColorFromJson(a.value("closeButton", json::array()), config.appearance.closeButton);
+    config.appearance.closeButtonHover =
+        ColorFromJson(a.value("closeButtonHover", json::array()), config.appearance.closeButtonHover);
+    config.appearance.closeButtonText =
+        ColorFromJson(a.value("closeButtonText", json::array()), config.appearance.closeButtonText);
     config.appearance.opacityKnobFill =
         ColorFromJson(a.value("opacityKnobFill", json::array()), config.appearance.opacityKnobFill);
     config.appearance.opacityKnobRing =
         ColorFromJson(a.value("opacityKnobRing", json::array()), config.appearance.opacityKnobRing);
+    config.appearance.popupRounding =
+        std::clamp(a.value("popupRounding", config.appearance.popupRounding), 0.0f, 18.0f);
+    config.appearance.controlRounding =
+        std::clamp(a.value("controlRounding", config.appearance.controlRounding), 0.0f, 12.0f);
     config.appearance.savedThemes.clear();
     if (a.contains("savedThemes") && a["savedThemes"].is_array()) {
         for (const json& item : a["savedThemes"]) {
@@ -205,7 +248,11 @@ void LoadDeveloper(const json& root, AppConfig& config) {
 ClipboardProfileConfig DefaultClipboardProfile() {
     std::time_t t = std::time(nullptr);
     std::tm tm{};
+#ifdef _WIN32
     localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
     std::ostringstream ts;
     ts << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
     return {
@@ -318,10 +365,12 @@ bool Save(const AppConfig& config) {
         {"appearance", {
             {"theme", ThemeToInt(config.appearance.theme)},
             {"popupOpacity", config.appearance.popupOpacity},
+            {"popupOutlineStrength", config.appearance.popupOutlineStrength},
             {"popupWidth", config.appearance.popupWidth},
             {"popupHeight", config.appearance.popupHeight},
             {"fontPath", config.appearance.fontPath},
             {"fontSize", config.appearance.fontSize},
+            {"uiScale", config.appearance.uiScale},
             {"customColors", config.appearance.customColors},
             {"customThemeName", config.appearance.customThemeName},
             {"windowBg", ColorToJson(config.appearance.windowBg)},
@@ -329,10 +378,17 @@ bool Save(const AppConfig& config) {
             {"text", ColorToJson(config.appearance.text)},
             {"mutedText", ColorToJson(config.appearance.mutedText)},
             {"accent", ColorToJson(config.appearance.accent)},
+            {"hover", ColorToJson(config.appearance.hover)},
+            {"selectedTab", ColorToJson(config.appearance.selectedTab)},
             {"buttonOff", ColorToJson(config.appearance.buttonOff)},
             {"buttonOn", ColorToJson(config.appearance.buttonOn)},
+            {"closeButton", ColorToJson(config.appearance.closeButton)},
+            {"closeButtonHover", ColorToJson(config.appearance.closeButtonHover)},
+            {"closeButtonText", ColorToJson(config.appearance.closeButtonText)},
             {"opacityKnobFill", ColorToJson(config.appearance.opacityKnobFill)},
             {"opacityKnobRing", ColorToJson(config.appearance.opacityKnobRing)},
+            {"popupRounding", config.appearance.popupRounding},
+            {"controlRounding", config.appearance.controlRounding},
             {"savedThemes", savedThemes},
         }},
         {"hotkeys", {
@@ -392,7 +448,7 @@ std::filesystem::path ImportFontFile(const std::filesystem::path& source) {
 
     std::filesystem::path rel;
     rel = std::filesystem::relative(src, destDir, ec);
-    if (!ec && !rel.empty() && rel.native().find(L"..") != 0)
+    if (!ec && !rel.empty() && *rel.begin() != "..")
         return src;
 
     std::filesystem::path dest = UniqueDestination(destDir, src.filename());

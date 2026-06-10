@@ -12,6 +12,8 @@
 class TrayIcon;
 class ClipboardMonitor;
 class PopupWindow;
+class TrayPopupWindow;
+class DebugWindow;
 enum class HotkeyAction : WPARAM;
 
 // Message IDs used across the app
@@ -20,6 +22,7 @@ constexpr UINT WM_SHOWCPP_MAIN = WM_APP + 2;
 constexpr UINT WM_SHOWPOPUP    = WM_APP + 3;
 constexpr UINT WM_HOTKEYACTION = WM_APP + 4;
 constexpr UINT WM_RELOAD_CONFIG = WM_APP + 5;
+constexpr UINT WM_SHOWTRAYPOPUP = WM_APP + 6;
 
 constexpr ULONG_PTR CD_CLIPBOARD_TEXT = 0x43505031; // "CPP1"
 
@@ -39,6 +42,9 @@ public:
     void OpenSettingsWindow();
     void HideMainWindow();
     void ShowPopup();
+    void ShowTrayPopup();
+    void ToggleDebugWindow();
+    void LogDebug(const std::string& event);
 
     static Application* Get()  { return s_instance; }
     HWND GetHwnd()             const { return m_hwnd; }
@@ -47,10 +53,12 @@ public:
     ClipboardHistory*    GetHistory() const { return m_history; }
     ClipboardMonitor*    GetMonitor() const { return m_monitor.get(); }
     PopupWindow*         GetPopup()   const { return m_popup.get(); }
+    TrayIcon*            GetTray()    const { return m_tray.get(); }
     HotkeyManager*       GetHotkeys() const { return m_hotkeys.get(); }
     const AppearanceSettings& GetAppearance() const { return m_appearance; }
     void RequestAppearance(const AppearanceSettings& settings);
     void SetPopupOpacity(float opacity);
+    void SetPopupOutlineStrength(float strength);
     const HotkeySettings& GetHotkeySettings() const { return m_hotkeySettings; }
     void RequestHotkeySettings(const HotkeySettings& settings);
     const DeveloperSettings& GetDeveloperSettings() const { return m_config.developer; }
@@ -82,6 +90,8 @@ public:
     std::string ExecutablePath() const;
     std::string WorkingDirectory() const;
     DWORD ProcessId() const { return GetCurrentProcessId(); }
+    SIZE PopupCurrentSize() const;
+    void UseCurrentPopupSizeAsDefault();
     void SyncClipboardForForegroundProcess();
     void SyncClipboardForWindow(HWND hwnd);
 
@@ -97,6 +107,7 @@ private:
     void RebuildClipboardHistories();
     void SaveClipboardHistory(const std::string& profileId);
     void SaveActiveClipboardHistory();
+    void ResizeMainWindowForScale(float oldScale, float newScale);
     void SwitchClipboardForProcess(const std::string& processName);
     ClipboardProfileConfig* FindClipboardForProcess(const std::string& processName);
     void CreateClipboardForProcess(const std::string& processName);
@@ -124,6 +135,8 @@ private:
     std::string m_manualClipboardProcessOverride;
     std::unique_ptr<ClipboardMonitor> m_monitor;
     std::unique_ptr<PopupWindow>      m_popup;
+    std::unique_ptr<TrayPopupWindow>  m_trayPopup;
+    std::unique_ptr<DebugWindow>      m_debugWindow;
     std::unique_ptr<HotkeyManager>    m_hotkeys;
 
     bool m_running{false};

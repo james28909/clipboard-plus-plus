@@ -2,6 +2,8 @@
 #include "TrayIcon.h"
 #include "../ui/MainWindow.h"
 #include "../ui/PopupWindow.h"
+#include "../ui/TrayPopupWindow.h"
+#include "../ui/DebugWindow.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardHistoryStore.h"
 #include "../clipboard/ClipboardMonitor.h"
@@ -18,6 +20,7 @@
 #include <dwmapi.h>
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <ctime>
 #include <cstring>
@@ -68,6 +71,10 @@ std::string Hex32(uint32_t value) {
     return out.str();
 }
 
+int ScaledPx(float value, const AppearanceSettings& appearance) {
+    return static_cast<int>(std::lround(value * EffectiveUiScale(appearance)));
+}
+
 } // namespace
 
 // -- Construction / destruction ------------------------------------------------
@@ -106,6 +113,7 @@ int Application::Run() {
 }
 
 void Application::ShowMainWindow() {
+    LogDebug("ShowMainWindow: requested");
     ClearMainInputState();
     m_mainVisible = true;
     MainWindow::RequestFocus();
@@ -131,28 +139,86 @@ void Application::OpenSettingsWindow() {
 }
 
 void Application::HideMainWindow() {
+    LogDebug("HideMainWindow: requested");
     ClearMainInputState();
     m_mainVisible = false;
     ShowWindow(m_hwnd, SW_HIDE);
 }
 
 void Application::ShowPopup() {
+    LogDebug("ShowPopup: requested");
     SyncClipboardForForegroundProcess();
     if (m_popup) m_popup->Show();
 }
 
+void Application::ShowTrayPopup() {
+    if (m_trayPopup)
+        m_trayPopup->ShowAtCursor();
+}
+
+void Application::ToggleDebugWindow() {
+    if (!m_debugWindow)
+        return;
+
+    m_debugWindow->Toggle();
+    LogDebug(std::string("debug window ") +
+             (m_debugWindow->IsVisible() ? "shown" : "hidden"));
+}
+
+void Application::LogDebug(const std::string& event) {
+    std::string line = NowIsoLocal();
+    line += "  ";
+    line += event;
+    line += "\n";
+    OutputDebugStringA(line.c_str());
+    if (m_debugWindow)
+        m_debugWindow->AddLine(line);
+}
+
 void Application::RequestAppearance(const AppearanceSettings& settings) {
+    const float oldScale = EffectiveUiScale(m_appearance);
+    {
+        std::ostringstream out;
+        out << "RequestAppearance: begin"
+            << " fontPath=\"" << settings.fontPath << "\""
+            << " fontSize=" << settings.fontSize
+            << " uiScale=" << settings.uiScale
+            << " oldEffectiveScale=" << oldScale;
+        LogDebug(out.str());
+    }
     m_appearance = settings;
     std::filesystem::path imported = ConfigStore::ImportFontFile(m_appearance.fontPath);
-    if (!imported.empty())
+    if (!imported.empty()) {
+        LogDebug("RequestAppearance: imported font to \"" + imported.u8string() + "\"");
         m_appearance.fontPath = imported.u8string();
+    }
+    const float newScale = EffectiveUiScale(m_appearance);
+    if (std::fabs(newScale - oldScale) > 0.001f)
+        ResizeMainWindowForScale(oldScale, newScale);
+    m_config.appearance = m_appearance;
+    m_appearanceDirty = true;
+    SaveConfig();
+    {
+        std::ostringstream out;
+        out << "RequestAppearance: queued apply"
+            << " fontPath=\"" << m_appearance.fontPath << "\""
+            << " fontSize=" << m_appearance.fontSize
+            << " newEffectiveScale=" << newScale;
+        LogDebug(out.str());
+    }
+}
+
+void Application::SetPopupOpacity(float opacity) {
+    m_appearance.popupOpacity = std::clamp(opacity, 0.1f, 1.0f);
+    LogDebug("SetPopupOpacity: " + std::to_string(m_appearance.popupOpacity));
     m_config.appearance = m_appearance;
     m_appearanceDirty = true;
     SaveConfig();
 }
 
-void Application::SetPopupOpacity(float opacity) {
-    m_appearance.popupOpacity = std::clamp(opacity, 0.1f, 1.0f);
+void Application::SetPopupOutlineStrength(float strength) {
+    m_appearance.popupOutlineStrength = std::clamp(strength, 0.0f, 1.0f);
+    LogDebug("SetPopupOutlineStrength: " + std::to_string(m_appearance.popupOutlineStrength));
     m_config.appearance = m_appearance;
     m_appearanceDirty = true;
     SaveConfig();
@@ -167,14 +233,24 @@ void Application::RequestHotkeySettings(const HotkeySettings& settings) {
 }
 
 void Application::SetDeveloperSettings(const DeveloperSettings& settings) {
+#ifdef NDEBUG
+    (void)settings;
+    return;
+#else
     const bool logWasEnabled = m_config.developer.eventLogEnabled;
     m_config.developer = settings;
     SaveConfig();
     if (!logWasEnabled && settings.eventLogEnabled)
         AddDeveloperEvent("developer event log enabled");
+#endif
 }
 
 void Application::AddDeveloperEvent(const std::string& event) {
+    LogDebug("DeveloperEvent: " + event);
+#ifdef NDEBUG
+    (void)event;
+    return;
+#else
     if (!m_config.developer.eventLogEnabled)
         return;
 
@@ -186,6 +262,7 @@ void Application::AddDeveloperEvent(const std::string& event) {
         m_developerEvents.erase(m_developerEvents.begin(),
                                 m_developerEvents.begin() +
                                     static_cast<std::ptrdiff_t>(m_developerEvents.size() - 300));
+#endif
 }
 
 void Application::SetNewItemsAtTop(bool value) {
@@ -320,6 +397,9 @@ bool Application::DeleteActiveClipboardProfile() {
 }
 
 void Application::CreateClipboardFromForegroundProcess() {
+#ifdef NDEBUG
+    return;
+#else
     const std::string process = ForegroundProcessName();
     if (process.empty())
         return;
@@ -330,9 +410,13 @@ void Application::CreateClipboardFromForegroundProcess() {
     }
 
     CreateClipboardProfile(process, process);
+#endif
 }
 
 void Application::BindActiveClipboardToForegroundProcess() {
+#ifdef NDEBUG
+    return;
+#else
     const std::string process = ForegroundProcessName();
     if (process.empty())
         return;
@@ -346,18 +430,33 @@ void Application::BindActiveClipboardToForegroundProcess() {
             return;
         }
     }
+#endif
 }
 
 void Application::SetAutoSwitchClipboardByProcess(bool value) {
+#ifdef NDEBUG
+    (void)value;
+    m_config.autoSwitchClipboardByProcess = false;
+    SaveConfig();
+    return;
+#else
     m_config.autoSwitchClipboardByProcess = value;
     SaveConfig();
     AddDeveloperEvent(std::string("auto-switch clipboard by process: ") + (value ? "on" : "off"));
+#endif
 }
 
 void Application::SetAutoCreateClipboardByProcess(bool value) {
+#ifdef NDEBUG
+    (void)value;
+    m_config.autoCreateClipboardByProcess = false;
+    SaveConfig();
+    return;
+#else
     m_config.autoCreateClipboardByProcess = value;
     SaveConfig();
     AddDeveloperEvent(std::string("auto-create clipboard by process: ") + (value ? "on" : "off"));
+#endif
 }
 
 void Application::SaveConfig() {
@@ -375,6 +474,45 @@ void Application::SaveClipboardHistory(const std::string& profileId) {
 
 void Application::SaveActiveClipboardHistory() {
     SaveClipboardHistory(m_config.activeClipboardId);
+}
+
+void Application::ResizeMainWindowForScale(float oldScale, float newScale) {
+    if (!m_hwnd || oldScale <= 0.0f || newScale <= 0.0f)
+        return;
+    if (IsIconic(m_hwnd) || IsZoomed(m_hwnd))
+        return;
+
+    RECT rc{};
+    if (!GetWindowRect(m_hwnd, &rc))
+        return;
+
+    const float ratio = newScale / oldScale;
+    int width = std::max(ScaledPx(800.0f, m_appearance),
+                         static_cast<int>(std::lround((rc.right - rc.left) * ratio)));
+    int height = std::max(ScaledPx(500.0f, m_appearance),
+                          static_cast<int>(std::lround((rc.bottom - rc.top) * ratio)));
+
+    HMONITOR mon = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{sizeof(MONITORINFO)};
+    if (GetMonitorInfoW(mon, &mi)) {
+        width = std::min(width, static_cast<int>(mi.rcWork.right - mi.rcWork.left));
+        height = std::min(height, static_cast<int>(mi.rcWork.bottom - mi.rcWork.top));
+    }
+
+    const int centerX = rc.left + (rc.right - rc.left) / 2;
+    const int centerY = rc.top + (rc.bottom - rc.top) / 2;
+    int x = centerX - width / 2;
+    int y = centerY - height / 2;
+
+    if (GetMonitorInfoW(mon, &mi)) {
+        x = std::clamp(x, static_cast<int>(mi.rcWork.left),
+                       static_cast<int>(mi.rcWork.right) - width);
+        y = std::clamp(y, static_cast<int>(mi.rcWork.top),
+                       static_cast<int>(mi.rcWork.bottom) - height);
+    }
+
+    SetWindowPos(m_hwnd, nullptr, x, y, width, height,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 
 void Application::ApplyLoadedConfig(const AppConfig& config) {
@@ -413,11 +551,39 @@ std::string Application::WorkingDirectory() const {
     return win32util::CurrentDirectory();
 }
 
+SIZE Application::PopupCurrentSize() const {
+    if (m_popup)
+        return m_popup->GetCurrentSize();
+    return {m_appearance.popupWidth, m_appearance.popupHeight};
+}
+
+void Application::UseCurrentPopupSizeAsDefault() {
+    SIZE size = PopupCurrentSize();
+    size.cx = std::max<LONG>(360, size.cx);
+    size.cy = std::max<LONG>(260, size.cy);
+
+    m_appearance.popupWidth = static_cast<int>(size.cx);
+    m_appearance.popupHeight = static_cast<int>(size.cy);
+    m_config.appearance = m_appearance;
+    SaveConfig();
+    AddDeveloperEvent("saved popup size as default: " +
+                      std::to_string(m_appearance.popupWidth) + "x" +
+                      std::to_string(m_appearance.popupHeight));
+}
+
 void Application::SyncClipboardForForegroundProcess() {
+#ifdef NDEBUG
+    return;
+#else
     SwitchClipboardForProcess(ForegroundProcessName());
+#endif
 }
 
 void Application::SyncClipboardForWindow(HWND hwnd) {
+#ifdef NDEBUG
+    (void)hwnd;
+    return;
+#else
     if (!hwnd || hwnd == m_hwnd)
         return;
     if (m_popup && hwnd == m_popup->GetHwnd())
@@ -429,6 +595,7 @@ void Application::SyncClipboardForWindow(HWND hwnd) {
 
     m_lastForegroundProcess = process;
     SwitchClipboardForProcess(process);
+#endif
 }
 
 void Application::RebuildClipboardHistories() {
@@ -482,6 +649,10 @@ void Application::CreateClipboardForProcess(const std::string& processName) {
 }
 
 void Application::SwitchClipboardForProcess(const std::string& processName) {
+#ifdef NDEBUG
+    (void)processName;
+    return;
+#else
     if (!m_config.autoSwitchClipboardByProcess || processName.empty())
         return;
 
@@ -503,6 +674,7 @@ void Application::SwitchClipboardForProcess(const std::string& processName) {
     m_config.activeClipboardId = profile->id;
     m_history = HistoryForActiveClipboard();
     SaveConfig();
+#endif
 }
 
 bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
@@ -580,7 +752,7 @@ bool Application::Init() {
         L"Clipboard++",
         WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        1200, 750,
+        ScaledPx(1200.0f, m_appearance), ScaledPx(750.0f, m_appearance),
         nullptr, nullptr, m_hInstance, nullptr
     );
 
@@ -642,6 +814,17 @@ bool Application::Init() {
     m_popup->SetAppendNewlineAfterPaste(m_config.appendNewlineAfterPaste);
     m_popup->SetPasteMoveTarget(GetPasteMoveTarget());
 
+    m_trayPopup = std::make_unique<TrayPopupWindow>();
+    if (!m_trayPopup->Create(m_hInstance, m_d3dDevice, m_d3dContext))
+        return false;
+    m_trayPopup->ApplyAppearance(m_appearance);
+
+    m_debugWindow = std::make_unique<DebugWindow>();
+    if (!m_debugWindow->Create(m_hInstance, m_d3dDevice, m_d3dContext))
+        return false;
+    m_debugWindow->ApplyAppearance(m_appearance);
+    LogDebug("debug window initialized; toggle with Alt+Shift+D");
+
     m_hotkeys = std::make_unique<HotkeyManager>();
     m_hotkeys->Install(m_hwnd);
     m_hotkeys->ApplySettings(m_hotkeySettings);
@@ -655,6 +838,8 @@ bool Application::Init() {
 
 void Application::Shutdown() {
     if (m_hotkeys) m_hotkeys->Uninstall();
+    if (m_debugWindow) m_debugWindow->Destroy();
+    if (m_trayPopup) m_trayPopup->Destroy();
     if (m_popup)   m_popup->Destroy();
     if (m_monitor) m_monitor->Stop();
     if (m_tray)    m_tray->Destroy();
@@ -697,12 +882,16 @@ void Application::RenderFrame() {
 
     // Popup has its own context + swap chain - rendered separately
     if (m_popup) m_popup->Render();
+    if (m_trayPopup) m_trayPopup->Render();
+    if (m_debugWindow) m_debugWindow->Render();
 }
 
 bool Application::HasRenderableUi() const {
     const bool mainRenderable = m_mainVisible && m_hwnd && !IsIconic(m_hwnd);
     const bool popupRenderable = m_popup && m_popup->IsVisible();
-    return mainRenderable || popupRenderable;
+    const bool trayRenderable = m_trayPopup && m_trayPopup->IsVisible();
+    const bool debugRenderable = m_debugWindow && m_debugWindow->IsVisible();
+    return mainRenderable || popupRenderable || trayRenderable || debugRenderable;
 }
 
 void Application::ApplyAppearanceNow() {
@@ -711,11 +900,26 @@ void Application::ApplyAppearanceNow() {
     ImGuiContext* prevCtx = ImGui::GetCurrentContext();
     ApplyThemeStyle(m_appearance, false);
     ImGui_ImplDX11_InvalidateDeviceObjects();
-    RebuildFontAtlas(ImGui::GetIO(), m_appearance);
+    const bool mainFontOk = RebuildFontAtlas(ImGui::GetIO(), m_appearance);
     ImGui_ImplDX11_CreateDeviceObjects();
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        std::ostringstream out;
+        out << "ApplyAppearanceNow: main font rebuild"
+            << " ok=" << (mainFontOk ? "true" : "false")
+            << " fonts=" << io.Fonts->Fonts.Size
+            << " requestedSize=" << m_appearance.fontSize
+            << " globalScale=" << io.FontGlobalScale
+            << " fontPath=\"" << m_appearance.fontPath << "\"";
+        LogDebug(out.str());
+    }
 
     if (m_popup)
         m_popup->ApplyAppearance(m_appearance);
+    if (m_trayPopup)
+        m_trayPopup->ApplyAppearance(m_appearance);
+    if (m_debugWindow)
+        m_debugWindow->ApplyAppearance(m_appearance);
     ImGui::SetCurrentContext(prevCtx);
 }
 
@@ -821,9 +1025,11 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         GetClientRect(hwnd, &rc);
 
         const bool maximized = IsZoomed(hwnd) != 0;
-        const int  border    = maximized ? 0 : 8;
-        const int  titleH    = MainWindow::kTitleBarHeight;
-        const int  btnZoneX  = rc.right - MainWindow::kTitleBtnWidth * 3;
+        const int  border    = maximized ? 0 : ScaledPx(8.0f, app ? app->m_appearance : AppearanceSettings{});
+        const int  titleH    = ScaledPx(static_cast<float>(MainWindow::kTitleBarHeight),
+                                        app ? app->m_appearance : AppearanceSettings{});
+        const int  btnZoneX  = rc.right - ScaledPx(static_cast<float>(MainWindow::kTitleBtnWidth) * 3.0f,
+                                                   app ? app->m_appearance : AppearanceSettings{});
 
         if (!maximized) {
             const bool onL = pt.x < border;
@@ -851,7 +1057,8 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     // -- Enforce a minimum window size ----------------------------------------
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
-        mmi->ptMinTrackSize = {800, 500};
+        const AppearanceSettings appearance = app ? app->m_appearance : AppearanceSettings{};
+        mmi->ptMinTrackSize = {ScaledPx(800.0f, appearance), ScaledPx(500.0f, appearance)};
         return 0;
     }
 
@@ -902,6 +1109,10 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     case WM_SHOWPOPUP:
         if (app) app->ShowPopup();
+        return 0;
+
+    case WM_SHOWTRAYPOPUP:
+        if (app) app->ShowTrayPopup();
         return 0;
 
     case WM_RELOAD_CONFIG:
@@ -965,6 +1176,9 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case HotkeyAction::LaunchClipboardWebSearch:
             if (app->m_popup)
                 app->m_popup->LaunchClipboardWebSearch();
+            break;
+        case HotkeyAction::ToggleDebugWindow:
+            app->ToggleDebugWindow();
             break;
         case HotkeyAction::PasteVisibleSlot:
             if (app->m_popup)

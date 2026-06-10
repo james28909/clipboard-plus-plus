@@ -9,7 +9,9 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -25,14 +27,23 @@ enum Section {
     SEC_APPEARANCE = 2,
     SEC_HISTORY    = 3,
     SEC_PRIVACY    = 4,
+#ifndef NDEBUG
     SEC_DEVELOPER  = 5,
     SEC_ABOUT      = 6,
+#else
+    SEC_ABOUT      = 5,
+#endif
     SEC_COUNT
 };
 
 static const char* kSectionLabels[SEC_COUNT] = {
+#ifndef NDEBUG
     "General", "Hotkeys", "Appearance", "History",
     "Privacy", "Developer", "About",
+#else
+    "General", "Hotkeys", "Appearance", "History",
+    "Privacy", "About",
+#endif
 };
 
 static int s_activeSection = SEC_GENERAL;
@@ -100,6 +111,43 @@ static std::string TagList(uint32_t tags) {
     return out.empty() ? "(unknown)" : out;
 }
 
+static std::string TrimAscii(std::string value) {
+    auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
+    while (!value.empty() && isSpace(static_cast<unsigned char>(value.front())))
+        value.erase(value.begin());
+    while (!value.empty() && isSpace(static_cast<unsigned char>(value.back())))
+        value.pop_back();
+    return value;
+}
+
+static bool EqualsIgnoreCase(std::string a, std::string b) {
+    auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
+    std::transform(a.begin(), a.end(), a.begin(), lower);
+    std::transform(b.begin(), b.end(), b.begin(), lower);
+    return a == b;
+}
+
+static bool IsBuiltInThemeName(const std::string& name) {
+    for (int i = 0; i < static_cast<int>(ThemeId::Count); ++i) {
+        if (EqualsIgnoreCase(name, ThemeName(static_cast<ThemeId>(i))))
+            return true;
+    }
+    return false;
+}
+
+static float UiScale() {
+    Application* app = Application::Get();
+    return app ? EffectiveUiScale(app->GetAppearance()) : 1.0f;
+}
+
+static float S(float value) {
+    return value * UiScale();
+}
+
+static void KeepMouseWheelOnLastItem() {
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+}
+
 // -- Title bar helpers ---------------------------------------------------------
 
 // Draws a single title bar button. Handles hover highlight and click detection.
@@ -125,8 +173,8 @@ static bool TitleBtn(const char* id, float x, float w, float h, bool isClose) {
 
 void MainWindow::DrawTitleBar() {
     const float W = ImGui::GetWindowWidth();
-    const float H = (float)kTitleBarHeight;
-    const float BW = (float)kTitleBtnWidth;
+    const float H = S((float)kTitleBarHeight);
+    const float BW = S((float)kTitleBtnWidth);
 
     ImVec2      wp = ImGui::GetWindowPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -141,7 +189,7 @@ void MainWindow::DrawTitleBar() {
 
     // -- App title text (left-aligned, vertically centred) --------------------
     float textY = (H - ImGui::GetTextLineHeight()) * 0.5f;
-    ImGui::SetCursorPos({12.0f, textY});
+    ImGui::SetCursorPos({S(12.0f), textY});
     ImGui::PushStyleColor(ImGuiCol_Text, titleText);
     ImGui::TextUnformatted("Clipboard++");
     ImGui::PopStyleColor();
@@ -157,8 +205,8 @@ void MainWindow::DrawTitleBar() {
     }
     {   // icon: horizontal bar centred in the button
         ImVec2 c = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f + 1.0f};
-        dl->AddLine({c.x - 5.0f, c.y}, {c.x + 5.0f, c.y},
-                    titleMuted, 1.5f);
+        dl->AddLine({c.x - S(5.0f), c.y}, {c.x + S(5.0f), c.y},
+                    titleMuted, S(1.5f));
     }
     bx += BW;
 
@@ -169,17 +217,17 @@ void MainWindow::DrawTitleBar() {
         ImVec2 c = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f};
         if (isMax) {
             // Restore: two overlapping squares (back then front)
-            dl->AddRect({c.x - 2.0f, c.y - 5.0f}, {c.x + 5.0f, c.y + 2.0f},
-                        titleMuted, 0, 0, 1.2f);
+            dl->AddRect({c.x - S(2.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(2.0f)},
+                        titleMuted, 0, 0, S(1.2f));
             // Erase overlap area so back square doesn't bleed through front
-            dl->AddRectFilled({c.x - 5.0f, c.y - 2.0f}, {c.x + 1.0f, c.y + 5.0f},
+            dl->AddRectFilled({c.x - S(5.0f), c.y - S(2.0f)}, {c.x + S(1.0f), c.y + S(5.0f)},
                               titleBg);
-            dl->AddRect({c.x - 5.0f, c.y - 2.0f}, {c.x + 2.0f, c.y + 5.0f},
-                        titleMuted, 0, 0, 1.2f);
+            dl->AddRect({c.x - S(5.0f), c.y - S(2.0f)}, {c.x + S(2.0f), c.y + S(5.0f)},
+                        titleMuted, 0, 0, S(1.2f));
         } else {
             // Maximize: single square
-            dl->AddRect({c.x - 5.0f, c.y - 5.0f}, {c.x + 5.0f, c.y + 5.0f},
-                        titleMuted, 0, 0, 1.2f);
+            dl->AddRect({c.x - S(5.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(5.0f)},
+                        titleMuted, 0, 0, S(1.2f));
         }
     }
     bx += BW;
@@ -192,8 +240,8 @@ void MainWindow::DrawTitleBar() {
         bool hov    = ImGui::IsMouseHoveringRect({wp.x + bx, wp.y},
                                                   {wp.x + bx + BW, wp.y + H});
         ImU32 xcol  = hov ? IM_COL32(255, 255, 255, 255) : titleMuted;
-        dl->AddLine({c.x - 5.0f, c.y - 5.0f}, {c.x + 5.0f, c.y + 5.0f}, xcol, 1.5f);
-        dl->AddLine({c.x + 5.0f, c.y - 5.0f}, {c.x - 5.0f, c.y + 5.0f}, xcol, 1.5f);
+        dl->AddLine({c.x - S(5.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(5.0f)}, xcol, S(1.5f));
+        dl->AddLine({c.x + S(5.0f), c.y - S(5.0f)}, {c.x - S(5.0f), c.y + S(5.0f)}, xcol, S(1.5f));
     }
 
     // -- Separator line --------------------------------------------------------
@@ -236,13 +284,14 @@ void MainWindow::Draw(bool& open) {
     DrawTitleBar();
 
     // -- Sidebar + content layout below the title bar --------------------------
-    const float pad      = 18.0f;
-    const float sidebarW = 168.0f;
+    const float titleH   = S((float)kTitleBarHeight);
+    const float pad      = S(18.0f);
+    const float sidebarW = S(168.0f);
     const float contentW = ImGui::GetContentRegionAvail().x - sidebarW - pad * 2.0f;
 
-    ImGui::SetCursorPos({pad, (float)kTitleBarHeight + pad});
+    ImGui::SetCursorPos({pad, titleH + pad});
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {12.0f, 12.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {S(12.0f), S(12.0f)});
     ImGui::BeginChild("##sidebar", {sidebarW, 0},
                       ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
     DrawSidebarNav(s_activeSection);
@@ -251,7 +300,8 @@ void MainWindow::Draw(bool& open) {
 
     ImGui::SameLine(0, pad);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {18.0f, 16.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {S(22.0f), S(20.0f)});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {S(10.0f), S(13.0f)});
     ImGui::BeginChild("##content", {contentW, 0}, ImGuiChildFlags_AlwaysUseWindowPadding);
     switch (s_activeSection) {
     case SEC_GENERAL:    DrawGeneral();    break;
@@ -259,11 +309,13 @@ void MainWindow::Draw(bool& open) {
     case SEC_APPEARANCE: DrawAppearance(); break;
     case SEC_HISTORY:    DrawHistory();    break;
     case SEC_PRIVACY:    DrawPrivacy();    break;
+#ifndef NDEBUG
     case SEC_DEVELOPER:  DrawDeveloper();  break;
+#endif
     case SEC_ABOUT:      DrawAbout();      break;
     }
     ImGui::EndChild();
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(2);
 
     ImGui::End();
 }
@@ -271,13 +323,18 @@ void MainWindow::Draw(bool& open) {
 // -- Sidebar nav ---------------------------------------------------------------
 
 void MainWindow::DrawSidebarNav(int& selected) {
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 2.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, S(2.0f)});
+    const AppearanceSettings appearance = Application::Get()
+        ? Application::Get()->GetAppearance()
+        : AppearanceSettings{};
+    const ImVec4 selectedColor = appearance.customColors
+        ? appearance.selectedTab
+        : ThemeDefaults(appearance.theme).selectedTab;
     for (int i = 0; i < SEC_COUNT; ++i) {
         bool active = (i == selected);
         if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        if (ImGui::Button(kSectionLabels[i], {-1.0f, 32.0f}))
+            ImGui::PushStyleColor(ImGuiCol_Button, selectedColor);
+        if (ImGui::Button(kSectionLabels[i], {-1.0f, S(32.0f)}))
             selected = i;
         if (active)
             ImGui::PopStyleColor();
@@ -315,52 +372,112 @@ void MainWindow::DrawGeneral() {
 
     const ClipboardProfileConfig* activeProfile = app->GetActiveClipboardProfile();
     static std::string lastProfileId;
-    static char renameBuf[128]{};
-    static char newClipboardBuf[128]{};
+    static char clipboardNameBuf[128]{};
+    enum class PendingClipboardAction { None, Rename, Create, Delete };
+    static PendingClipboardAction pendingAction = PendingClipboardAction::None;
+    static std::string pendingName;
     if (activeProfile && activeProfile->id != lastProfileId) {
         lastProfileId = activeProfile->id;
-        strncpy_s(renameBuf, activeProfile->name.c_str(), _TRUNCATE);
+        strncpy_s(clipboardNameBuf, activeProfile->name.c_str(), _TRUNCATE);
     }
 
-    ImGui::SetNextItemWidth(260.0f);
-    if (ImGui::BeginCombo("Active clipboard",
-                          activeProfile ? activeProfile->name.c_str() : "Clipboard")) {
+    ImGui::SetNextItemWidth(300.0f);
+    ImGui::InputText("Clipboard", clipboardNameBuf, sizeof(clipboardNameBuf));
+    ImGui::SameLine(0.0f, 4.0f);
+    if (ImGui::Button("v##clipboard_dropdown", {S(28.0f), 0.0f}))
+        ImGui::OpenPopup("##clipboard_profile_picker");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Select another clipboard");
+
+    if (ImGui::BeginPopup("##clipboard_profile_picker")) {
         for (const ClipboardProfileConfig& profile : app->GetClipboardProfiles()) {
             const bool selected = activeProfile && profile.id == activeProfile->id;
             std::string label = profile.name;
             if (!profile.processName.empty())
                 label += " (" + profile.processName + ")";
-            if (ImGui::Selectable(label.c_str(), selected))
+            if (ImGui::Selectable(label.c_str(), selected)) {
                 app->SetActiveClipboardProfile(profile.id);
+                strncpy_s(clipboardNameBuf, profile.name.c_str(), _TRUNCATE);
+                lastProfileId = profile.id;
+            }
             if (selected)
                 ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ImGui::EndPopup();
     }
 
-    ImGui::SetNextItemWidth(260.0f);
-    ImGui::InputText("Name", renameBuf, sizeof(renameBuf));
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Apply name"))
-        app->RenameActiveClipboardProfile(renameBuf);
+    auto requestConfirmation = [&](PendingClipboardAction action, std::string name) {
+        pendingAction = action;
+        pendingName = std::move(name);
+        MessageBeep(MB_ICONQUESTION);
+        ImGui::OpenPopup("Confirm clipboard action");
+    };
 
-    ImGui::SetNextItemWidth(260.0f);
-    ImGui::InputText("New clipboard name", newClipboardBuf, sizeof(newClipboardBuf));
+    std::string typedName = TrimAscii(clipboardNameBuf);
+    if (ImGui::SmallButton("Set name")) {
+        if (typedName.empty() && activeProfile)
+            typedName = activeProfile->name;
+        requestConfirmation(PendingClipboardAction::Rename, typedName);
+    }
     ImGui::SameLine();
     if (ImGui::SmallButton("New clipboard")) {
-        std::string name = newClipboardBuf;
+        std::string name = typedName;
         if (name.empty())
             name = "Clipboard " + std::to_string(app->GetClipboardProfiles().size() + 1);
-        app->CreateClipboardProfile(name);
-        newClipboardBuf[0] = '\0';
+        requestConfirmation(PendingClipboardAction::Create, name);
     }
     ImGui::SameLine();
     if (!app->CanDeleteActiveClipboardProfile())
         ImGui::BeginDisabled();
-    if (ImGui::SmallButton("Delete active"))
-        app->DeleteActiveClipboardProfile();
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
+    if (ImGui::SmallButton("Delete active")) {
+        requestConfirmation(PendingClipboardAction::Delete,
+                            activeProfile ? activeProfile->name : "Clipboard");
+    }
+    ImGui::PopStyleColor(3);
     if (!app->CanDeleteActiveClipboardProfile())
         ImGui::EndDisabled();
+
+    if (ImGui::BeginPopupModal("Confirm clipboard action", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const char* actionText = "continue";
+        if (pendingAction == PendingClipboardAction::Rename)
+            actionText = "rename the active clipboard";
+        else if (pendingAction == PendingClipboardAction::Create)
+            actionText = "create a new clipboard";
+        else if (pendingAction == PendingClipboardAction::Delete)
+            actionText = "delete the active clipboard";
+
+        ImGui::TextWrapped("Confirm that you want to %s.", actionText);
+        if (!pendingName.empty())
+            ImGui::TextDisabled("%s", pendingName.c_str());
+        ImGui::Spacing();
+
+        if (ImGui::Button("Confirm", {S(110.0f), 0.0f})) {
+            if (pendingAction == PendingClipboardAction::Rename) {
+                app->RenameActiveClipboardProfile(pendingName);
+                strncpy_s(clipboardNameBuf, pendingName.c_str(), _TRUNCATE);
+            } else if (pendingAction == PendingClipboardAction::Create) {
+                app->CreateClipboardProfile(pendingName);
+                strncpy_s(clipboardNameBuf, pendingName.c_str(), _TRUNCATE);
+            } else if (pendingAction == PendingClipboardAction::Delete) {
+                app->DeleteActiveClipboardProfile();
+                if (const ClipboardProfileConfig* profile = app->GetActiveClipboardProfile())
+                    strncpy_s(clipboardNameBuf, profile->name.c_str(), _TRUNCATE);
+            }
+            pendingAction = PendingClipboardAction::None;
+            pendingName.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", {S(90.0f), 0.0f}) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            pendingAction = PendingClipboardAction::None;
+            pendingName.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     if (activeProfile) {
         ImGui::TextDisabled("ID: %s", activeProfile->id.c_str());
@@ -505,47 +622,53 @@ static bool ColorControl(const char* label, ImVec4& color) {
         ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar);
 }
 
+static bool ColorControlWithReset(const char* label, ImVec4& color, const ImVec4& resetValue) {
+    bool changed = ColorControl(label, color);
+    ImGui::SameLine();
+    std::string id = std::string("Reset##reset_") + label;
+    if (ImGui::SmallButton(id.c_str())) {
+        color = resetValue;
+        changed = true;
+    }
+    return changed;
+}
+
 static void DrawPopupPreview(const AppearanceSettings& draft) {
     AppearanceSettings preview = draft.customColors ? draft : ThemeDefaults(draft.theme);
     const PopupToggleColors toggles = GetPopupToggleColors(draft);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 start = ImGui::GetCursorScreenPos();
-    ImVec2 size = {std::min(360.0f, ImGui::GetContentRegionAvail().x), 210.0f};
+    ImVec2 size = {std::min(300.0f, ImGui::GetContentRegionAvail().x), 150.0f};
     ImVec2 end = {start.x + size.x, start.y + size.y};
 
     dl->AddRectFilled(start, end, ImGui::GetColorU32(preview.windowBg), 6.0f);
     dl->AddRect(start, end, ImGui::GetColorU32(preview.accent), 6.0f, 0, 1.0f);
 
     ImVec2 closeA = {start.x + 10.0f, start.y + 10.0f};
-    ImVec2 closeB = {closeA.x + 24.0f, closeA.y + 24.0f};
+    ImVec2 closeB = {closeA.x + 22.0f, closeA.y + 22.0f};
     dl->AddRectFilled(closeA, closeB, ImGui::GetColorU32(toggles.off), 3.0f);
     dl->AddText({closeA.x + 8.0f, closeA.y + 3.0f}, ImGui::GetColorU32(preview.text), "x");
 
-    ImVec2 knob = {closeB.x + 22.0f, closeA.y + 12.0f};
-    dl->AddCircleFilled(knob, 9.0f, ImGui::GetColorU32(preview.opacityKnobFill), 24);
-    dl->AddCircle(knob, 9.0f, ImGui::GetColorU32(preview.opacityKnobRing), 24, 2.0f);
-    dl->AddLine(knob, {knob.x + 5.0f, knob.y - 5.0f}, ImGui::GetColorU32(preview.opacityKnobRing), 2.0f);
-
-    ImVec2 comboA = {knob.x + 24.0f, closeA.y};
+    ImVec2 comboA = {closeB.x + 12.0f, closeA.y};
     ImVec2 comboB = {end.x - 12.0f, closeB.y};
     dl->AddRectFilled(comboA, comboB, ImGui::GetColorU32(preview.panelBg), 3.0f);
-    dl->AddText({comboA.x + 8.0f, comboA.y + 4.0f}, ImGui::GetColorU32(preview.text), "Default clipboard");
+    dl->AddText({comboA.x + 8.0f, comboA.y + 4.0f}, ImGui::GetColorU32(preview.text), "Clipboard");
 
     ImVec2 searchA = {start.x + 10.0f, closeB.y + 12.0f};
     ImVec2 searchB = {end.x - 10.0f, searchA.y + 24.0f};
     dl->AddRectFilled(searchA, searchB, ImGui::GetColorU32(preview.panelBg), 3.0f);
-    dl->AddText({searchA.x + 8.0f, searchA.y + 4.0f}, ImGui::GetColorU32(preview.mutedText), "Search... Shift+Enter for web");
+    dl->AddText({searchA.x + 8.0f, searchA.y + 4.0f}, ImGui::GetColorU32(preview.mutedText), "Search...");
 
-    const char* labels[] = {"All", "Text", "Image", "Queue", "Newline"};
+    const char* labels[] = {"All", "Text", "Image"};
     float x = searchA.x;
     float y = searchB.y + 12.0f;
     for (int i = 0; i < IM_ARRAYSIZE(labels); ++i) {
         ImVec2 a = {x, y};
-        ImVec2 b = {x + 54.0f, y + 22.0f};
+        ImVec2 b = {x + 50.0f, y + 22.0f};
         const ImU32 col = ImGui::GetColorU32(i == 0 ? toggles.on : toggles.off);
         dl->AddRectFilled(a, b, col, 3.0f);
         dl->AddText({a.x + 8.0f, a.y + 3.0f}, ImGui::GetColorU32(preview.text), labels[i]);
-        x += 60.0f;
+        x += 56.0f;
     }
 
     ImVec2 rowA = {start.x + 10.0f, y + 36.0f};
@@ -553,10 +676,6 @@ static void DrawPopupPreview(const AppearanceSettings& draft) {
     dl->AddRectFilled(rowA, rowB, ImGui::GetColorU32(preview.panelBg), 3.0f);
     dl->AddCircleFilled({rowA.x + 10.0f, rowA.y + 13.0f}, 3.0f, IM_COL32(255, 196, 64, 255), 12);
     dl->AddText({rowA.x + 20.0f, rowA.y + 5.0f}, ImGui::GetColorU32(preview.text), "1  [P] Copied item preview");
-
-    rowA.y += 32.0f; rowB.y += 32.0f;
-    dl->AddRect(rowA, rowB, ImGui::GetColorU32(preview.accent), 3.0f, 0, 1.0f);
-    dl->AddText({rowA.x + 12.0f, rowA.y + 5.0f}, ImGui::GetColorU32(preview.text), "2  Regular history item");
 
     ImGui::Dummy(size);
 }
@@ -566,32 +685,28 @@ static void DrawSettingsPreview(const AppearanceSettings& draft) {
     const PopupToggleColors toggles = GetPopupToggleColors(draft);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 start = ImGui::GetCursorScreenPos();
-    ImVec2 size = {std::min(360.0f, ImGui::GetContentRegionAvail().x), 170.0f};
+    ImVec2 size = {std::min(300.0f, ImGui::GetContentRegionAvail().x), 130.0f};
     ImVec2 end = {start.x + size.x, start.y + size.y};
 
     dl->AddRectFilled(start, end, ImGui::GetColorU32(preview.windowBg), 0.0f);
     dl->AddRectFilled(start, {end.x, start.y + 28.0f}, ImGui::GetColorU32(preview.panelBg), 0.0f);
     dl->AddText({start.x + 12.0f, start.y + 7.0f}, ImGui::GetColorU32(preview.text), "Clipboard++");
 
-    ImVec2 sideA = {start.x + 12.0f, start.y + 42.0f};
+    ImVec2 sideA = {start.x + 10.0f, start.y + 38.0f};
     ImVec2 sideB = {sideA.x + 96.0f, end.y - 12.0f};
     dl->AddRectFilled(sideA, sideB, ImGui::GetColorU32(preview.panelBg), 4.0f);
     dl->AddRectFilled({sideA.x + 8.0f, sideA.y + 10.0f}, {sideB.x - 8.0f, sideA.y + 34.0f},
                       ImGui::GetColorU32(toggles.on), 3.0f);
     dl->AddText({sideA.x + 16.0f, sideA.y + 14.0f}, ImGui::GetColorU32(preview.text), "Appearance");
-    dl->AddText({sideA.x + 16.0f, sideA.y + 46.0f}, ImGui::GetColorU32(preview.mutedText), "Hotkeys");
+    dl->AddText({sideA.x + 16.0f, sideA.y + 46.0f}, ImGui::GetColorU32(preview.mutedText), "General");
 
     ImVec2 paneA = {sideB.x + 14.0f, sideA.y};
     ImVec2 paneB = {end.x - 12.0f, sideB.y};
     dl->AddRectFilled(paneA, paneB, ImGui::GetColorU32(preview.panelBg), 4.0f);
-    dl->AddText({paneA.x + 12.0f, paneA.y + 12.0f}, ImGui::GetColorU32(preview.text), "Custom theme");
+    dl->AddText({paneA.x + 12.0f, paneA.y + 12.0f}, ImGui::GetColorU32(preview.text), "Theme");
     dl->AddRectFilled({paneA.x + 12.0f, paneA.y + 44.0f}, {paneA.x + 118.0f, paneA.y + 68.0f},
                       ImGui::GetColorU32(toggles.off), 3.0f);
     dl->AddText({paneA.x + 24.0f, paneA.y + 48.0f}, ImGui::GetColorU32(preview.text), "Apply");
-    dl->AddRectFilled({paneA.x + 130.0f, paneA.y + 44.0f}, {paneA.x + 236.0f, paneA.y + 68.0f},
-                      ImGui::GetColorU32(toggles.on), 3.0f);
-    dl->AddText({paneA.x + 142.0f, paneA.y + 48.0f}, ImGui::GetColorU32(preview.text), "Save");
-
     ImGui::Dummy(size);
 }
 
@@ -609,75 +724,227 @@ void MainWindow::DrawAppearance() {
     static bool initialized = false;
     if (!initialized) {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
-        std::snprintf(customName, sizeof(customName), "%s", draft.customThemeName.c_str());
+        std::snprintf(customName, sizeof(customName), "%s",
+                      draft.customColors ? draft.customThemeName.c_str() : ThemeName(draft.theme));
         initialized = true;
     }
 
-    const char* themes[] = {
-        "Dark Default", "Dracula", "Nord", "Monokai",
-        "One Dark Pro", "Tokyo Night", "Solarized Dark", "GitHub Dark",
-        "GitHub Light", "Solarized Light", "VS Light", "Quiet Light"
+    ImGui::Text("Theme");
+    auto syncThemeName = [&]() {
+        std::snprintf(customName, sizeof(customName), "%s",
+                      draft.customColors ? draft.customThemeName.c_str() : ThemeName(draft.theme));
+    };
+    auto applyBuiltInTheme = [&](ThemeId theme) {
+        AppearanceSettings next = ThemeDefaults(theme);
+        const AppearanceSettings current = app->GetAppearance();
+        next.fontPath = current.fontPath;
+        next.fontSize = current.fontSize;
+        next.uiScale = current.uiScale;
+        next.popupOpacity = current.popupOpacity;
+        next.popupOutlineStrength = current.popupOutlineStrength;
+        next.popupWidth = current.popupWidth;
+        next.popupHeight = current.popupHeight;
+        next.popupRounding = current.popupRounding;
+        next.controlRounding = current.controlRounding;
+        next.savedThemes = current.savedThemes;
+        next.customColors = false;
+        next.customThemeName = ThemeName(theme);
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+        syncThemeName();
+    };
+    auto applyUserTheme = [&](const SavedAppearanceTheme& saved) {
+        AppearanceSettings next = app->GetAppearance();
+        ApplySavedTheme(next, saved);
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+        syncThemeName();
+    };
+    auto saveUserTheme = [&](const std::string& requestedName) {
+        AppearanceSettings next = draft;
+        next.savedThemes = app->GetAppearance().savedThemes;
+        next.fontPath = app->GetAppearance().fontPath;
+        next.fontSize = app->GetAppearance().fontSize;
+        next.uiScale = app->GetAppearance().uiScale;
+        next.customColors = true;
+        next.customThemeName = requestedName.empty() ? "Custom" : requestedName;
+        SavedAppearanceTheme saved = ToSavedTheme(next, next.customThemeName);
+        auto it = std::find_if(next.savedThemes.begin(), next.savedThemes.end(),
+            [&](const SavedAppearanceTheme& existing) { return EqualsIgnoreCase(existing.name, saved.name); });
+        if (it == next.savedThemes.end())
+            next.savedThemes.push_back(saved);
+        else
+            *it = saved;
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+        syncThemeName();
+    };
+    auto findUserTheme = [&](const std::string& name) {
+        const std::vector<SavedAppearanceTheme>& themes = app->GetAppearance().savedThemes;
+        return std::find_if(themes.begin(), themes.end(),
+            [&](const SavedAppearanceTheme& saved) { return EqualsIgnoreCase(saved.name, name); });
+    };
+    auto deleteUserTheme = [&](const std::string& name) {
+        AppearanceSettings next = app->GetAppearance();
+        auto it = std::remove_if(next.savedThemes.begin(), next.savedThemes.end(),
+            [&](const SavedAppearanceTheme& saved) { return EqualsIgnoreCase(saved.name, name); });
+        if (it == next.savedThemes.end())
+            return;
+
+        next.savedThemes.erase(it, next.savedThemes.end());
+        if (next.customColors && EqualsIgnoreCase(next.customThemeName, name)) {
+            AppearanceSettings fallback = ThemeDefaults(next.theme);
+            fallback.fontPath = next.fontPath;
+            fallback.fontSize = next.fontSize;
+            fallback.uiScale = next.uiScale;
+            fallback.popupOpacity = next.popupOpacity;
+            fallback.popupOutlineStrength = next.popupOutlineStrength;
+            fallback.popupWidth = next.popupWidth;
+            fallback.popupHeight = next.popupHeight;
+            fallback.popupRounding = next.popupRounding;
+            fallback.controlRounding = next.controlRounding;
+            fallback.savedThemes = next.savedThemes;
+            next = fallback;
+        }
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+        syncThemeName();
     };
 
-    ImGui::Text("Theme");
-    ImGui::SetNextItemWidth(240.0f);
-    int themeIndex = static_cast<int>(draft.theme);
-    if (ImGui::Combo("##theme", &themeIndex, themes, IM_ARRAYSIZE(themes))) {
-        const std::string font = draft.fontPath;
-        const float fontSize = draft.fontSize;
-        const float opacity = draft.popupOpacity;
-        const int width = draft.popupWidth;
-        const int height = draft.popupHeight;
-        const auto savedThemes = draft.savedThemes;
-        draft.theme = static_cast<ThemeId>(themeIndex);
-        AppearanceSettings preset = ThemeDefaults(draft.theme);
-        preset.fontPath = font;
-        preset.fontSize = fontSize;
-        preset.popupOpacity = opacity;
-        preset.popupWidth = width;
-        preset.popupHeight = height;
-        preset.savedThemes = savedThemes;
-        draft = preset;
-        std::snprintf(customName, sizeof(customName), "%s", draft.customThemeName.c_str());
-    }
+    ImGui::SetNextItemWidth(300.0f);
+    ImGui::InputText("##theme_name", customName, sizeof(customName));
+    ImGui::SameLine(0.0f, 4.0f);
+    if (ImGui::Button("v##theme_dropdown", {S(28.0f), 0.0f}))
+        ImGui::OpenPopup("##theme_picker");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Select a theme");
 
-    ImGui::SameLine();
-    if (ImGui::Button("Use as custom")) {
-        const auto savedThemes = draft.savedThemes;
-        const std::string font = draft.fontPath;
-        const float fontSize = draft.fontSize;
-        const float opacity = draft.popupOpacity;
-        const int width = draft.popupWidth;
-        const int height = draft.popupHeight;
-        draft = ThemeDefaults(draft.theme);
-        draft.fontPath = font;
-        draft.fontSize = fontSize;
-        draft.popupOpacity = opacity;
-        draft.popupWidth = width;
-        draft.popupHeight = height;
-        draft.savedThemes = savedThemes;
-        draft.customColors = true;
-        std::snprintf(customName, sizeof(customName), "%s", draft.customThemeName.c_str());
-    }
+    if (ImGui::BeginPopup("##theme_picker")) {
+        ImGui::TextDisabled("Built-in themes");
+        for (int i = 0; i < static_cast<int>(ThemeId::Count); ++i) {
+            const ThemeId theme = static_cast<ThemeId>(i);
+            const bool selected = !draft.customColors && draft.theme == theme;
+            if (ImGui::Selectable(ThemeName(theme), selected))
+                applyBuiltInTheme(theme);
+            if (selected)
+                ImGui::SetItemDefaultFocus();
+        }
 
-    if (!draft.savedThemes.empty()) {
-        ImGui::Text("Saved custom theme");
-        ImGui::SetNextItemWidth(240.0f);
-        if (ImGui::BeginCombo("##saved_theme", draft.customThemeName.c_str())) {
+        ImGui::Separator();
+        ImGui::TextDisabled("User configured");
+        if (draft.savedThemes.empty()) {
+            ImGui::TextDisabled("No saved themes");
+        } else {
             for (const SavedAppearanceTheme& saved : draft.savedThemes) {
-                if (ImGui::Selectable(saved.name.c_str(), saved.name == draft.customThemeName)) {
-                    ApplySavedTheme(draft, saved);
-                    std::snprintf(customName, sizeof(customName), "%s", draft.customThemeName.c_str());
-                }
+                const bool selected = draft.customColors && saved.name == draft.customThemeName;
+                if (ImGui::Selectable(saved.name.c_str(), selected))
+                    applyUserTheme(saved);
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
             }
-            ImGui::EndCombo();
+        }
+        ImGui::EndPopup();
+    }
+
+    const std::string requestedName = TrimAscii(customName);
+    const std::string selectedThemeName = draft.customColors
+        ? draft.customThemeName
+        : ThemeName(draft.theme);
+    const bool themeNameChanged = !requestedName.empty() &&
+        !EqualsIgnoreCase(requestedName, selectedThemeName);
+    if (themeNameChanged) {
+        ImGui::SameLine();
+        if (ImGui::Button("Save theme")) {
+            if (IsBuiltInThemeName(requestedName)) {
+                MessageBeep(MB_ICONWARNING);
+                ImGui::OpenPopup("Rename custom theme");
+            } else {
+                saveUserTheme(requestedName);
+            }
         }
     }
 
+    const std::string themeNameForDelete = TrimAscii(customName);
+    const bool canDeleteTheme = !themeNameForDelete.empty() &&
+        findUserTheme(themeNameForDelete) != app->GetAppearance().savedThemes.end();
+    if (canDeleteTheme || themeNameChanged)
+        ImGui::SameLine();
+    if (!canDeleteTheme)
+        ImGui::BeginDisabled();
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
+    if (ImGui::Button("Delete theme")) {
+        MessageBeep(MB_ICONWARNING);
+        ImGui::OpenPopup("Delete custom theme");
+    }
+    ImGui::PopStyleColor(3);
+    if (!canDeleteTheme)
+        ImGui::EndDisabled();
+
+    if (ImGui::BeginPopupModal("Delete custom theme", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Delete this user theme?");
+        ImGui::TextDisabled("%s", themeNameForDelete.c_str());
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
+        if (ImGui::Button("Delete", {S(100.0f), 0.0f})) {
+            deleteUserTheme(themeNameForDelete);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", {S(90.0f), 0.0f}) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Rename custom theme", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static char renameThemeBuf[96]{};
+        if (renameThemeBuf[0] == '\0') {
+            std::string base = TrimAscii(customName);
+            if (base.empty() || IsBuiltInThemeName(base))
+                base = std::string(base.empty() ? "Custom" : base) + " Custom";
+            std::snprintf(renameThemeBuf, sizeof(renameThemeBuf), "%s", base.c_str());
+        }
+
+        ImGui::TextWrapped("Built-in theme names are reserved. Choose a custom theme name.");
+        ImGui::SetNextItemWidth(260.0f);
+        ImGui::InputText("Name##rename_theme", renameThemeBuf, sizeof(renameThemeBuf));
+
+        const std::string renameName = TrimAscii(renameThemeBuf);
+        if (renameName.empty() || IsBuiltInThemeName(renameName))
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Save custom theme", {S(150.0f), 0.0f})) {
+            saveUserTheme(renameName);
+            renameThemeBuf[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        if (renameName.empty() || IsBuiltInThemeName(renameName))
+            ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", {S(90.0f), 0.0f}) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            renameThemeBuf[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::Spacing(); ImGui::SeparatorText("Popup");
     ImGui::Spacing();
     ImGui::Text("Popup opacity");
     ImGui::SetNextItemWidth(240.0f);
     ImGui::SliderFloat("##opacity", &draft.popupOpacity, 0.1f, 1.0f, "%.2f");
+    KeepMouseWheelOnLastItem();
+    ImGui::Text("Popup outline");
+    ImGui::SetNextItemWidth(240.0f);
+    ImGui::SliderFloat("##outline_strength", &draft.popupOutlineStrength, 0.0f, 1.0f, "%.2f");
+    KeepMouseWheelOnLastItem();
 
     ImGui::Spacing();
     ImGui::Text("Default popup size");
@@ -691,83 +958,207 @@ void MainWindow::DrawAppearance() {
         draft.popupWidth = std::max(360, draft.popupWidth);
         draft.popupHeight = std::max(260, draft.popupHeight);
     }
+    SIZE livePopupSize = app->PopupCurrentSize();
+    ImGui::TextDisabled("Current popup: %ldx%ld",
+                        static_cast<long>(livePopupSize.cx),
+                        static_cast<long>(livePopupSize.cy));
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Use current as default")) {
+        app->UseCurrentPopupSizeAsDefault();
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Apply popup settings")) {
+        AppearanceSettings next = app->GetAppearance();
+        next.popupOpacity = std::clamp(draft.popupOpacity, 0.1f, 1.0f);
+        next.popupOutlineStrength = std::clamp(draft.popupOutlineStrength, 0.0f, 1.0f);
+        next.popupWidth = std::max(360, draft.popupWidth);
+        next.popupHeight = std::max(260, draft.popupHeight);
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    }
 
-    ImGui::Spacing();
+    ImGui::Spacing(); ImGui::SeparatorText("Font");
     ImGui::Text("Font");
+    auto applyFont = [&]() {
+        AppearanceSettings next = app->GetAppearance();
+        next.fontPath = fontPath;
+        next.fontSize = std::clamp(std::round(draft.fontSize * 2.0f) * 0.5f, 9.0f, 32.0f);
+        {
+            std::ostringstream out;
+            out << "MainWindow::ApplyFont: requested"
+                << " path=\"" << next.fontPath << "\""
+                << " size=" << next.fontSize
+                << " draftSize=" << draft.fontSize;
+            app->LogDebug(out.str());
+        }
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    };
+
     ImGui::SetNextItemWidth(420.0f);
-    bool fontEdited = false;
-    fontEdited |= ImGui::InputText("##fontPath", fontPath, sizeof(fontPath));
+    bool fontPathEdited = ImGui::InputText("##fontPath", fontPath, sizeof(fontPath),
+                                           ImGuiInputTextFlags_EnterReturnsTrue);
+    bool fontPathDeactivated = ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SameLine();
     if (ImGui::Button("Browse")) {
-        if (PickFontFile(fontPath, sizeof(fontPath))) {
-            fontEdited = true;
+        if (PickFontFile(fontPath, sizeof(fontPath)))
+            applyFont();
+    }
+    if (fontPathEdited)
+        applyFont();
+    else if (fontPathDeactivated) {
+        draft.fontPath = fontPath;
+    }
+
+    ImGui::SetNextItemWidth(240.0f);
+    float fontSize = draft.fontSize;
+    bool fontSizeChanged = ImGui::SliderFloat("Font size##fontSizeSlider", &fontSize,
+                                              9.0f, 32.0f, "%.1f",
+                                              ImGuiSliderFlags_AlwaysClamp);
+    KeepMouseWheelOnLastItem();
+    if (ImGui::IsItemHovered()) {
+        const float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.0f) {
+            fontSize = draft.fontSize + wheel * 0.5f;
+            fontSizeChanged = true;
+        }
+    }
+    if (fontSizeChanged) {
+        const float snapped = std::clamp(std::round(fontSize * 2.0f) * 0.5f, 9.0f, 32.0f);
+        draft.fontSize = snapped;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Apply font"))
+        applyFont();
+
+    ImGui::Spacing(); ImGui::SeparatorText("Interface");
+    const float scalePresets[] = {0.75f, 1.0f, 1.25f, 1.5f, 1.75f};
+    const char* scaleLabels[] = {"0.75x", "1.00x", "1.25x", "1.50x", "1.75x", "Custom"};
+    static bool customScaleMode = false;
+    auto applyScale = [&]() {
+        draft.uiScale = std::clamp(draft.uiScale, 0.75f, 2.0f);
+        AppearanceSettings next = draft;
+        next.fontPath = app->GetAppearance().fontPath;
+        next.fontSize = app->GetAppearance().fontSize;
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    };
+
+    int scaleChoice = IM_ARRAYSIZE(scaleLabels) - 1;
+    for (int i = 0; i < IM_ARRAYSIZE(scalePresets); ++i) {
+        if (std::fabs(draft.uiScale - scalePresets[i]) < 0.01f) {
+            scaleChoice = i;
+            break;
+        }
+    }
+    if (customScaleMode)
+        scaleChoice = IM_ARRAYSIZE(scaleLabels) - 1;
+
+    ImGui::Text("Interface scale");
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::Combo("##uiScalePreset", &scaleChoice, scaleLabels, IM_ARRAYSIZE(scaleLabels))) {
+        if (scaleChoice < IM_ARRAYSIZE(scalePresets)) {
+            customScaleMode = false;
+            draft.uiScale = scalePresets[scaleChoice];
+            applyScale();
+        } else {
+            customScaleMode = true;
         }
     }
 
-    ImGui::SetNextItemWidth(110.0f);
-    fontEdited |= ImGui::InputFloat("Size##fontSize", &draft.fontSize, 0.5f, 1.0f, "%.1f");
-    ImGui::SameLine();
-    if (ImGui::Button("Apply Font")) {
-        draft.fontPath = fontPath;
-        draft.fontSize = std::clamp(draft.fontSize, 9.0f, 32.0f);
-        app->RequestAppearance(draft);
+    if (customScaleMode || scaleChoice == IM_ARRAYSIZE(scaleLabels) - 1) {
+        ImGui::SetNextItemWidth(240.0f);
+        bool scaleChanged = ImGui::SliderFloat("Custom scale##uiScaleCustom", &draft.uiScale,
+                                               0.75f, 2.0f, "%.2fx",
+                                               ImGuiSliderFlags_AlwaysClamp);
+        KeepMouseWheelOnLastItem();
+        if (ImGui::IsItemHovered()) {
+            const float wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.0f) {
+                draft.uiScale = std::clamp(draft.uiScale + wheel * 0.05f, 0.75f, 2.0f);
+                scaleChanged = true;
+            }
+        }
+        if (scaleChanged)
+            applyScale();
     }
-    if (fontEdited) {
-        draft.fontPath = fontPath;
-        draft.fontSize = std::clamp(draft.fontSize, 9.0f, 32.0f);
+
+    ImGui::Spacing(); ImGui::SeparatorText("Colors");
+    const AppearanceSettings reset = ThemeDefaults(draft.theme);
+    if (ImGui::BeginTable("##appearance_color_preview", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Colors", ImGuiTableColumnFlags_WidthStretch, 0.55f);
+        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+
+        ImGui::Checkbox("Enable custom colors", &draft.customColors);
+        if (!draft.customColors)
+            ImGui::BeginDisabled();
+        ColorControlWithReset("Window background", draft.windowBg, reset.windowBg);
+        ColorControlWithReset("Panel background", draft.panelBg, reset.panelBg);
+        ColorControlWithReset("Text", draft.text, reset.text);
+        ColorControlWithReset("Muted text", draft.mutedText, reset.mutedText);
+        ColorControlWithReset("Accent", draft.accent, reset.accent);
+        ColorControlWithReset("Hover", draft.hover, reset.hover);
+        ColorControlWithReset("Selected tab", draft.selectedTab, reset.selectedTab);
+        ColorControlWithReset("Button off", draft.buttonOff, reset.buttonOff);
+        ColorControlWithReset("Button on", draft.buttonOn, reset.buttonOn);
+        ColorControlWithReset("Popup close", draft.closeButton, reset.closeButton);
+        ColorControlWithReset("Popup close hover", draft.closeButtonHover, reset.closeButtonHover);
+        ColorControlWithReset("Popup close text", draft.closeButtonText, reset.closeButtonText);
+        ColorControlWithReset("Opacity knob fill", draft.opacityKnobFill, reset.opacityKnobFill);
+        ColorControlWithReset("Opacity knob ring", draft.opacityKnobRing, reset.opacityKnobRing);
+        if (!draft.customColors)
+            ImGui::EndDisabled();
+        if (ImGui::Button("Apply colors")) {
+            AppearanceSettings next = draft;
+            next.fontPath = app->GetAppearance().fontPath;
+            next.fontSize = app->GetAppearance().fontSize;
+            next.uiScale = app->GetAppearance().uiScale;
+            next.savedThemes = app->GetAppearance().savedThemes;
+            app->RequestAppearance(next);
+            draft = app->GetAppearance();
+            syncThemeName();
+            std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+        }
+
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextDisabled("Preview");
+        DrawPopupPreview(draft);
+        ImGui::Spacing();
+        DrawSettingsPreview(draft);
+        ImGui::EndTable();
     }
 
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-    ImGui::Checkbox("Enable custom colors", &draft.customColors);
-    if (!draft.customColors)
-        ImGui::BeginDisabled();
-    ColorControl("Window background", draft.windowBg);
-    ColorControl("Panel background", draft.panelBg);
-    ColorControl("Text", draft.text);
-    ColorControl("Muted text", draft.mutedText);
-    ColorControl("Accent", draft.accent);
-    ColorControl("Button off", draft.buttonOff);
-    ColorControl("Button on", draft.buttonOn);
-    ColorControl("Opacity knob fill", draft.opacityKnobFill);
-    ColorControl("Opacity knob ring", draft.opacityKnobRing);
-    if (!draft.customColors)
-        ImGui::EndDisabled();
-
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-    ImGui::TextDisabled("Preview");
-    DrawPopupPreview(draft);
-    ImGui::Spacing();
-    DrawSettingsPreview(draft);
-
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+    ImGui::Spacing(); ImGui::SeparatorText("Advanced shape");
     ImGui::SetNextItemWidth(240.0f);
-    ImGui::InputText("Theme name", customName, sizeof(customName));
-    ImGui::SameLine();
-    if (ImGui::Button("Save custom theme")) {
-        draft.customColors = true;
-        draft.customThemeName = customName[0] ? customName : "Custom";
-        SavedAppearanceTheme saved = ToSavedTheme(draft, draft.customThemeName);
-        auto it = std::find_if(draft.savedThemes.begin(), draft.savedThemes.end(),
-            [&](const SavedAppearanceTheme& existing) { return existing.name == saved.name; });
-        if (it == draft.savedThemes.end())
-            draft.savedThemes.push_back(saved);
-        else
-            *it = saved;
-        app->RequestAppearance(draft);
+    bool shapeChanged = ImGui::SliderFloat("Popup corner rounding", &draft.popupRounding,
+                                           0.0f, 18.0f, "%.1f",
+                                           ImGuiSliderFlags_AlwaysClamp);
+    KeepMouseWheelOnLastItem();
+    ImGui::SetNextItemWidth(240.0f);
+    shapeChanged |= ImGui::SliderFloat("Control rounding", &draft.controlRounding,
+                                       0.0f, 12.0f, "%.1f",
+                                       ImGuiSliderFlags_AlwaysClamp);
+    KeepMouseWheelOnLastItem();
+    if (shapeChanged) {
+        draft.popupRounding = std::clamp(draft.popupRounding, 0.0f, 18.0f);
+        draft.controlRounding = std::clamp(draft.controlRounding, 0.0f, 12.0f);
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Apply")) {
-        draft.customThemeName = customName[0] ? customName : draft.customThemeName;
-        app->RequestAppearance(draft);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reload")) {
+    if (ImGui::Button("Apply shape")) {
+        AppearanceSettings next = app->GetAppearance();
+        next.popupRounding = std::clamp(draft.popupRounding, 0.0f, 18.0f);
+        next.controlRounding = std::clamp(draft.controlRounding, 0.0f, 12.0f);
+        app->RequestAppearance(next);
         draft = app->GetAppearance();
+        syncThemeName();
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
-        std::snprintf(customName, sizeof(customName), "%s", draft.customThemeName.c_str());
     }
-
-    ImGui::TextDisabled("Font and color changes apply after Apply or Save custom theme.");
 }
 
 // -- Section: History ---------------------------------------------------------
@@ -786,6 +1177,7 @@ void MainWindow::DrawHistory() {
     ImGui::Text("Active history size (items)");
     ImGui::SetNextItemWidth(120.0f);
     ImGui::SliderInt("##active", &activeLimit, 1, 500);
+    KeepMouseWheelOnLastItem();
 
     ImGui::Spacing();
     ImGui::Checkbox("Persist history across sessions", &persistHistory);
@@ -842,11 +1234,13 @@ void MainWindow::DrawHistory() {
                     ImGui::SameLine();
                 }
 
+#ifndef NDEBUG
                 const DeveloperSettings& dev = Application::Get()->GetDeveloperSettings();
                 if (dev.enabled && dev.showSourceProcess && !item->sourceProcess.empty()) {
                     ImGui::TextDisabled("{%s}", item->sourceProcess.c_str());
                     ImGui::SameLine();
                 }
+#endif
 
                 ImGui::TextUnformatted(item->Preview(72).c_str());
             }
@@ -885,6 +1279,7 @@ void MainWindow::DrawPrivacy() {
 
 // -- Section: Developer -------------------------------------------------------
 
+#ifndef NDEBUG
 void MainWindow::DrawDeveloper() {
     Application* app = Application::Get();
     if (!app) return;
@@ -931,8 +1326,12 @@ void MainWindow::DrawDeveloper() {
     ImGui::TextDisabled("Runtime Diagnostics");
     const ClipboardProfileConfig* active = app->GetActiveClipboardProfile();
     ClipboardHistory* hist = app->GetHistory();
+    const SIZE livePopupSize = app->PopupCurrentSize();
     ImGui::Text("Process ID: %lu", static_cast<unsigned long>(app->ProcessId()));
-    ImGui::TextWrapped("Executable: %s", app->ExecutablePath().c_str());
+    ImGui::TextWrapped("Executable: %s    Popup: %ldx%ld",
+                       app->ExecutablePath().c_str(),
+                       static_cast<long>(livePopupSize.cx),
+                       static_cast<long>(livePopupSize.cy));
     ImGui::TextWrapped("Working directory: %s", app->WorkingDirectory().c_str());
     ImGui::Text("Foreground process: %s", app->ForegroundProcessName().c_str());
     ImGui::Text("Active clipboard: %s", active ? active->name.c_str() : "(none)");
@@ -943,6 +1342,8 @@ void MainWindow::DrawDeveloper() {
     ImGui::Text("Pinned items: %zu", hist ? hist->PinnedSize() : 0);
     ImGui::Text("Config: %s", ConfigStore::Path().string().c_str());
     ImGui::Text("Fonts: %s", ConfigStore::FontsDirectory().string().c_str());
+    if (ImGui::SmallButton("Toggle debug output"))
+        app->ToggleDebugWindow();
 
     if (dev.enabled && hist && hist->Size() > 0) {
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
@@ -1015,6 +1416,7 @@ void MainWindow::DrawDeveloper() {
         ImGui::TextDisabled("Still planned: regex transforms, named slots, raw bytes viewer, pretty-print, exports.");
     }
 }
+#endif
 
 // -- Section: About -----------------------------------------------------------
 

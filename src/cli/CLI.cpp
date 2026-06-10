@@ -442,6 +442,7 @@ std::wstring ConfigValue(const AppConfig& config, const std::wstring& rawKey, bo
         return BoolText(config.appendNewlineAfterPaste);
     if (key == L"paste.move" || key == L"pastemove")
         return PasteMoveText(config.pasteMoveTarget);
+#ifndef NDEBUG
     if (key == L"developer.enabled" || key == L"developerenabled" || key == L"dev.enabled")
         return BoolText(config.developer.enabled);
     if (key == L"developer.cli" || key == L"developerclienabled" || key == L"cli.enabled")
@@ -454,6 +455,7 @@ std::wstring ConfigValue(const AppConfig& config, const std::wstring& rawKey, bo
         return BoolText(config.autoSwitchClipboardByProcess);
     if (key == L"clipboard.autocreate" || key == L"clipboardautocreate")
         return BoolText(config.autoCreateClipboardByProcess);
+#endif
     found = false;
     return {};
 }
@@ -470,12 +472,14 @@ void PrintConfigList(const AppConfig& config) {
         L"history.newAtTop",
         L"paste.newline",
         L"paste.move",
+#ifndef NDEBUG
         L"developer.enabled",
         L"developer.cli",
         L"developer.sourceProcess",
         L"developer.eventLog",
         L"clipboard.autoSwitch",
         L"clipboard.autoCreate",
+#endif
     };
 
     for (const wchar_t* key : keys) {
@@ -504,8 +508,10 @@ void PrintStatus(const std::wstring& format) {
     if (json) {
         std::wcout << L"{\n";
         std::wcout << L"  \"running\": " << (running ? L"true" : L"false") << L",\n";
+#ifndef NDEBUG
         std::wcout << L"  \"developerMode\": " << (config.developer.enabled ? L"true" : L"false") << L",\n";
         std::wcout << L"  \"cliEnabled\": " << (config.developer.cliEnabled ? L"true" : L"false") << L",\n";
+#endif
         std::wcout << L"  \"configPath\": \"" << JsonEscape(ToWide(ConfigStore::Path())) << L"\",\n";
         std::wcout << L"  \"configFolder\": \"" << JsonEscape(ToWide(ConfigStore::Directory())) << L"\"\n";
         std::wcout << L"}\n";
@@ -513,8 +519,10 @@ void PrintStatus(const std::wstring& format) {
     }
 
     std::wcout << L"Running: " << (running ? L"yes" : L"no") << L"\n";
+#ifndef NDEBUG
     std::wcout << L"Developer mode: " << (config.developer.enabled ? L"yes" : L"no") << L"\n";
     std::wcout << L"CLI enabled: " << (config.developer.cliEnabled ? L"yes" : L"no") << L"\n";
+#endif
     std::wcout << L"Config: " << ToWide(ConfigStore::Path()) << L"\n";
     std::wcout << L"Config folder: " << ToWide(ConfigStore::Directory()) << L"\n";
 }
@@ -571,6 +579,7 @@ bool ApplySet(AppConfig& config, const std::wstring& assignment, std::wstring& e
                 error = L"paste.move expects keep, top, or bottom.";
                 return false;
             }
+#ifndef NDEBUG
         } else if (key == L"developer.enabled" || key == L"developerenabled" || key == L"dev.enabled") {
             bool b{};
             if (!ParseBool(value, b)) {
@@ -613,6 +622,7 @@ bool ApplySet(AppConfig& config, const std::wstring& assignment, std::wstring& e
                 return false;
             }
             config.autoCreateClipboardByProcess = b;
+#endif
         } else {
             error = L"Unknown config key: " + assignment.substr(0, eq);
             return false;
@@ -797,6 +807,7 @@ int RunCLI(int argc, wchar_t** argv) {
         return 0;
     }
 
+#ifndef NDEBUG
     const AppConfig gateConfig = ConfigStore::Load();
     if (!gateConfig.developer.cliEnabled && !CliGateExempt(argc, argv)) {
         std::wcerr << L"Clipboard++ CLI commands are disabled in Developer settings.\n";
@@ -804,6 +815,7 @@ int RunCLI(int argc, wchar_t** argv) {
         DetachConsoleForCli();
         return 2;
     }
+#endif
 
     if (Eq(argv[1], L"--show") || Eq(argv[1], L"--settings")) {
         ipc::SignalRunning(WM_SHOWCPP_MAIN);

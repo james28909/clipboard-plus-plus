@@ -43,7 +43,7 @@ void TrayIcon::HandleMessage(WPARAM wParam, LPARAM lParam) {
         break;
     case WM_RBUTTONUP:
     case WM_CONTEXTMENU:
-        ShowContextMenu();
+        PostMessageW(m_hwnd, WM_SHOWTRAYPOPUP, 0, 0);
         break;
     }
 }
@@ -51,54 +51,6 @@ void TrayIcon::HandleMessage(WPARAM wParam, LPARAM lParam) {
 void TrayIcon::SetIncognito(bool on) {
     m_incognito = on;
     UpdateIcon();
-}
-
-void TrayIcon::ShowContextMenu() {
-    HMENU hMenu = CreatePopupMenu();
-
-    AppendMenuW(hMenu, MF_STRING, TRAY_CMD_OPEN,  L"Open Clipboard++");
-    AppendMenuW(hMenu, MF_STRING, TRAY_CMD_POPUP, L"Show Popup");
-    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenu,
-        MF_STRING | (m_incognito ? MF_CHECKED : 0),
-        TRAY_CMD_INCOGNITO, L"Incognito Mode");
-    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenu, MF_STRING, TRAY_CMD_ABOUT, L"About");
-    AppendMenuW(hMenu, MF_STRING, TRAY_CMD_EXIT,  L"Exit");
-
-    // Make the first item the default (bold, activated on double-click)
-    SetMenuDefaultItem(hMenu, TRAY_CMD_OPEN, FALSE);
-
-    POINT pt{};
-    GetCursorPos(&pt);
-    SetForegroundWindow(m_hwnd); // required by TrackPopupMenu contract
-
-    UINT cmd = static_cast<UINT>(
-        TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
-                       pt.x, pt.y, 0, m_hwnd, nullptr));
-    DestroyMenu(hMenu);
-    PostMessageW(m_hwnd, WM_NULL, 0, 0);
-
-    Application* app = Application::Get();
-    switch (cmd) {
-    case TRAY_CMD_OPEN:
-        if (app) app->OpenSettingsWindow();
-        break;
-    case TRAY_CMD_POPUP:
-        PostMessageW(m_hwnd, WM_SHOWPOPUP, 0, 0);
-        break;
-    case TRAY_CMD_INCOGNITO:
-        SetIncognito(!m_incognito);
-        break;
-    case TRAY_CMD_ABOUT:
-        MessageBoxW(m_hwnd,
-            L"Clipboard++ v0.1\n\nA lean, modern clipboard manager for Windows.",
-            L"About Clipboard++", MB_OK | MB_ICONINFORMATION);
-        break;
-    case TRAY_CMD_EXIT:
-        PostMessageW(m_hwnd, WM_DESTROY, 0, 0);
-        break;
-    }
 }
 
 void TrayIcon::UpdateIcon() {

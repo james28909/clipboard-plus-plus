@@ -32,6 +32,8 @@ set(APP_SOURCES
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
     src/ui/PopupWindow.cpp
+    src/ui/TrayPopupWindow.cpp
+    src/ui/DebugWindow.cpp
     # Milestone 4 - hotkeys
     src/hotkeys/HotkeyManager.cpp
     # Milestone 2 - clipboard core
@@ -42,61 +44,117 @@ set(APP_SOURCES
     src/clipboard/ContentDetector.cpp
 )
 
-# -- Executable ----------------------------------------------------------------
-add_executable(clipboardpp WIN32
-    ${APP_SOURCES}
-    ${IMGUI_SOURCES}
-    resources/app.rc
+set(PORTABLE_CORE_SOURCES
+    src/app/ConfigStore.cpp
+    src/ui/Appearance.cpp
+    src/hotkeys/HotkeyManager.cpp
+    src/clipboard/ClipboardItem.cpp
+    src/clipboard/ClipboardHistory.cpp
+    src/clipboard/ClipboardHistoryStore.cpp
+    src/clipboard/ContentDetector.cpp
 )
 
-target_include_directories(clipboardpp PRIVATE
-    src
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${NLOHMANN_DIR}
-)
-
-target_link_libraries(clipboardpp PRIVATE
-    d3d11.lib
-    dxgi.lib
-    d3dcompiler.lib
-    dwmapi.lib
-    comctl32.lib
-    shell32.lib
-    shlwapi.lib
-    user32.lib
-    gdi32.lib
-    psapi.lib
-)
-
-if(WIN32 AND CLIPBOARDPP_RESTART_AFTER_BUILD)
-    add_custom_command(TARGET clipboardpp PRE_BUILD
-        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
-                "Stop-Process -Name clipboardpp -Force -ErrorAction SilentlyContinue; exit 0"
-        COMMENT "Stopping running clipboardpp.exe before build"
-        VERBATIM
+# -- Windows executable ---------------------------------------------------------
+if(WIN32)
+    add_executable(clipboardpp WIN32
+        ${APP_SOURCES}
+        ${IMGUI_SOURCES}
+        resources/app.rc
     )
 
-    add_custom_command(TARGET clipboardpp POST_BUILD
-        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
-                "Start-Process -FilePath '$<TARGET_FILE:clipboardpp>' -WorkingDirectory '$<TARGET_FILE_DIR:clipboardpp>'"
-        COMMENT "Launching clipboardpp.exe after build"
-        VERBATIM
+    target_include_directories(clipboardpp PRIVATE
+        src
+        ${IMGUI_DIR}
+        ${IMGUI_DIR}/backends
+        ${NLOHMANN_DIR}
+    )
+
+    target_link_libraries(clipboardpp PRIVATE
+        d3d11.lib
+        dxgi.lib
+        d3dcompiler.lib
+        dwmapi.lib
+        comctl32.lib
+        shell32.lib
+        shlwapi.lib
+        user32.lib
+        gdi32.lib
+        psapi.lib
+    )
+
+    if(CLIPBOARDPP_RESTART_AFTER_BUILD)
+        add_custom_command(TARGET clipboardpp PRE_BUILD
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
+                    "Stop-Process -Name clipboardpp -Force -ErrorAction SilentlyContinue; exit 0"
+            COMMENT "Stopping running clipboardpp.exe before build"
+            VERBATIM
+        )
+
+        add_custom_command(TARGET clipboardpp POST_BUILD
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
+                    "Start-Process -FilePath '$<TARGET_FILE:clipboardpp>' -WorkingDirectory '$<TARGET_FILE_DIR:clipboardpp>'"
+            COMMENT "Launching clipboardpp.exe after build"
+            VERBATIM
+        )
+    endif()
+
+    # -- Static runtime (no MSVC redist needed) --------------------------------
+    set_property(TARGET clipboardpp PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    # -- Windows Unicode + lean headers ----------------------------------------
+    target_compile_definitions(clipboardpp PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
     )
 endif()
 
-# -- Static runtime (no MSVC redist needed) ------------------------------------
-set_property(TARGET clipboardpp PROPERTY
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+if(UNIX AND NOT APPLE)
+    add_executable(clipboardpp_linux_probe
+        src/linux/LinuxProbe.cpp
+        ${PORTABLE_CORE_SOURCES}
+        ${IMGUI_DIR}/imgui.cpp
+        ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp
+    )
 
-# -- Windows Unicode + lean headers -------------------------------------------
-target_compile_definitions(clipboardpp PRIVATE
-    UNICODE
-    _UNICODE
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-    _CRT_SECURE_NO_WARNINGS
-)
+    target_include_directories(clipboardpp_linux_probe PRIVATE
+        src
+        ${IMGUI_DIR}
+        ${NLOHMANN_DIR}
+    )
+
+    find_package(OpenGL QUIET)
+    find_package(glfw3 QUIET)
+    if(OpenGL_FOUND AND glfw3_FOUND)
+        add_executable(clipboardpp_linux_imgui_probe
+            src/linux/ImguiGlfwProbe.cpp
+            ${PORTABLE_CORE_SOURCES}
+            ${IMGUI_DIR}/imgui.cpp
+            ${IMGUI_DIR}/imgui_draw.cpp
+            ${IMGUI_DIR}/imgui_tables.cpp
+            ${IMGUI_DIR}/imgui_widgets.cpp
+            ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+            ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+        )
+
+        target_include_directories(clipboardpp_linux_imgui_probe PRIVATE
+            src
+            ${IMGUI_DIR}
+            ${IMGUI_DIR}/backends
+            ${NLOHMANN_DIR}
+        )
+
+        target_link_libraries(clipboardpp_linux_imgui_probe PRIVATE
+            glfw
+            OpenGL::GL
+        )
+    endif()
+endif()
 
 # -- Compiler options ----------------------------------------------------------
 if(MSVC)
@@ -110,5 +168,6 @@ if(MSVC)
     target_link_options(clipboardpp PRIVATE
         $<$<CONFIG:Release>:/LTCG>
     )
+    target_link_options(clipboardpp PRIVATE /MANIFEST:NO)
     target_link_options(clipboardpp PRIVATE /SUBSYSTEM:CONSOLE)
 endif()

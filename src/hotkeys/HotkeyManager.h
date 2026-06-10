@@ -1,5 +1,44 @@
 #pragma once
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <cstdint>
+using UINT = unsigned int;
+using WPARAM = std::uintptr_t;
+using LPARAM = std::intptr_t;
+using LRESULT = std::intptr_t;
+using ULONG_PTR = std::uintptr_t;
+using HWND = void*;
+using HHOOK = void*;
+#ifndef CALLBACK
+#define CALLBACK
+#endif
+static constexpr UINT VK_OEM_COMMA = 0xBC;
+static constexpr UINT VK_OEM_PERIOD = 0xBE;
+static constexpr UINT VK_OEM_MINUS = 0xBD;
+static constexpr UINT VK_OEM_PLUS = 0xBB;
+static constexpr UINT VK_OEM_1 = 0xBA;
+static constexpr UINT VK_OEM_2 = 0xBF;
+static constexpr UINT VK_OEM_3 = 0xC0;
+static constexpr UINT VK_OEM_4 = 0xDB;
+static constexpr UINT VK_OEM_5 = 0xDC;
+static constexpr UINT VK_OEM_6 = 0xDD;
+static constexpr UINT VK_OEM_7 = 0xDE;
+static constexpr UINT VK_F1 = 0x70;
+static constexpr UINT VK_F12 = 0x7B;
+static constexpr UINT VK_F24 = 0x87;
+static constexpr UINT VK_SPACE = 0x20;
+static constexpr UINT VK_TAB = 0x09;
+static constexpr UINT VK_ESCAPE = 0x1B;
+static constexpr UINT VK_RETURN = 0x0D;
+static constexpr UINT VK_BACK = 0x08;
+static constexpr UINT VK_DELETE = 0x2E;
+static constexpr UINT VK_INSERT = 0x2D;
+static constexpr UINT VK_HOME = 0x24;
+static constexpr UINT VK_END = 0x23;
+static constexpr UINT VK_PRIOR = 0x21;
+static constexpr UINT VK_NEXT = 0x22;
+#endif
 #include <string>
 #include <vector>
 
@@ -21,6 +60,7 @@ enum class HotkeyAction : WPARAM {
     SelectClipboardProfileSlot = 8,
     LaunchWebSearch = 9,
     LaunchClipboardWebSearch = 10,
+    ToggleDebugWindow = 11,
 };
 
 struct KeyBinding {

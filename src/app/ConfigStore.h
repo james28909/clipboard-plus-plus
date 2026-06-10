@@ -29,8 +29,13 @@ struct AppConfig {
     bool appendNewlineAfterPaste{false};
     int pasteMoveTarget{0}; // 0=keep, 1=top, 2=bottom
     std::string activeClipboardId{"default"};
+#ifdef NDEBUG
+    bool autoSwitchClipboardByProcess{false};
+    bool autoCreateClipboardByProcess{false};
+#else
     bool autoSwitchClipboardByProcess{true};
     bool autoCreateClipboardByProcess{true};
+#endif
     std::vector<ClipboardProfileConfig> clipboards;
 };
 

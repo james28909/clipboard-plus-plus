@@ -26,6 +26,7 @@ public:
     bool IsTextEntryActive() const { return IsSearchActive() || m_dialogTextCapture; }
     bool IsKeyboardCaptureActive() const { return m_keyboardCapture || IsTextEntryActive(); }
     HWND GetHwnd()   const { return m_hwnd; }
+    SIZE GetCurrentSize() const;
 
     // Called each frame from Application - renders the popup if visible.
     void Render();
@@ -48,6 +49,7 @@ public:
 
     // Configurable
     float m_opacity{0.95f};
+    float m_outlineStrength{0.65f};
     int   m_width{440};
     int   m_height{540};
     int   m_queueDelayMs{50};

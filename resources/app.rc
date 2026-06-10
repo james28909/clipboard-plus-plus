@@ -3,6 +3,15 @@
 
 #include <windows.h>
 
+#ifndef CREATEPROCESS_MANIFEST_RESOURCE_ID
+#define CREATEPROCESS_MANIFEST_RESOURCE_ID 1
+#endif
+#ifndef RT_MANIFEST
+#define RT_MANIFEST 24
+#endif
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
 // Application icon (add clipboardpp.ico to this directory to use it)
 // IDI_APP ICON "clipboardpp.ico"
 

@@ -164,8 +164,10 @@ void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
     RebuildFontAtlas(ImGui::GetIO(), settings);
     ImGui_ImplDX11_CreateDeviceObjects();
     m_opacity = settings.popupOpacity;
-    m_width = settings.popupWidth;
-    m_height = settings.popupHeight;
+    m_outlineStrength = settings.popupOutlineStrength;
+    const float scale = EffectiveUiScale(settings);
+    m_width = static_cast<int>(std::lround(settings.popupWidth * scale));
+    m_height = static_cast<int>(std::lround(settings.popupHeight * scale));
     ApplyOpacity();
     if (m_visible) {
         SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, m_width, m_height,
@@ -236,6 +238,13 @@ void PopupWindow::OpenSettingsWindow() {
     Hide();
 }
 
+SIZE PopupWindow::GetCurrentSize() const {
+    RECT rc{};
+    if (m_hwnd && GetWindowRect(m_hwnd, &rc))
+        return {rc.right - rc.left, rc.bottom - rc.top};
+    return {m_width, m_height};
+}
+
 void PopupWindow::RequestSearchFocus() {
     m_focusSearchOnOpen = true;
     m_searchCapture = true;
@@ -292,6 +301,26 @@ void PopupWindow::Render() {
     DrawFilterStrip();
     ImGui::Separator();
     DrawItemList();
+
+    const AppearanceSettings effective = m_appearance.customColors
+        ? m_appearance
+        : ThemeDefaults(m_appearance.theme);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 pos = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    const ImVec2 max = {pos.x + size.x, pos.y + size.y};
+    const float rounding = ImGui::GetStyle().WindowRounding;
+    const float strength = std::clamp(m_outlineStrength, 0.0f, 1.0f);
+    ImVec4 glow = effective.accent;
+    glow.w = 0.06f + strength * 0.22f;
+    ImVec4 soft = effective.accent;
+    soft.w = 0.12f + strength * 0.32f;
+    dl->AddRect({pos.x + 1.0f, pos.y + 1.0f}, {max.x - 1.0f, max.y - 1.0f},
+                ImGui::GetColorU32(glow), rounding, 0, 2.0f + strength * 4.0f);
+    dl->AddRect({pos.x + 2.0f, pos.y + 2.0f}, {max.x - 2.0f, max.y - 2.0f},
+                ImGui::GetColorU32(soft), rounding, 0, 1.0f + strength * 2.0f);
+    dl->AddRect({pos.x + 0.5f, pos.y + 0.5f}, {max.x - 0.5f, max.y - 0.5f},
+                ImGui::GetColorU32(effective.accent), rounding, 0, 1.0f + strength * 0.75f);
 
     ImGui::End();
     ImGui::Render();
@@ -368,46 +397,67 @@ void PopupWindow::DrawTitleBar() {
     const float knobSize = height;
     const float fullWidth = ImGui::GetContentRegionAvail().x;
     const float spacerWidth = std::max(0.0f, fullWidth - height - knobSize - gap * 2.0f);
+    const AppearanceSettings effective = m_appearance.customColors ? m_appearance : ThemeDefaults(m_appearance.theme);
 
+    ImGui::PushStyleColor(ImGuiCol_Button, effective.closeButton);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, effective.closeButtonHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, effective.closeButtonHover);
+    ImGui::PushStyleColor(ImGuiCol_Text, effective.closeButtonText);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.0f, 0.0f});
     if (ImGui::Button("x", {height, height})) {
         Hide();
     }
     ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
 
     ImGui::SameLine();
-    ImGui::InvisibleButton("##opacity_knob", {knobSize, knobSize});
+    ImGui::InvisibleButton("##popup_adjust_knobs", {knobSize, knobSize});
     const bool knobHovered = ImGui::IsItemHovered();
-    if (knobHovered && ImGui::GetIO().MouseWheel != 0.0f) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const bool opacityHovered = knobHovered && mouse.y < (min.y + max.y) * 0.5f;
+    const bool outlineHovered = knobHovered && !opacityHovered;
+    if (opacityHovered && ImGui::GetIO().MouseWheel != 0.0f) {
         if (Application* app = Application::Get()) {
             app->SetPopupOpacity(m_opacity + ImGui::GetIO().MouseWheel * 0.05f);
         }
     }
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 min = ImGui::GetItemRectMin();
-    const ImVec2 max = ImGui::GetItemRectMax();
-    const ImVec2 center = {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f};
-    const float radius = knobSize * 0.33f;
-    const AppearanceSettings effective = m_appearance.customColors ? m_appearance : ThemeDefaults(m_appearance.theme);
+    if (outlineHovered && ImGui::GetIO().MouseWheel != 0.0f) {
+        if (Application* app = Application::Get()) {
+            app->SetPopupOutlineStrength(m_outlineStrength + ImGui::GetIO().MouseWheel * 0.05f);
+        }
+    }
+
+    const ImVec2 opacityCenter = {(min.x + max.x) * 0.5f, min.y + knobSize * 0.28f};
+    const ImVec2 outlineCenter = {(min.x + max.x) * 0.5f, min.y + knobSize * 0.73f};
+    const float radius = knobSize * 0.18f;
     const ImVec4 ring = effective.opacityKnobRing;
     const ImVec4 fill = effective.opacityKnobFill;
-    const ImU32 ringColor = ImGui::GetColorU32(knobHovered ? ImVec4(std::min(1.0f, ring.x + 0.12f),
-                                                                    std::min(1.0f, ring.y + 0.12f),
-                                                                    std::min(1.0f, ring.z + 0.12f), ring.w)
-                                                          : ring);
-    const ImU32 fillColor = ImGui::GetColorU32(knobHovered ? ImVec4(std::min(1.0f, fill.x + 0.08f),
-                                                                    std::min(1.0f, fill.y + 0.08f),
-                                                                    std::min(1.0f, fill.z + 0.08f), fill.w)
-                                                          : fill);
-    dl->AddCircleFilled(center, radius, fillColor, 24);
-    dl->AddCircle(center, radius, ringColor, 24, 2.0f);
-    const float angle = -1.5708f + m_opacity * 6.28318f;
-    dl->AddLine(center,
-                {center.x + std::cos(angle) * radius * 0.78f,
-                 center.y + std::sin(angle) * radius * 0.78f},
-                ringColor, 2.0f);
-    if (knobHovered)
-        ImGui::SetTooltip("Opacity %.0f%%", m_opacity * 100.0f);
+    auto brighten = [](ImVec4 c, float amount) {
+        c.x = std::min(1.0f, c.x + amount);
+        c.y = std::min(1.0f, c.y + amount);
+        c.z = std::min(1.0f, c.z + amount);
+        return c;
+    };
+    auto drawKnob = [&](ImVec2 center, float value, bool hovered, ImVec4 knobRing, ImVec4 knobFill) {
+        const ImU32 ringColor = ImGui::GetColorU32(hovered ? brighten(knobRing, 0.12f) : knobRing);
+        const ImU32 fillColor = ImGui::GetColorU32(hovered ? brighten(knobFill, 0.08f) : knobFill);
+        dl->AddCircleFilled(center, radius, fillColor, 18);
+        dl->AddCircle(center, radius, ringColor, 18, 1.5f);
+        const float angle = -1.5708f + value * 6.28318f;
+        dl->AddLine(center,
+                    {center.x + std::cos(angle) * radius * 0.78f,
+                     center.y + std::sin(angle) * radius * 0.78f},
+                    ringColor, 1.5f);
+    };
+    drawKnob(opacityCenter, m_opacity, opacityHovered, ring, fill);
+    drawKnob(outlineCenter, m_outlineStrength, outlineHovered, effective.accent, effective.panelBg);
+    if (opacityHovered)
+        ImGui::SetTooltip("Window opacity %.0f%%", m_opacity * 100.0f);
+    else if (outlineHovered)
+        ImGui::SetTooltip("Outline %.0f%%", m_outlineStrength * 100.0f);
 
     ImGui::SameLine();
     Application* app = Application::Get();
@@ -443,8 +493,10 @@ void PopupWindow::DrawTitleBar() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Left: name new clipboard\nRight: clipboard actions");
     if (ImGui::BeginPopup("##clipboard_plus_menu")) {
+#ifndef NDEBUG
         if (app && ImGui::MenuItem("Name from foreground process"))
             app->CreateClipboardFromForegroundProcess();
+#endif
         if (app && !app->CanDeleteActiveClipboardProfile())
             ImGui::BeginDisabled();
         if (app && ImGui::MenuItem("Delete current clipboard"))
@@ -1294,6 +1346,8 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     case WM_SIZE:
         if (pw && pw->m_swapChain && wParam != SIZE_MINIMIZED) {
+            pw->m_width = LOWORD(lParam);
+            pw->m_height = HIWORD(lParam);
             pw->ResizeSwapChainToClient();
             pw->ApplyWindowCorners();
         }
