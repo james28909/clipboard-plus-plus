@@ -8,13 +8,33 @@ Clipboard++ is developed by james28909 with close AI-assisted development suppor
 
 ## Screenshots
 
-Main settings window:
+General settings:
 
-![Clipboard++ settings window](docs/images/settings-appearance.png)
+![General settings](docs/images/general.png)
 
-Quick paste popup with example history:
+Hotkeys settings:
 
-![Clipboard++ popup with example history](docs/images/popup-example-history.png)
+![Hotkeys settings](docs/images/hotkeys.png)
+
+Quick paste popup:
+
+![Clipboard++ popup window](docs/images/clipboardpp-popup-window.png)
+
+Appearance settings (page 1):
+
+![Appearance settings page 1](docs/images/appearance-1.png)
+
+Appearance settings (page 2):
+
+![Appearance settings page 2](docs/images/appearance-2.png)
+
+Appearance settings (page 3):
+
+![Appearance settings page 3](docs/images/appearance-3.png)
+
+System tray popup:
+
+![System tray popup](docs/images/systray-popup.png)
 
 ## Features
 
