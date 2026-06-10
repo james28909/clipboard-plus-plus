@@ -90,6 +90,8 @@ public:
     std::string ExecutablePath() const;
     std::string WorkingDirectory() const;
     DWORD ProcessId() const { return GetCurrentProcessId(); }
+    SIZE MainWindowCurrentSize() const;
+    void UseCurrentMainWindowSizeAsDefault();
     SIZE PopupCurrentSize() const;
     void UseCurrentPopupSizeAsDefault();
     void SyncClipboardForForegroundProcess();
@@ -107,7 +109,6 @@ private:
     void RebuildClipboardHistories();
     void SaveClipboardHistory(const std::string& profileId);
     void SaveActiveClipboardHistory();
-    void ResizeMainWindowForScale(float oldScale, float newScale);
     void SwitchClipboardForProcess(const std::string& processName);
     ClipboardProfileConfig* FindClipboardForProcess(const std::string& processName);
     void CreateClipboardForProcess(const std::string& processName);

@@ -75,6 +75,20 @@ int ScaledPx(float value, const AppearanceSettings& appearance) {
     return static_cast<int>(std::lround(value * EffectiveUiScale(appearance)));
 }
 
+float DpiScaleForWindow(HWND hwnd) {
+#ifdef _WIN32
+    UINT dpi = 96;
+    if (hwnd)
+        dpi = GetDpiForWindow(hwnd);
+    else
+        dpi = GetDpiForSystem();
+    return std::clamp(static_cast<float>(dpi) / 96.0f, 0.5f, 4.0f);
+#else
+    (void)hwnd;
+    return 1.0f;
+#endif
+}
+
 } // namespace
 
 // -- Construction / destruction ------------------------------------------------
@@ -123,6 +137,8 @@ void Application::ShowMainWindow() {
     else
         ShowWindow(m_hwnd, SW_SHOWNORMAL);
 
+    SetWindowPos(m_hwnd, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     BringWindowToTop(m_hwnd);
     SetForegroundWindow(m_hwnd);
     SetActiveWindow(m_hwnd);
@@ -176,25 +192,22 @@ void Application::LogDebug(const std::string& event) {
 }
 
 void Application::RequestAppearance(const AppearanceSettings& settings) {
-    const float oldScale = EffectiveUiScale(m_appearance);
     {
         std::ostringstream out;
         out << "RequestAppearance: begin"
             << " fontPath=\"" << settings.fontPath << "\""
             << " fontSize=" << settings.fontSize
-            << " uiScale=" << settings.uiScale
-            << " oldEffectiveScale=" << oldScale;
+            << " uiScale=windows";
         LogDebug(out.str());
     }
     m_appearance = settings;
+    m_appearance.uiScale = 1.0f;
+    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
     std::filesystem::path imported = ConfigStore::ImportFontFile(m_appearance.fontPath);
     if (!imported.empty()) {
         LogDebug("RequestAppearance: imported font to \"" + imported.u8string() + "\"");
         m_appearance.fontPath = imported.u8string();
     }
-    const float newScale = EffectiveUiScale(m_appearance);
-    if (std::fabs(newScale - oldScale) > 0.001f)
-        ResizeMainWindowForScale(oldScale, newScale);
     m_config.appearance = m_appearance;
     m_appearanceDirty = true;
     SaveConfig();
@@ -202,8 +215,7 @@ void Application::RequestAppearance(const AppearanceSettings& settings) {
         std::ostringstream out;
         out << "RequestAppearance: queued apply"
             << " fontPath=\"" << m_appearance.fontPath << "\""
-            << " fontSize=" << m_appearance.fontSize
-            << " newEffectiveScale=" << newScale;
+            << " fontSize=" << m_appearance.fontSize;
         LogDebug(out.str());
     }
 }
@@ -476,48 +488,11 @@ void Application::SaveActiveClipboardHistory() {
     SaveClipboardHistory(m_config.activeClipboardId);
 }
 
-void Application::ResizeMainWindowForScale(float oldScale, float newScale) {
-    if (!m_hwnd || oldScale <= 0.0f || newScale <= 0.0f)
-        return;
-    if (IsIconic(m_hwnd) || IsZoomed(m_hwnd))
-        return;
-
-    RECT rc{};
-    if (!GetWindowRect(m_hwnd, &rc))
-        return;
-
-    const float ratio = newScale / oldScale;
-    int width = std::max(ScaledPx(800.0f, m_appearance),
-                         static_cast<int>(std::lround((rc.right - rc.left) * ratio)));
-    int height = std::max(ScaledPx(500.0f, m_appearance),
-                          static_cast<int>(std::lround((rc.bottom - rc.top) * ratio)));
-
-    HMONITOR mon = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi{sizeof(MONITORINFO)};
-    if (GetMonitorInfoW(mon, &mi)) {
-        width = std::min(width, static_cast<int>(mi.rcWork.right - mi.rcWork.left));
-        height = std::min(height, static_cast<int>(mi.rcWork.bottom - mi.rcWork.top));
-    }
-
-    const int centerX = rc.left + (rc.right - rc.left) / 2;
-    const int centerY = rc.top + (rc.bottom - rc.top) / 2;
-    int x = centerX - width / 2;
-    int y = centerY - height / 2;
-
-    if (GetMonitorInfoW(mon, &mi)) {
-        x = std::clamp(x, static_cast<int>(mi.rcWork.left),
-                       static_cast<int>(mi.rcWork.right) - width);
-        y = std::clamp(y, static_cast<int>(mi.rcWork.top),
-                       static_cast<int>(mi.rcWork.bottom) - height);
-    }
-
-    SetWindowPos(m_hwnd, nullptr, x, y, width, height,
-                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-}
-
 void Application::ApplyLoadedConfig(const AppConfig& config) {
     m_config = config;
     m_appearance = m_config.appearance;
+    m_appearance.uiScale = 1.0f;
+    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
     m_hotkeySettings = m_config.hotkeys;
     m_appearanceDirty = true;
     RebuildClipboardHistories();
@@ -551,9 +526,43 @@ std::string Application::WorkingDirectory() const {
     return win32util::CurrentDirectory();
 }
 
+SIZE Application::MainWindowCurrentSize() const {
+    if (m_hwnd) {
+        RECT rc{};
+        if (GetWindowRect(m_hwnd, &rc)) {
+            const float dpiScale = DpiScaleForWindow(m_hwnd);
+            return {
+                static_cast<LONG>(std::lround((rc.right - rc.left) / dpiScale)),
+                static_cast<LONG>(std::lround((rc.bottom - rc.top) / dpiScale))
+            };
+        }
+    }
+    return {m_appearance.mainWindowWidth, m_appearance.mainWindowHeight};
+}
+
+void Application::UseCurrentMainWindowSizeAsDefault() {
+    SIZE size = MainWindowCurrentSize();
+    size.cx = std::max<LONG>(800, size.cx);
+    size.cy = std::max<LONG>(500, size.cy);
+
+    m_appearance.mainWindowWidth = static_cast<int>(size.cx);
+    m_appearance.mainWindowHeight = static_cast<int>(size.cy);
+    m_config.appearance = m_appearance;
+    SaveConfig();
+    AddDeveloperEvent("saved settings window size as default: " +
+                      std::to_string(m_appearance.mainWindowWidth) + "x" +
+                      std::to_string(m_appearance.mainWindowHeight));
+}
+
 SIZE Application::PopupCurrentSize() const {
-    if (m_popup)
-        return m_popup->GetCurrentSize();
+    if (m_popup) {
+        SIZE size = m_popup->GetCurrentSize();
+        const float dpiScale = DpiScaleForWindow(m_popup->GetHwnd());
+        return {
+            static_cast<LONG>(std::lround(size.cx / dpiScale)),
+            static_cast<LONG>(std::lround(size.cy / dpiScale))
+        };
+    }
     return {m_appearance.popupWidth, m_appearance.popupHeight};
 }
 
@@ -752,11 +761,13 @@ bool Application::Init() {
         L"Clipboard++",
         WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        ScaledPx(1200.0f, m_appearance), ScaledPx(750.0f, m_appearance),
+        ScaledPx(static_cast<float>(std::max(800, m_appearance.mainWindowWidth)), m_appearance),
+        ScaledPx(static_cast<float>(std::max(500, m_appearance.mainWindowHeight)), m_appearance),
         nullptr, nullptr, m_hInstance, nullptr
     );
 
     if (!m_hwnd) return false;
+    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
 
     // DWM drop-shadow for borderless window (1px inset on all sides is enough)
     MARGINS shadow = {1, 1, 1, 1};
@@ -1071,6 +1082,23 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             app->m_swapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam),
                                              DXGI_FORMAT_UNKNOWN, 0);
             app->CreateRenderTarget();
+        }
+        return 0;
+
+    case WM_DPICHANGED:
+        if (app) {
+            app->m_appearance.dpiScale = DpiScaleForWindow(hwnd);
+            app->m_appearanceDirty = true;
+            if (RECT* suggested = reinterpret_cast<RECT*>(lParam)) {
+                SetWindowPos(hwnd, nullptr,
+                             suggested->left,
+                             suggested->top,
+                             suggested->right - suggested->left,
+                             suggested->bottom - suggested->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            app->LogDebug("main window DPI changed; scale=" +
+                          std::to_string(app->m_appearance.dpiScale));
         }
         return 0;
 

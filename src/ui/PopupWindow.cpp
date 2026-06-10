@@ -35,6 +35,11 @@ static constexpr int kPopupTitleButton = 22;
 static constexpr int kPopupTitleGap = 4;
 static constexpr int kPopupTitleHeight = kPopupTitlePad + kPopupTitleButton + 8;
 
+static float DpiScaleForWindow(HWND hwnd) {
+    UINT dpi = hwnd ? GetDpiForWindow(hwnd) : GetDpiForSystem();
+    return std::clamp(static_cast<float>(dpi) / 96.0f, 0.5f, 4.0f);
+}
+
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
 #define DWMWA_WINDOW_CORNER_PREFERENCE 33
 #endif
@@ -159,15 +164,16 @@ void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
     ImGui::SetCurrentContext(m_imguiCtx);
 
     m_appearance = settings;
+    m_appearance.dpiScale = DpiScaleForWindow(m_hwnd);
     ApplyThemeStyle(m_appearance, true);
     ImGui_ImplDX11_InvalidateDeviceObjects();
-    RebuildFontAtlas(ImGui::GetIO(), settings);
+    RebuildFontAtlas(ImGui::GetIO(), m_appearance);
     ImGui_ImplDX11_CreateDeviceObjects();
     m_opacity = settings.popupOpacity;
     m_outlineStrength = settings.popupOutlineStrength;
-    const float scale = EffectiveUiScale(settings);
-    m_width = static_cast<int>(std::lround(settings.popupWidth * scale));
-    m_height = static_cast<int>(std::lround(settings.popupHeight * scale));
+    const float dpiScale = EffectiveUiScale(m_appearance);
+    m_width = static_cast<int>(std::lround(settings.popupWidth * dpiScale));
+    m_height = static_cast<int>(std::lround(settings.popupHeight * dpiScale));
     ApplyOpacity();
     if (m_visible) {
         SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, m_width, m_height,
@@ -225,7 +231,6 @@ void PopupWindow::Hide() {
     m_searchActive  = false;
     m_searchCapture = false;
     m_dialogTextCapture = false;
-    m_newClipboardFocusPending = false;
     m_keyboardCapture = false;
     m_maximized = false;
     m_queueMode     = false;
@@ -302,9 +307,16 @@ void PopupWindow::Render() {
     ImGui::Separator();
     DrawItemList();
 
-    const AppearanceSettings effective = m_appearance.customColors
+    AppearanceSettings effective = m_appearance.customColors
         ? m_appearance
         : ThemeDefaults(m_appearance.theme);
+    effective.popupOutlineAnimated = m_appearance.popupOutlineAnimated;
+    effective.popupOutlineAnimationSpeed = m_appearance.popupOutlineAnimationSpeed;
+    effective.popupOutlineColorSharpness = m_appearance.popupOutlineColorSharpness;
+    effective.popupOutlineColorSpread = m_appearance.popupOutlineColorSpread;
+    effective.popupOutlineSaturation = m_appearance.popupOutlineSaturation;
+    effective.popupOutlineBrightness = m_appearance.popupOutlineBrightness;
+    effective.popupOutlineReverse = m_appearance.popupOutlineReverse;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 pos = ImGui::GetWindowPos();
     const ImVec2 size = ImGui::GetWindowSize();
@@ -312,25 +324,58 @@ void PopupWindow::Render() {
     const float rounding = ImGui::GetStyle().WindowRounding;
     const float strength = std::clamp(m_outlineStrength, 0.0f, 1.0f);
     if (strength > 0.001f) {
-        ImVec4 glow = effective.accent;
+        auto outlineColor = [&](float offset, float alpha) {
+            if (!effective.popupOutlineAnimated) {
+                ImVec4 color = effective.accent;
+                color.w = alpha;
+                return color;
+            }
+            float r = 1.0f, g = 1.0f, b = 1.0f;
+            const float direction = effective.popupOutlineReverse ? -1.0f : 1.0f;
+            const float speed = std::clamp(effective.popupOutlineAnimationSpeed, 0.05f, 5.0f);
+            const float spread = std::clamp(effective.popupOutlineColorSpread, 0.0f, 2.0f);
+            const float sharpness = std::clamp(effective.popupOutlineColorSharpness, 0.0f, 1.0f);
+            const float saturation = std::clamp(effective.popupOutlineSaturation, 0.0f, 1.0f);
+            const float brightness = std::clamp(effective.popupOutlineBrightness, 0.20f, 1.0f);
+            float hue = std::fmod(static_cast<float>(ImGui::GetTime()) * 0.10f * speed * direction +
+                                  offset * spread, 1.0f);
+            if (hue < 0.0f)
+                hue += 1.0f;
+            const float stepped = std::floor(hue * 6.0f + 0.5f) / 6.0f;
+            hue = hue + (stepped - hue) * sharpness;
+            ImGui::ColorConvertHSVtoRGB(hue, saturation, brightness, r, g, b);
+            return ImVec4(r, g, b, alpha);
+        };
+        ImVec4 glow = outlineColor(0.0f, strength * 0.26f);
         glow.w = strength * 0.26f;
-        ImVec4 soft = effective.accent;
-        soft.w = strength * 0.38f;
-        ImVec4 crisp = effective.accent;
-        crisp.w = strength * 0.92f;
+        ImVec4 soft = outlineColor(0.08f, strength * 0.38f);
         dl->AddRect({pos.x + 1.0f, pos.y + 1.0f}, {max.x - 1.0f, max.y - 1.0f},
                     ImGui::GetColorU32(glow), rounding, 0, 1.0f + strength * 4.5f);
         dl->AddRect({pos.x + 2.0f, pos.y + 2.0f}, {max.x - 2.0f, max.y - 2.0f},
                     ImGui::GetColorU32(soft), rounding, 0, 0.75f + strength * 2.5f);
-        dl->AddRect({pos.x + 0.5f, pos.y + 0.5f}, {max.x - 0.5f, max.y - 0.5f},
-                    ImGui::GetColorU32(crisp), rounding, 0, 0.75f + strength * 1.0f);
+        if (effective.popupOutlineAnimated) {
+            const float thick = 0.75f + strength * 1.35f;
+            dl->AddLine({pos.x + rounding, pos.y + 0.5f}, {max.x - rounding, pos.y + 0.5f},
+                        ImGui::GetColorU32(outlineColor(0.00f, strength * 0.95f)), thick);
+            dl->AddLine({max.x - 0.5f, pos.y + rounding}, {max.x - 0.5f, max.y - rounding},
+                        ImGui::GetColorU32(outlineColor(0.25f, strength * 0.95f)), thick);
+            dl->AddLine({max.x - rounding, max.y - 0.5f}, {pos.x + rounding, max.y - 0.5f},
+                        ImGui::GetColorU32(outlineColor(0.50f, strength * 0.95f)), thick);
+            dl->AddLine({pos.x + 0.5f, max.y - rounding}, {pos.x + 0.5f, pos.y + rounding},
+                        ImGui::GetColorU32(outlineColor(0.75f, strength * 0.95f)), thick);
+        } else {
+            dl->AddRect({pos.x + 0.5f, pos.y + 0.5f}, {max.x - 0.5f, max.y - 0.5f},
+                        ImGui::GetColorU32(outlineColor(0.0f, strength * 0.92f)),
+                        rounding, 0, 0.75f + strength * 1.0f);
+        }
     }
 
     ImGui::End();
     ImGui::Render();
 
-    // Clear + present
-    constexpr float bg[4] = {0.145f, 0.145f, 0.145f, 1.0f};
+    // Clear to the same color ImGui uses for the popup background. With large
+    // rounding, hard-coded clear pixels can show through as ghost corners.
+    const float bg[4] = {effective.windowBg.x, effective.windowBg.y, effective.windowBg.z, 1.0f};
     m_context->OMSetRenderTargets(1, &m_renderTarget, nullptr);
     m_context->ClearRenderTargetView(m_renderTarget, bg);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -399,8 +444,6 @@ void PopupWindow::DrawTitleBar() {
     const float height = static_cast<float>(kPopupTitleButton);
     const float gap = static_cast<float>(kPopupTitleGap);
     const float knobSize = height;
-    const float fullWidth = ImGui::GetContentRegionAvail().x;
-    const float spacerWidth = std::max(0.0f, fullWidth - height - knobSize - gap * 2.0f);
     const AppearanceSettings effective = m_appearance.customColors ? m_appearance : ThemeDefaults(m_appearance.theme);
 
     ImGui::PushStyleColor(ImGuiCol_Button, effective.closeButton);
@@ -470,18 +513,33 @@ void PopupWindow::DrawTitleBar() {
         std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", active->name.c_str());
     }
 
-    const float saveW = 42.0f;
-    const float deleteW = 28.0f;
-    const float selectorW = std::max(130.0f, spacerWidth - saveW - deleteW - gap * 2.0f);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(selectorW - 32.0f);
+    auto clipboardNameExists = [&]() {
+        if (!app || m_clipboardName[0] == '\0')
+            return true;
+        for (const ClipboardProfileConfig& profile : app->GetClipboardProfiles()) {
+            if (profile.name == m_clipboardName)
+                return true;
+        }
+        return false;
+    };
+
+    const bool showSave = !clipboardNameExists();
+    const float saveW = std::ceil(ImGui::CalcTextSize("Save").x + ImGui::GetStyle().FramePadding.x * 2.0f + 8.0f);
+    const float arrowW = 28.0f;
+    ImGui::SameLine(0.0f, gap);
+    const float controlsAvail = ImGui::GetContentRegionAvail().x;
+    const float saveReserve = showSave ? saveW + gap : 0.0f;
+    const float selectorW = std::max(80.0f, controlsAvail - saveReserve);
+    const float inputW = std::max(52.0f, selectorW - arrowW);
+
+    ImGui::SetNextItemWidth(inputW);
     ImGui::InputText("##clipboard_name", m_clipboardName, sizeof(m_clipboardName));
     const bool clipboardNameActive = ImGui::IsItemActive();
     if (clipboardNameActive || ImGui::IsItemClicked()) {
         ActivateKeyboardCapture();
         m_dialogTextCapture = true;
     }
-    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::SameLine(0.0f, 0.0f);
     if (ImGui::Button("v##clipboard_dropdown", {28.0f, 0.0f}))
         ImGui::OpenPopup("##clipboard_profile_picker");
     if (ImGui::IsItemHovered())
@@ -507,63 +565,25 @@ void PopupWindow::DrawTitleBar() {
         ImGui::EndPopup();
     }
 
-    ImGui::SameLine();
-    if (!app || !active || m_clipboardName[0] == '\0')
-        ImGui::BeginDisabled();
-    if (ImGui::Button("Save", {saveW, 0.0f}) && app) {
-        app->RenameActiveClipboardProfile(m_clipboardName);
-        if (const ClipboardProfileConfig* renamed = app->GetActiveClipboardProfile()) {
-            std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", renamed->name.c_str());
-            m_lastClipboardId = renamed->id;
-        }
-        m_dialogTextCapture = false;
-    }
-    if (!app || !active || m_clipboardName[0] == '\0')
-        ImGui::EndDisabled();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Save clipboard name");
-
-    ImGui::SameLine();
-    if (app && !app->CanDeleteActiveClipboardProfile())
-        ImGui::BeginDisabled();
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
-    if (ImGui::Button("x##delete_clipboard", {deleteW, 0.0f}) && app && active) {
-        m_deleteClipboardName = active->name;
-        MessageBeep(MB_ICONWARNING);
-        ImGui::OpenPopup("Delete clipboard?");
-    }
-    ImGui::PopStyleColor(3);
-    if (app && !app->CanDeleteActiveClipboardProfile())
-        ImGui::EndDisabled();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Delete current clipboard");
-
-    if (ImGui::BeginPopupModal("Delete clipboard?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("Delete this clipboard?");
-        ImGui::TextDisabled("%s", m_deleteClipboardName.empty() ? "Clipboard" : m_deleteClipboardName.c_str());
-        ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
-        if (ImGui::Button("Delete", {100.0f, 0.0f}) && app) {
-            app->DeleteActiveClipboardProfile();
-            if (const ClipboardProfileConfig* next = app->GetActiveClipboardProfile()) {
-                std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", next->name.c_str());
-                m_lastClipboardId = next->id;
+    if (showSave) {
+        ImGui::SameLine(0.0f, gap);
+        if (!active)
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Save", {saveW, 0.0f}) && app) {
+            app->RenameActiveClipboardProfile(m_clipboardName);
+            if (const ClipboardProfileConfig* renamed = app->GetActiveClipboardProfile()) {
+                std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", renamed->name.c_str());
+                m_lastClipboardId = renamed->id;
             }
-            m_deleteClipboardName.clear();
-            ImGui::CloseCurrentPopup();
+            m_dialogTextCapture = false;
         }
-        ImGui::PopStyleColor(3);
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", {90.0f, 0.0f}) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            m_deleteClipboardName.clear();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    } else if (m_dialogTextCapture && !clipboardNameActive &&
+        if (!active)
+            ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Save clipboard name");
+    }
+
+    if (m_dialogTextCapture && !clipboardNameActive &&
                !ImGui::IsPopupOpen("##clipboard_profile_picker")) {
         m_dialogTextCapture = false;
     }
@@ -685,7 +705,10 @@ void PopupWindow::DrawItemList() {
     if (!hist) return;
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
-    ImGui::BeginChild("##items", {0.f, 0.f}, ImGuiChildFlags_None);
+    ImGuiWindowFlags itemFlags = m_appearance.showScrollbars
+        ? ImGuiWindowFlags_None
+        : ImGuiWindowFlags_NoScrollbar;
+    ImGui::BeginChild("##items", {0.f, 0.f}, ImGuiChildFlags_None, itemFlags);
 
     const std::vector<size_t> pinned = BuildVisibleHistoryIndices(true);
     const std::vector<size_t> regular = BuildVisibleHistoryIndices(false);
@@ -1265,6 +1288,30 @@ void PopupWindow::ApplyWindowCorners() {
     const COLORREF noBorder = DWMWA_COLOR_NONE;
     DwmSetWindowAttribute(m_hwnd, DWMWA_BORDER_COLOR,
                           &noBorder, sizeof(noBorder));
+
+    if (m_maximized) {
+        SetWindowRgn(m_hwnd, nullptr, TRUE);
+        return;
+    }
+
+    RECT rc{};
+    if (!GetClientRect(m_hwnd, &rc))
+        return;
+
+    const int width = std::max(1, static_cast<int>(rc.right - rc.left));
+    const int height = std::max(1, static_cast<int>(rc.bottom - rc.top));
+    const float scale = EffectiveUiScale(m_appearance);
+    const int radius = static_cast<int>(std::lround(
+        std::clamp(m_appearance.popupRounding, 0.0f, 48.0f) * scale * 2.0f));
+
+    if (radius <= 1) {
+        SetWindowRgn(m_hwnd, nullptr, TRUE);
+        return;
+    }
+
+    HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
+    if (region && SetWindowRgn(m_hwnd, region, TRUE) == 0)
+        DeleteObject(region);
 }
 
 // -- Win32 message handler -----------------------------------------------------
@@ -1369,7 +1416,11 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     case WM_GETMINMAXINFO: {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
-        mmi->ptMinTrackSize = {360, 260};
+        const float dpiScale = DpiScaleForWindow(hwnd);
+        mmi->ptMinTrackSize = {
+            static_cast<LONG>(std::lround(360.0f * dpiScale)),
+            static_cast<LONG>(std::lround(260.0f * dpiScale))
+        };
         return 0;
     }
 
@@ -1377,6 +1428,23 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
         if (pw && pw->m_swapChain && wParam != SIZE_MINIMIZED) {
             pw->m_width = LOWORD(lParam);
             pw->m_height = HIWORD(lParam);
+            pw->ResizeSwapChainToClient();
+            pw->ApplyWindowCorners();
+        }
+        return 0;
+
+    case WM_DPICHANGED:
+        if (pw) {
+            pw->m_appearance.dpiScale = DpiScaleForWindow(hwnd);
+            ApplyThemeStyle(pw->m_appearance, true);
+            if (RECT* suggested = reinterpret_cast<RECT*>(lParam)) {
+                SetWindowPos(hwnd, HWND_TOPMOST,
+                             suggested->left,
+                             suggested->top,
+                             suggested->right - suggested->left,
+                             suggested->bottom - suggested->top,
+                             SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            }
             pw->ResizeSwapChainToClient();
             pw->ApplyWindowCorners();
         }

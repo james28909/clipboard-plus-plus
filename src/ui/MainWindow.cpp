@@ -148,6 +148,39 @@ static void KeepMouseWheelOnLastItem() {
     ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
 }
 
+static bool SliderFloatWheel(const char* label, float* value, float min, float max,
+                             const char* format, float wheelStep,
+                             ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp) {
+    bool changed = ImGui::SliderFloat(label, value, min, max, format, flags);
+    KeepMouseWheelOnLastItem();
+    if (ImGui::IsItemHovered()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseWheel != 0.0f) {
+            *value = std::clamp(*value + io.MouseWheel * wheelStep, min, max);
+            io.MouseWheel = 0.0f;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+static bool SliderIntWheel(const char* label, int* value, int min, int max,
+                           const char* format, int wheelStep,
+                           ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp) {
+    bool changed = ImGui::SliderInt(label, value, min, max, format, flags);
+    KeepMouseWheelOnLastItem();
+    if (ImGui::IsItemHovered()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseWheel != 0.0f) {
+            const int delta = io.MouseWheel > 0.0f ? wheelStep : -wheelStep;
+            *value = std::clamp(*value + delta, min, max);
+            io.MouseWheel = 0.0f;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 // -- Title bar helpers ---------------------------------------------------------
 
 // Draws a single title bar button. Handles hover highlight and click detection.
@@ -259,6 +292,7 @@ void MainWindow::RequestFocus() {
 }
 
 void MainWindow::Draw(bool& open) {
+    Application* app = Application::Get();
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -302,7 +336,12 @@ void MainWindow::Draw(bool& open) {
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {S(22.0f), S(20.0f)});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {S(10.0f), S(13.0f)});
-    ImGui::BeginChild("##content", {contentW, 0}, ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGuiWindowFlags contentFlags = app && !app->GetAppearance().showScrollbars
+        ? ImGuiWindowFlags_NoScrollbar
+        : ImGuiWindowFlags_None;
+    ImGui::BeginChild("##content", {contentW, 0},
+                      ImGuiChildFlags_AlwaysUseWindowPadding,
+                      contentFlags);
     switch (s_activeSection) {
     case SEC_GENERAL:    DrawGeneral();    break;
     case SEC_HOTKEYS:    DrawHotkeys();    break;
@@ -676,6 +715,11 @@ static void DrawPopupPreview(const AppearanceSettings& draft) {
     dl->AddRectFilled(rowA, rowB, ImGui::GetColorU32(preview.panelBg), 3.0f);
     dl->AddCircleFilled({rowA.x + 10.0f, rowA.y + 13.0f}, 3.0f, IM_COL32(255, 196, 64, 255), 12);
     dl->AddText({rowA.x + 20.0f, rowA.y + 5.0f}, ImGui::GetColorU32(preview.text), "1  [P] Copied item preview");
+    ImVec2 scrollA = {end.x - 17.0f, searchB.y + 10.0f};
+    ImVec2 scrollB = {end.x - 11.0f, rowB.y};
+    dl->AddRectFilled(scrollA, scrollB, ImGui::GetColorU32(preview.scrollbarBg), 3.0f);
+    dl->AddRectFilled({scrollA.x, scrollA.y + 9.0f}, {scrollB.x, scrollA.y + 36.0f},
+                      ImGui::GetColorU32(preview.scrollbarGrab), 3.0f);
 
     ImGui::Dummy(size);
 }
@@ -739,11 +783,24 @@ void MainWindow::DrawAppearance() {
         const AppearanceSettings current = app->GetAppearance();
         next.fontPath = current.fontPath;
         next.fontSize = current.fontSize;
-        next.uiScale = current.uiScale;
+        next.uiScale = 1.0f;
         next.popupOpacity = current.popupOpacity;
         next.popupOutlineStrength = current.popupOutlineStrength;
+        next.popupOutlineAnimated = current.popupOutlineAnimated;
+        next.popupOutlineAnimationSpeed = current.popupOutlineAnimationSpeed;
+        next.popupOutlineColorSharpness = current.popupOutlineColorSharpness;
+        next.popupOutlineColorSpread = current.popupOutlineColorSpread;
+        next.popupOutlineSaturation = current.popupOutlineSaturation;
+        next.popupOutlineBrightness = current.popupOutlineBrightness;
+        next.popupOutlineReverse = current.popupOutlineReverse;
         next.popupWidth = current.popupWidth;
         next.popupHeight = current.popupHeight;
+        next.mainWindowWidth = current.mainWindowWidth;
+        next.mainWindowHeight = current.mainWindowHeight;
+        next.showScrollbars = current.showScrollbars;
+        next.scrollbarSize = current.scrollbarSize;
+        next.scrollbarRounding = current.scrollbarRounding;
+        next.scrollbarPadding = current.scrollbarPadding;
         next.popupRounding = current.popupRounding;
         next.controlRounding = current.controlRounding;
         next.savedThemes = current.savedThemes;
@@ -767,7 +824,7 @@ void MainWindow::DrawAppearance() {
         next.savedThemes = app->GetAppearance().savedThemes;
         next.fontPath = app->GetAppearance().fontPath;
         next.fontSize = app->GetAppearance().fontSize;
-        next.uiScale = app->GetAppearance().uiScale;
+        next.uiScale = 1.0f;
         next.customColors = true;
         next.customThemeName = requestedName.empty() ? "Custom" : requestedName;
         SavedAppearanceTheme saved = ToSavedTheme(next, next.customThemeName);
@@ -799,11 +856,24 @@ void MainWindow::DrawAppearance() {
             AppearanceSettings fallback = ThemeDefaults(next.theme);
             fallback.fontPath = next.fontPath;
             fallback.fontSize = next.fontSize;
-            fallback.uiScale = next.uiScale;
+            fallback.uiScale = 1.0f;
             fallback.popupOpacity = next.popupOpacity;
             fallback.popupOutlineStrength = next.popupOutlineStrength;
+            fallback.popupOutlineAnimated = next.popupOutlineAnimated;
+            fallback.popupOutlineAnimationSpeed = next.popupOutlineAnimationSpeed;
+            fallback.popupOutlineColorSharpness = next.popupOutlineColorSharpness;
+            fallback.popupOutlineColorSpread = next.popupOutlineColorSpread;
+            fallback.popupOutlineSaturation = next.popupOutlineSaturation;
+            fallback.popupOutlineBrightness = next.popupOutlineBrightness;
+            fallback.popupOutlineReverse = next.popupOutlineReverse;
             fallback.popupWidth = next.popupWidth;
             fallback.popupHeight = next.popupHeight;
+            fallback.mainWindowWidth = next.mainWindowWidth;
+            fallback.mainWindowHeight = next.mainWindowHeight;
+            fallback.showScrollbars = next.showScrollbars;
+            fallback.scrollbarSize = next.scrollbarSize;
+            fallback.scrollbarRounding = next.scrollbarRounding;
+            fallback.scrollbarPadding = next.scrollbarPadding;
             fallback.popupRounding = next.popupRounding;
             fallback.controlRounding = next.controlRounding;
             fallback.savedThemes = next.savedThemes;
@@ -939,12 +1009,60 @@ void MainWindow::DrawAppearance() {
     ImGui::Spacing();
     ImGui::Text("Popup opacity");
     ImGui::SetNextItemWidth(240.0f);
-    ImGui::SliderFloat("##opacity", &draft.popupOpacity, 0.1f, 1.0f, "%.2f");
-    KeepMouseWheelOnLastItem();
+    SliderFloatWheel("##opacity", &draft.popupOpacity, 0.1f, 1.0f, "%.2f", 0.05f);
     ImGui::Text("Popup outline");
     ImGui::SetNextItemWidth(240.0f);
-    ImGui::SliderFloat("##outline_strength", &draft.popupOutlineStrength, 0.0f, 1.0f, "%.2f");
-    KeepMouseWheelOnLastItem();
+    SliderFloatWheel("##outline_strength", &draft.popupOutlineStrength, 0.0f, 1.0f, "%.2f", 0.05f);
+    if (ImGui::Checkbox("Animated multicolor outline", &draft.popupOutlineAnimated)) {
+        AppearanceSettings next = app->GetAppearance();
+        next.popupOutlineAnimated = draft.popupOutlineAnimated;
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    }
+    if (draft.popupOutlineAnimated) {
+        bool outlineAnimationChanged = false;
+        auto applyOutlineAnimation = [&]() {
+            AppearanceSettings next = app->GetAppearance();
+            next.popupOutlineAnimationSpeed = std::clamp(draft.popupOutlineAnimationSpeed, 0.05f, 5.0f);
+            next.popupOutlineColorSharpness = std::clamp(draft.popupOutlineColorSharpness, 0.0f, 1.0f);
+            next.popupOutlineColorSpread = std::clamp(draft.popupOutlineColorSpread, 0.0f, 2.0f);
+            next.popupOutlineSaturation = std::clamp(draft.popupOutlineSaturation, 0.0f, 1.0f);
+            next.popupOutlineBrightness = std::clamp(draft.popupOutlineBrightness, 0.20f, 1.0f);
+            next.popupOutlineReverse = draft.popupOutlineReverse;
+            app->RequestAppearance(next);
+            draft = app->GetAppearance();
+            std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+        };
+        ImGui::SetNextItemWidth(240.0f);
+        outlineAnimationChanged |= SliderFloatWheel("Animation speed", &draft.popupOutlineAnimationSpeed,
+                                                    0.05f, 5.0f, "%.2fx", 0.05f);
+        ImGui::SetNextItemWidth(240.0f);
+        outlineAnimationChanged |= SliderFloatWheel("Color spread", &draft.popupOutlineColorSpread,
+                                                    0.0f, 2.0f, "%.2f", 0.05f);
+        ImGui::SetNextItemWidth(240.0f);
+        outlineAnimationChanged |= SliderFloatWheel("Color sharpness", &draft.popupOutlineColorSharpness,
+                                                    0.0f, 1.0f, "%.2f", 0.05f);
+        ImGui::SetNextItemWidth(240.0f);
+        outlineAnimationChanged |= SliderFloatWheel("Color saturation", &draft.popupOutlineSaturation,
+                                                    0.0f, 1.0f, "%.2f", 0.05f);
+        ImGui::SetNextItemWidth(240.0f);
+        outlineAnimationChanged |= SliderFloatWheel("Color brightness", &draft.popupOutlineBrightness,
+                                                    0.20f, 1.0f, "%.2f", 0.05f);
+        if (ImGui::Checkbox("Reverse direction", &draft.popupOutlineReverse))
+            outlineAnimationChanged = true;
+        if (outlineAnimationChanged)
+            applyOutlineAnimation();
+        if (ImGui::SmallButton("Reset outline animation")) {
+            draft.popupOutlineAnimationSpeed = 1.0f;
+            draft.popupOutlineColorSpread = 1.0f;
+            draft.popupOutlineColorSharpness = 0.55f;
+            draft.popupOutlineSaturation = 0.72f;
+            draft.popupOutlineBrightness = 1.0f;
+            draft.popupOutlineReverse = false;
+            applyOutlineAnimation();
+        }
+    }
 
     ImGui::Spacing();
     ImGui::Text("Default popup size");
@@ -973,8 +1091,47 @@ void MainWindow::DrawAppearance() {
         AppearanceSettings next = app->GetAppearance();
         next.popupOpacity = std::clamp(draft.popupOpacity, 0.1f, 1.0f);
         next.popupOutlineStrength = std::clamp(draft.popupOutlineStrength, 0.0f, 1.0f);
+        next.popupOutlineAnimated = draft.popupOutlineAnimated;
+        next.popupOutlineAnimationSpeed = std::clamp(draft.popupOutlineAnimationSpeed, 0.05f, 5.0f);
+        next.popupOutlineColorSharpness = std::clamp(draft.popupOutlineColorSharpness, 0.0f, 1.0f);
+        next.popupOutlineColorSpread = std::clamp(draft.popupOutlineColorSpread, 0.0f, 2.0f);
+        next.popupOutlineSaturation = std::clamp(draft.popupOutlineSaturation, 0.0f, 1.0f);
+        next.popupOutlineBrightness = std::clamp(draft.popupOutlineBrightness, 0.20f, 1.0f);
+        next.popupOutlineReverse = draft.popupOutlineReverse;
         next.popupWidth = std::max(360, draft.popupWidth);
         next.popupHeight = std::max(260, draft.popupHeight);
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    }
+
+    ImGui::Spacing();
+    ImGui::Text("Default settings window size");
+    bool mainSizeChanged = false;
+    ImGui::SetNextItemWidth(100.0f);
+    mainSizeChanged |= ImGui::InputInt("W##mw", &draft.mainWindowWidth, 10);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.0f);
+    mainSizeChanged |= ImGui::InputInt("H##mh", &draft.mainWindowHeight, 10);
+    if (mainSizeChanged) {
+        draft.mainWindowWidth = std::max(800, draft.mainWindowWidth);
+        draft.mainWindowHeight = std::max(500, draft.mainWindowHeight);
+    }
+    SIZE liveMainSize = app->MainWindowCurrentSize();
+    ImGui::TextDisabled("Current settings: %ldx%ld",
+                        static_cast<long>(liveMainSize.cx),
+                        static_cast<long>(liveMainSize.cy));
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Use current as default##main_size")) {
+        app->UseCurrentMainWindowSizeAsDefault();
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Apply settings size")) {
+        AppearanceSettings next = app->GetAppearance();
+        next.mainWindowWidth = std::max(800, draft.mainWindowWidth);
+        next.mainWindowHeight = std::max(500, draft.mainWindowHeight);
         app->RequestAppearance(next);
         draft = app->GetAppearance();
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
@@ -1015,77 +1172,60 @@ void MainWindow::DrawAppearance() {
     }
 
     ImGui::SetNextItemWidth(240.0f);
-    float fontSize = draft.fontSize;
-    bool fontSizeChanged = ImGui::SliderFloat("Font size##fontSizeSlider", &fontSize,
-                                              9.0f, 32.0f, "%.1f",
-                                              ImGuiSliderFlags_AlwaysClamp);
-    KeepMouseWheelOnLastItem();
-    if (ImGui::IsItemHovered()) {
-        const float wheel = ImGui::GetIO().MouseWheel;
-        if (wheel != 0.0f) {
-            fontSize = draft.fontSize + wheel * 0.5f;
-            fontSizeChanged = true;
+    int fontSizeStep = static_cast<int>(std::round(draft.fontSize * 2.0f));
+    bool fontSizeChanged = SliderIntWheel("Font size##fontSizeSlider", &fontSizeStep,
+                                          18, 64, "", 1);
+    ImGui::SameLine();
+    ImGui::Text("%.1f", static_cast<float>(fontSizeStep) * 0.5f);
+    if (fontSizeChanged) {
+        fontSizeStep = std::clamp(fontSizeStep, 18, 64);
+        const float snapped = static_cast<float>(fontSizeStep) * 0.5f;
+        if (std::fabs(snapped - draft.fontSize) > 0.01f) {
+            draft.fontSize = snapped;
+            applyFont();
         }
     }
-    if (fontSizeChanged) {
-        const float snapped = std::clamp(std::round(fontSize * 2.0f) * 0.5f, 9.0f, 32.0f);
-        draft.fontSize = snapped;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Apply font"))
-        applyFont();
 
-    ImGui::Spacing(); ImGui::SeparatorText("Interface");
-    const float scalePresets[] = {0.75f, 1.0f, 1.25f, 1.5f, 1.75f};
-    const char* scaleLabels[] = {"0.75x", "1.00x", "1.25x", "1.50x", "1.75x", "Custom"};
-    static bool customScaleMode = false;
-    auto applyScale = [&]() {
-        draft.uiScale = std::clamp(draft.uiScale, 0.75f, 2.0f);
-        AppearanceSettings next = draft;
-        next.fontPath = app->GetAppearance().fontPath;
-        next.fontSize = app->GetAppearance().fontSize;
+    ImGui::Spacing(); ImGui::SeparatorText("Scrollbars");
+    bool scrollbarChanged = false;
+    scrollbarChanged |= ImGui::Checkbox("Show scrollbars", &draft.showScrollbars);
+    ImGui::SetNextItemWidth(240.0f);
+    scrollbarChanged |= SliderFloatWheel("Scrollbar width", &draft.scrollbarSize,
+                                         0.0f, 24.0f, "%.1f", 1.0f);
+    ImGui::SetNextItemWidth(240.0f);
+    scrollbarChanged |= SliderFloatWheel("Scrollbar rounding", &draft.scrollbarRounding,
+                                         0.0f, 16.0f, "%.1f", 1.0f);
+    ImGui::SetNextItemWidth(240.0f);
+    scrollbarChanged |= SliderFloatWheel("Scrollbar padding", &draft.scrollbarPadding,
+                                         0.0f, 8.0f, "%.1f", 0.5f);
+    const AppearanceSettings resetForScrollbars = ThemeDefaults(draft.theme);
+    if (!draft.customColors)
+        ImGui::BeginDisabled();
+    scrollbarChanged |= ColorControlWithReset("Scrollbar background", draft.scrollbarBg, resetForScrollbars.scrollbarBg);
+    scrollbarChanged |= ColorControlWithReset("Scrollbar grab", draft.scrollbarGrab, resetForScrollbars.scrollbarGrab);
+    scrollbarChanged |= ColorControlWithReset("Scrollbar hover", draft.scrollbarGrabHover, resetForScrollbars.scrollbarGrabHover);
+    scrollbarChanged |= ColorControlWithReset("Scrollbar active", draft.scrollbarGrabActive, resetForScrollbars.scrollbarGrabActive);
+    if (!draft.customColors)
+        ImGui::EndDisabled();
+    if (scrollbarChanged) {
+        draft.scrollbarSize = std::clamp(draft.scrollbarSize, 0.0f, 24.0f);
+        draft.scrollbarRounding = std::clamp(draft.scrollbarRounding, 0.0f, 16.0f);
+        draft.scrollbarPadding = std::clamp(draft.scrollbarPadding, 0.0f, 8.0f);
+        AppearanceSettings next = app->GetAppearance();
+        next.showScrollbars = draft.showScrollbars;
+        next.scrollbarSize = draft.scrollbarSize;
+        next.scrollbarRounding = draft.scrollbarRounding;
+        next.scrollbarPadding = draft.scrollbarPadding;
+        next.scrollbarBg = draft.scrollbarBg;
+        next.scrollbarGrab = draft.scrollbarGrab;
+        next.scrollbarGrabHover = draft.scrollbarGrabHover;
+        next.scrollbarGrabActive = draft.scrollbarGrabActive;
+        if (draft.customColors)
+            next.customColors = true;
         app->RequestAppearance(next);
         draft = app->GetAppearance();
+        syncThemeName();
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
-    };
-
-    int scaleChoice = IM_ARRAYSIZE(scaleLabels) - 1;
-    for (int i = 0; i < IM_ARRAYSIZE(scalePresets); ++i) {
-        if (std::fabs(draft.uiScale - scalePresets[i]) < 0.01f) {
-            scaleChoice = i;
-            break;
-        }
-    }
-    if (customScaleMode)
-        scaleChoice = IM_ARRAYSIZE(scaleLabels) - 1;
-
-    ImGui::Text("Interface scale");
-    ImGui::SetNextItemWidth(160.0f);
-    if (ImGui::Combo("##uiScalePreset", &scaleChoice, scaleLabels, IM_ARRAYSIZE(scaleLabels))) {
-        if (scaleChoice < IM_ARRAYSIZE(scalePresets)) {
-            customScaleMode = false;
-            draft.uiScale = scalePresets[scaleChoice];
-            applyScale();
-        } else {
-            customScaleMode = true;
-        }
-    }
-
-    if (customScaleMode || scaleChoice == IM_ARRAYSIZE(scaleLabels) - 1) {
-        ImGui::SetNextItemWidth(240.0f);
-        bool scaleChanged = ImGui::SliderFloat("Custom scale##uiScaleCustom", &draft.uiScale,
-                                               0.75f, 2.0f, "%.2fx",
-                                               ImGuiSliderFlags_AlwaysClamp);
-        KeepMouseWheelOnLastItem();
-        if (ImGui::IsItemHovered()) {
-            const float wheel = ImGui::GetIO().MouseWheel;
-            if (wheel != 0.0f) {
-                draft.uiScale = std::clamp(draft.uiScale + wheel * 0.05f, 0.75f, 2.0f);
-                scaleChanged = true;
-            }
-        }
-        if (scaleChanged)
-            applyScale();
     }
 
     ImGui::Spacing(); ImGui::SeparatorText("Colors");
@@ -1119,7 +1259,7 @@ void MainWindow::DrawAppearance() {
             AppearanceSettings next = draft;
             next.fontPath = app->GetAppearance().fontPath;
             next.fontSize = app->GetAppearance().fontSize;
-            next.uiScale = app->GetAppearance().uiScale;
+            next.uiScale = 1.0f;
             next.savedThemes = app->GetAppearance().savedThemes;
             app->RequestAppearance(next);
             draft = app->GetAppearance();
@@ -1137,23 +1277,17 @@ void MainWindow::DrawAppearance() {
 
     ImGui::Spacing(); ImGui::SeparatorText("Advanced shape");
     ImGui::SetNextItemWidth(240.0f);
-    bool shapeChanged = ImGui::SliderFloat("Popup corner rounding", &draft.popupRounding,
-                                           0.0f, 18.0f, "%.1f",
-                                           ImGuiSliderFlags_AlwaysClamp);
-    KeepMouseWheelOnLastItem();
+    bool shapeChanged = SliderFloatWheel("Popup corner rounding", &draft.popupRounding,
+                                         0.0f, 18.0f, "%.1f", 0.5f);
     ImGui::SetNextItemWidth(240.0f);
-    shapeChanged |= ImGui::SliderFloat("Control rounding", &draft.controlRounding,
-                                       0.0f, 12.0f, "%.1f",
-                                       ImGuiSliderFlags_AlwaysClamp);
-    KeepMouseWheelOnLastItem();
+    shapeChanged |= SliderFloatWheel("Control rounding", &draft.controlRounding,
+                                     0.0f, 12.0f, "%.1f", 0.5f);
     if (shapeChanged) {
         draft.popupRounding = std::clamp(draft.popupRounding, 0.0f, 18.0f);
         draft.controlRounding = std::clamp(draft.controlRounding, 0.0f, 12.0f);
-    }
-    if (ImGui::Button("Apply shape")) {
         AppearanceSettings next = app->GetAppearance();
-        next.popupRounding = std::clamp(draft.popupRounding, 0.0f, 18.0f);
-        next.controlRounding = std::clamp(draft.controlRounding, 0.0f, 12.0f);
+        next.popupRounding = draft.popupRounding;
+        next.controlRounding = draft.controlRounding;
         app->RequestAppearance(next);
         draft = app->GetAppearance();
         syncThemeName();
@@ -1176,8 +1310,7 @@ void MainWindow::DrawHistory() {
 
     ImGui::Text("Active history size (items)");
     ImGui::SetNextItemWidth(120.0f);
-    ImGui::SliderInt("##active", &activeLimit, 1, 500);
-    KeepMouseWheelOnLastItem();
+    SliderIntWheel("##active", &activeLimit, 1, 500, "%d", 1);
 
     ImGui::Spacing();
     ImGui::Checkbox("Persist history across sessions", &persistHistory);
@@ -1206,8 +1339,12 @@ void MainWindow::DrawHistory() {
     ImGui::Spacing();
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {12.0f, 10.0f});
-    if (ImGui::BeginChild("##histlive", {-1.0f, 220.0f},
-                          ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding)) {
+        ImGuiWindowFlags childFlags = Application::Get()->GetAppearance().showScrollbars
+            ? ImGuiWindowFlags_None
+            : ImGuiWindowFlags_NoScrollbar;
+        if (ImGui::BeginChild("##histlive", {-1.0f, 220.0f},
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
+                              childFlags)) {
         if (count == 0) {
             ImGui::TextDisabled("  Nothing captured yet - copy something!");
         } else {
@@ -1349,8 +1486,12 @@ void MainWindow::DrawDeveloper() {
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         ImGui::TextDisabled("Clipboard Item Inspector");
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {12.0f, 10.0f});
+        ImGuiWindowFlags childFlags = app->GetAppearance().showScrollbars
+            ? ImGuiWindowFlags_None
+            : ImGuiWindowFlags_NoScrollbar;
         if (ImGui::BeginChild("##dev_item_inspector", {-1.0f, 210.0f},
-                              ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding)) {
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
+                              childFlags)) {
             const size_t limit = std::min<size_t>(hist->Size(), 25);
             for (size_t i = 0; i < limit; ++i) {
                 const ClipboardItem* item = hist->Get(i);
@@ -1395,8 +1536,12 @@ void MainWindow::DrawDeveloper() {
             app->ClearDeveloperEvents();
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {12.0f, 10.0f});
+        ImGuiWindowFlags childFlags = app->GetAppearance().showScrollbars
+            ? ImGuiWindowFlags_None
+            : ImGuiWindowFlags_NoScrollbar;
         if (ImGui::BeginChild("##dev_event_log", {-1.0f, 180.0f},
-                              ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding)) {
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
+                              childFlags)) {
             const auto& events = app->GetDeveloperEvents();
             if (!dev.eventLogEnabled) {
                 ImGui::TextDisabled("  Enable developer event log to collect new events.");

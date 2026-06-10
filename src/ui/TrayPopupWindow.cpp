@@ -9,7 +9,6 @@
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <algorithm>
-#include <cmath>
 #include <functional>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -145,13 +144,13 @@ void TrayPopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
     ImGui::SetCurrentContext(m_imguiCtx);
 
     m_appearance = settings;
+    m_appearance.dpiScale = 1.0f;
     ApplyThemeStyle(m_appearance, true);
     ImGui_ImplDX11_InvalidateDeviceObjects();
-    RebuildFontAtlas(ImGui::GetIO(), settings);
+    RebuildFontAtlas(ImGui::GetIO(), m_appearance);
     ImGui_ImplDX11_CreateDeviceObjects();
-    const float scale = EffectiveUiScale(settings);
-    m_width = static_cast<int>(std::lround(kTrayPopupBaseWidth * scale));
-    m_height = static_cast<int>(std::lround(kTrayPopupBaseHeight * scale));
+    m_width = kTrayPopupBaseWidth;
+    m_height = kTrayPopupBaseHeight;
     if (m_visible) {
         PositionNearCursor();
         ResizeSwapChainToClient();

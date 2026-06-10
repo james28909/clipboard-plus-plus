@@ -105,7 +105,6 @@ private:
     bool  m_searchActive{false};
     bool  m_searchCapture{false};
     bool  m_dialogTextCapture{false};
-    bool  m_newClipboardFocusPending{false};
     bool  m_keyboardCapture{false};
     bool  m_maximized{false};
     RECT  m_restoreRect{};
@@ -115,7 +114,6 @@ private:
     AppearanceSettings m_appearance{};
     int   m_filterMode{0};      // 0=All 1=Text 2=Image 3=URL
     char  m_searchBuf[256]{};
-    char  m_newClipboardName[96]{};
     char  m_clipboardName[128]{};
     char  m_searchDebug[256]{};
     bool  m_lastSearchActive{false};
@@ -125,7 +123,6 @@ private:
     size_t m_lastSearchLen{};
     HWND  m_prevForeground{};
     std::string m_lastClipboardId;
-    std::string m_deleteClipboardName;
     std::vector<uint64_t> m_queue;
     std::vector<uint64_t> m_dragIds;
 };

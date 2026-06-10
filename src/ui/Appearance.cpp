@@ -69,7 +69,6 @@ AppearanceSettings ThemeDefaults(ThemeId theme) {
     settings.closeButton = settings.buttonOff;
     settings.closeButtonHover = light ? Color(220, 53, 69) : Color(196, 43, 28);
     settings.closeButtonText = light ? Color(255, 255, 255) : settings.text;
-
     ImVec4 knobFill = Color(20, 38, 54);
     ImVec4 knobRing = Color(92, 178, 255);
 
@@ -130,6 +129,10 @@ AppearanceSettings ThemeDefaults(ThemeId theme) {
 
     settings.opacityKnobFill = knobFill;
     settings.opacityKnobRing = knobRing;
+    settings.scrollbarBg = ImVec4(settings.panelBg.x, settings.panelBg.y, settings.panelBg.z, light ? 0.55f : 0.30f);
+    settings.scrollbarGrab = Mix(settings.panelBg, settings.accent, light ? 0.24f : 0.34f);
+    settings.scrollbarGrabHover = settings.hover;
+    settings.scrollbarGrabActive = Brighten(settings.accent, light ? 0.06f : 0.16f);
     return settings;
 }
 
@@ -140,11 +143,25 @@ static AppearanceSettings EffectiveSettings(const AppearanceSettings& settings) 
     AppearanceSettings defaults = ThemeDefaults(settings.theme);
     defaults.popupOpacity = settings.popupOpacity;
     defaults.popupOutlineStrength = settings.popupOutlineStrength;
+    defaults.popupOutlineAnimated = settings.popupOutlineAnimated;
+    defaults.popupOutlineAnimationSpeed = settings.popupOutlineAnimationSpeed;
+    defaults.popupOutlineColorSharpness = settings.popupOutlineColorSharpness;
+    defaults.popupOutlineColorSpread = settings.popupOutlineColorSpread;
+    defaults.popupOutlineSaturation = settings.popupOutlineSaturation;
+    defaults.popupOutlineBrightness = settings.popupOutlineBrightness;
+    defaults.popupOutlineReverse = settings.popupOutlineReverse;
     defaults.popupWidth = settings.popupWidth;
     defaults.popupHeight = settings.popupHeight;
+    defaults.mainWindowWidth = settings.mainWindowWidth;
+    defaults.mainWindowHeight = settings.mainWindowHeight;
     defaults.fontPath = settings.fontPath;
     defaults.fontSize = settings.fontSize;
-    defaults.uiScale = settings.uiScale;
+    defaults.uiScale = 1.0f;
+    defaults.dpiScale = settings.dpiScale;
+    defaults.showScrollbars = settings.showScrollbars;
+    defaults.scrollbarSize = settings.scrollbarSize;
+    defaults.scrollbarRounding = settings.scrollbarRounding;
+    defaults.scrollbarPadding = settings.scrollbarPadding;
     defaults.popupRounding = settings.popupRounding;
     defaults.controlRounding = settings.controlRounding;
     defaults.customColors = false;
@@ -169,6 +186,14 @@ SavedAppearanceTheme ToSavedTheme(const AppearanceSettings& settings, const std:
     saved.closeButtonText = effective.closeButtonText;
     saved.opacityKnobFill = effective.opacityKnobFill;
     saved.opacityKnobRing = effective.opacityKnobRing;
+    saved.scrollbarBg = effective.scrollbarBg;
+    saved.scrollbarGrab = effective.scrollbarGrab;
+    saved.scrollbarGrabHover = effective.scrollbarGrabHover;
+    saved.scrollbarGrabActive = effective.scrollbarGrabActive;
+    saved.showScrollbars = effective.showScrollbars;
+    saved.scrollbarSize = effective.scrollbarSize;
+    saved.scrollbarRounding = effective.scrollbarRounding;
+    saved.scrollbarPadding = effective.scrollbarPadding;
     saved.popupRounding = effective.popupRounding;
     saved.controlRounding = effective.controlRounding;
     return saved;
@@ -191,6 +216,14 @@ void ApplySavedTheme(AppearanceSettings& settings, const SavedAppearanceTheme& s
     settings.closeButtonText = saved.closeButtonText;
     settings.opacityKnobFill = saved.opacityKnobFill;
     settings.opacityKnobRing = saved.opacityKnobRing;
+    settings.scrollbarBg = saved.scrollbarBg;
+    settings.scrollbarGrab = saved.scrollbarGrab;
+    settings.scrollbarGrabHover = saved.scrollbarGrabHover;
+    settings.scrollbarGrabActive = saved.scrollbarGrabActive;
+    settings.showScrollbars = saved.showScrollbars;
+    settings.scrollbarSize = saved.scrollbarSize;
+    settings.scrollbarRounding = saved.scrollbarRounding;
+    settings.scrollbarPadding = saved.scrollbarPadding;
     settings.popupRounding = saved.popupRounding;
     settings.controlRounding = saved.controlRounding;
 }
@@ -211,7 +244,7 @@ PopupToggleColors GetPopupToggleColors(const AppearanceSettings& settings) {
 }
 
 float EffectiveUiScale(const AppearanceSettings& settings) {
-    return std::clamp(settings.uiScale, 0.75f, 2.0f);
+    return std::clamp(settings.dpiScale, 0.5f, 4.0f);
 }
 
 void ApplyThemeStyle(ThemeId theme, bool popupContext) {
@@ -234,11 +267,13 @@ void ApplyThemeStyle(const AppearanceSettings& settings, bool popupContext) {
 
     style.WindowRounding = popupContext ? std::clamp(effective.popupRounding, 0.0f, 18.0f) : 0.0f;
     style.FrameRounding = std::clamp(effective.controlRounding, 0.0f, 12.0f);
-    style.ScrollbarRounding = std::clamp(effective.controlRounding, 0.0f, 12.0f);
+    style.ScrollbarRounding = std::clamp(effective.scrollbarRounding, 0.0f, 16.0f);
     style.GrabRounding = std::clamp(effective.controlRounding, 0.0f, 12.0f);
     style.WindowBorderSize = popupContext ? 1.0f : 0.0f;
     style.FrameBorderSize = 0.0f;
     style.WindowPadding = popupContext ? ImVec2(8.0f, 8.0f) : ImVec2(0.0f, 0.0f);
+    style.ScrollbarSize = std::clamp(effective.scrollbarSize, 0.0f, 24.0f);
+    style.ScrollbarPadding = std::clamp(effective.scrollbarPadding, 0.0f, 8.0f);
 
     ImVec4* c = style.Colors;
     ImVec4 bg = effective.windowBg;
@@ -273,6 +308,10 @@ void ApplyThemeStyle(const AppearanceSettings& settings, bool popupContext) {
     c[ImGuiCol_CheckMark] = light ? Color(255, 255, 255) : text;
     c[ImGuiCol_SliderGrab] = accent;
     c[ImGuiCol_SliderGrabActive] = Brighten(accent, 0.18f);
+    c[ImGuiCol_ScrollbarBg] = effective.scrollbarBg;
+    c[ImGuiCol_ScrollbarGrab] = effective.scrollbarGrab;
+    c[ImGuiCol_ScrollbarGrabHovered] = effective.scrollbarGrabHover;
+    c[ImGuiCol_ScrollbarGrabActive] = effective.scrollbarGrabActive;
     c[ImGuiCol_TableHeaderBg] = light ? Darken(panel, 0.06f) : Brighten(panel, 0.10f);
     c[ImGuiCol_TableRowBgAlt] = light ? Darken(panel, 0.025f) : Brighten(panel, 0.035f);
 
@@ -286,7 +325,8 @@ bool RebuildFontAtlas(ImGuiIO& io, const AppearanceSettings& settings) {
     fontCfg.OversampleV = 2;
 
     io.Fonts->Clear();
-    const float size = std::clamp(settings.fontSize, 9.0f, 32.0f);
+    const float baseSize = std::clamp(settings.fontSize, 9.0f, 32.0f);
+    const float size = baseSize * EffectiveUiScale(settings);
     ImFont* font = nullptr;
     auto fontExists = [](const std::string& path) {
 #ifdef _WIN32

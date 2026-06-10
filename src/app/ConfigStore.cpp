@@ -90,6 +90,14 @@ SavedAppearanceTheme SavedThemeFromJson(const json& item) {
     saved.closeButtonText = ColorFromJson(item.value("closeButtonText", json::array()), saved.closeButtonText);
     saved.opacityKnobFill = ColorFromJson(item.value("opacityKnobFill", json::array()), saved.opacityKnobFill);
     saved.opacityKnobRing = ColorFromJson(item.value("opacityKnobRing", json::array()), saved.opacityKnobRing);
+    saved.scrollbarBg = ColorFromJson(item.value("scrollbarBg", json::array()), saved.scrollbarBg);
+    saved.scrollbarGrab = ColorFromJson(item.value("scrollbarGrab", json::array()), saved.scrollbarGrab);
+    saved.scrollbarGrabHover = ColorFromJson(item.value("scrollbarGrabHover", json::array()), saved.scrollbarGrabHover);
+    saved.scrollbarGrabActive = ColorFromJson(item.value("scrollbarGrabActive", json::array()), saved.scrollbarGrabActive);
+    saved.showScrollbars = item.value("showScrollbars", saved.showScrollbars);
+    saved.scrollbarSize = std::clamp(item.value("scrollbarSize", saved.scrollbarSize), 0.0f, 24.0f);
+    saved.scrollbarRounding = std::clamp(item.value("scrollbarRounding", saved.scrollbarRounding), 0.0f, 16.0f);
+    saved.scrollbarPadding = std::clamp(item.value("scrollbarPadding", saved.scrollbarPadding), 0.0f, 8.0f);
     saved.popupRounding = std::clamp(item.value("popupRounding", saved.popupRounding), 0.0f, 18.0f);
     saved.controlRounding = std::clamp(item.value("controlRounding", saved.controlRounding), 0.0f, 12.0f);
     return saved;
@@ -112,6 +120,14 @@ json SavedThemeToJson(const SavedAppearanceTheme& saved) {
         {"closeButtonText", ColorToJson(saved.closeButtonText)},
         {"opacityKnobFill", ColorToJson(saved.opacityKnobFill)},
         {"opacityKnobRing", ColorToJson(saved.opacityKnobRing)},
+        {"scrollbarBg", ColorToJson(saved.scrollbarBg)},
+        {"scrollbarGrab", ColorToJson(saved.scrollbarGrab)},
+        {"scrollbarGrabHover", ColorToJson(saved.scrollbarGrabHover)},
+        {"scrollbarGrabActive", ColorToJson(saved.scrollbarGrabActive)},
+        {"showScrollbars", saved.showScrollbars},
+        {"scrollbarSize", saved.scrollbarSize},
+        {"scrollbarRounding", saved.scrollbarRounding},
+        {"scrollbarPadding", saved.scrollbarPadding},
         {"popupRounding", saved.popupRounding},
         {"controlRounding", saved.controlRounding},
     };
@@ -174,11 +190,27 @@ void LoadAppearance(const json& root, AppConfig& config) {
     config.appearance.popupOpacity = std::clamp(a.value("popupOpacity", config.appearance.popupOpacity), 0.1f, 1.0f);
     config.appearance.popupOutlineStrength =
         std::clamp(a.value("popupOutlineStrength", config.appearance.popupOutlineStrength), 0.0f, 1.0f);
+    config.appearance.popupOutlineAnimated =
+        a.value("popupOutlineAnimated", config.appearance.popupOutlineAnimated);
+    config.appearance.popupOutlineAnimationSpeed =
+        std::clamp(a.value("popupOutlineAnimationSpeed", config.appearance.popupOutlineAnimationSpeed), 0.05f, 5.0f);
+    config.appearance.popupOutlineColorSharpness =
+        std::clamp(a.value("popupOutlineColorSharpness", config.appearance.popupOutlineColorSharpness), 0.0f, 1.0f);
+    config.appearance.popupOutlineColorSpread =
+        std::clamp(a.value("popupOutlineColorSpread", config.appearance.popupOutlineColorSpread), 0.0f, 2.0f);
+    config.appearance.popupOutlineSaturation =
+        std::clamp(a.value("popupOutlineSaturation", config.appearance.popupOutlineSaturation), 0.0f, 1.0f);
+    config.appearance.popupOutlineBrightness =
+        std::clamp(a.value("popupOutlineBrightness", config.appearance.popupOutlineBrightness), 0.20f, 1.0f);
+    config.appearance.popupOutlineReverse =
+        a.value("popupOutlineReverse", config.appearance.popupOutlineReverse);
     config.appearance.popupWidth = std::max(360, a.value("popupWidth", config.appearance.popupWidth));
     config.appearance.popupHeight = std::max(260, a.value("popupHeight", config.appearance.popupHeight));
+    config.appearance.mainWindowWidth = std::max(800, a.value("mainWindowWidth", config.appearance.mainWindowWidth));
+    config.appearance.mainWindowHeight = std::max(500, a.value("mainWindowHeight", config.appearance.mainWindowHeight));
     config.appearance.fontPath = a.value("fontPath", config.appearance.fontPath);
     config.appearance.fontSize = std::clamp(a.value("fontSize", config.appearance.fontSize), 9.0f, 32.0f);
-    config.appearance.uiScale = std::clamp(a.value("uiScale", config.appearance.uiScale), 0.75f, 2.0f);
+    config.appearance.uiScale = 1.0f;
     config.appearance.customColors = a.value("customColors", config.appearance.customColors);
     config.appearance.customThemeName = a.value("customThemeName", config.appearance.customThemeName);
     config.appearance.windowBg = ColorFromJson(a.value("windowBg", json::array()), config.appearance.windowBg);
@@ -199,6 +231,22 @@ void LoadAppearance(const json& root, AppConfig& config) {
         ColorFromJson(a.value("opacityKnobFill", json::array()), config.appearance.opacityKnobFill);
     config.appearance.opacityKnobRing =
         ColorFromJson(a.value("opacityKnobRing", json::array()), config.appearance.opacityKnobRing);
+    config.appearance.scrollbarBg =
+        ColorFromJson(a.value("scrollbarBg", json::array()), config.appearance.scrollbarBg);
+    config.appearance.scrollbarGrab =
+        ColorFromJson(a.value("scrollbarGrab", json::array()), config.appearance.scrollbarGrab);
+    config.appearance.scrollbarGrabHover =
+        ColorFromJson(a.value("scrollbarGrabHover", json::array()), config.appearance.scrollbarGrabHover);
+    config.appearance.scrollbarGrabActive =
+        ColorFromJson(a.value("scrollbarGrabActive", json::array()), config.appearance.scrollbarGrabActive);
+    config.appearance.showScrollbars =
+        a.value("showScrollbars", config.appearance.showScrollbars);
+    config.appearance.scrollbarSize =
+        std::clamp(a.value("scrollbarSize", config.appearance.scrollbarSize), 0.0f, 24.0f);
+    config.appearance.scrollbarRounding =
+        std::clamp(a.value("scrollbarRounding", config.appearance.scrollbarRounding), 0.0f, 16.0f);
+    config.appearance.scrollbarPadding =
+        std::clamp(a.value("scrollbarPadding", config.appearance.scrollbarPadding), 0.0f, 8.0f);
     config.appearance.popupRounding =
         std::clamp(a.value("popupRounding", config.appearance.popupRounding), 0.0f, 18.0f);
     config.appearance.controlRounding =
@@ -366,11 +414,20 @@ bool Save(const AppConfig& config) {
             {"theme", ThemeToInt(config.appearance.theme)},
             {"popupOpacity", config.appearance.popupOpacity},
             {"popupOutlineStrength", config.appearance.popupOutlineStrength},
+            {"popupOutlineAnimated", config.appearance.popupOutlineAnimated},
+            {"popupOutlineAnimationSpeed", config.appearance.popupOutlineAnimationSpeed},
+            {"popupOutlineColorSharpness", config.appearance.popupOutlineColorSharpness},
+            {"popupOutlineColorSpread", config.appearance.popupOutlineColorSpread},
+            {"popupOutlineSaturation", config.appearance.popupOutlineSaturation},
+            {"popupOutlineBrightness", config.appearance.popupOutlineBrightness},
+            {"popupOutlineReverse", config.appearance.popupOutlineReverse},
             {"popupWidth", config.appearance.popupWidth},
             {"popupHeight", config.appearance.popupHeight},
+            {"mainWindowWidth", config.appearance.mainWindowWidth},
+            {"mainWindowHeight", config.appearance.mainWindowHeight},
             {"fontPath", config.appearance.fontPath},
             {"fontSize", config.appearance.fontSize},
-            {"uiScale", config.appearance.uiScale},
+            {"uiScale", 1.0f},
             {"customColors", config.appearance.customColors},
             {"customThemeName", config.appearance.customThemeName},
             {"windowBg", ColorToJson(config.appearance.windowBg)},
@@ -387,6 +444,14 @@ bool Save(const AppConfig& config) {
             {"closeButtonText", ColorToJson(config.appearance.closeButtonText)},
             {"opacityKnobFill", ColorToJson(config.appearance.opacityKnobFill)},
             {"opacityKnobRing", ColorToJson(config.appearance.opacityKnobRing)},
+            {"scrollbarBg", ColorToJson(config.appearance.scrollbarBg)},
+            {"scrollbarGrab", ColorToJson(config.appearance.scrollbarGrab)},
+            {"scrollbarGrabHover", ColorToJson(config.appearance.scrollbarGrabHover)},
+            {"scrollbarGrabActive", ColorToJson(config.appearance.scrollbarGrabActive)},
+            {"showScrollbars", config.appearance.showScrollbars},
+            {"scrollbarSize", config.appearance.scrollbarSize},
+            {"scrollbarRounding", config.appearance.scrollbarRounding},
+            {"scrollbarPadding", config.appearance.scrollbarPadding},
             {"popupRounding", config.appearance.popupRounding},
             {"controlRounding", config.appearance.controlRounding},
             {"savedThemes", savedThemes},

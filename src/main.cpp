@@ -14,9 +14,16 @@ bool Eq(const wchar_t* a, const wchar_t* b) {
     return _wcsicmp(a, b) == 0;
 }
 
+void ConfigureDpiAwareness() {
+#ifdef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#endif
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    ConfigureDpiAwareness();
     HINSTANCE hInstance = GetModuleHandleW(nullptr);
 
     if (argc > 1 && !Eq(argv[1], L"--clipboardpp-run-gui"))
