@@ -116,6 +116,7 @@ private:
     int   m_filterMode{0};      // 0=All 1=Text 2=Image 3=URL
     char  m_searchBuf[256]{};
     char  m_newClipboardName[96]{};
+    char  m_clipboardName[128]{};
     char  m_searchDebug[256]{};
     bool  m_lastSearchActive{false};
     bool  m_lastSearchInputActive{false};
@@ -123,6 +124,8 @@ private:
     bool  m_lastWantTextInput{false};
     size_t m_lastSearchLen{};
     HWND  m_prevForeground{};
+    std::string m_lastClipboardId;
+    std::string m_deleteClipboardName;
     std::vector<uint64_t> m_queue;
     std::vector<uint64_t> m_dragIds;
 };

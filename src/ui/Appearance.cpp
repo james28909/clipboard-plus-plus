@@ -310,5 +310,8 @@ bool RebuildFontAtlas(ImGuiIO& io, const AppearanceSettings& settings) {
     }
     io.FontDefault = font;
     io.FontGlobalScale = 1.0f;
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.FontSizeBase = size;
+    style.FontScaleMain = 1.0f;
     return io.Fonts->Build();
 }
