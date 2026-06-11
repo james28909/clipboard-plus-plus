@@ -105,6 +105,15 @@ private:
     bool  m_searchActive{false};
     bool  m_searchCapture{false};
     bool  m_dialogTextCapture{false};
+    bool  m_clipboardDropdownOpen{false};
+    bool  m_openDeleteConfirm{false};
+    std::string m_pendingDeleteProfileId;
+    std::string m_pendingDeleteProfileName;
+    bool  m_openProfileContextMenu{false};
+    float m_contextMenuX{0.0f};
+    float m_contextMenuY{0.0f};
+    std::string m_contextMenuProfileId;
+    std::string m_contextMenuProfileName;
     bool  m_keyboardCapture{false};
     bool  m_maximized{false};
     RECT  m_restoreRect{};

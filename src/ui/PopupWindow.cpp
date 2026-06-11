@@ -226,6 +226,11 @@ void PopupWindow::Hide() {
     m_searchActive  = false;
     m_searchCapture = false;
     m_dialogTextCapture = false;
+    m_clipboardDropdownOpen = false;
+    m_openDeleteConfirm = false;
+    m_pendingDeleteProfileId.clear();
+    m_openProfileContextMenu = false;
+    m_contextMenuProfileId.clear();
     m_keyboardCapture = false;
     m_maximized = false;
     m_queueMode     = false;
@@ -518,14 +523,12 @@ void PopupWindow::DrawTitleBar() {
         return false;
     };
 
-    const bool showSave = !clipboardNameExists();
+    const bool showSave = !clipboardNameExists() && m_clipboardName[0] != '\0';
     const float saveW = std::ceil(ImGui::CalcTextSize("Save").x + ImGui::GetStyle().FramePadding.x * 2.0f + 8.0f);
-    const float arrowW = 28.0f;
     ImGui::SameLine(0.0f, gap);
     const float controlsAvail = ImGui::GetContentRegionAvail().x;
     const float saveReserve = showSave ? saveW + gap : 0.0f;
-    const float selectorW = std::max(80.0f, controlsAvail - saveReserve);
-    const float inputW = std::max(52.0f, selectorW - arrowW);
+    const float inputW = std::max(80.0f, controlsAvail - saveReserve);
 
     ImGui::SetNextItemWidth(inputW);
     ImGui::InputText("##clipboard_name", m_clipboardName, sizeof(m_clipboardName));
@@ -534,54 +537,148 @@ void PopupWindow::DrawTitleBar() {
         ActivateKeyboardCapture();
         m_dialogTextCapture = true;
     }
-    ImGui::SameLine(0.0f, 0.0f);
-    if (ImGui::Button("v##clipboard_dropdown", {28.0f, 0.0f}))
-        ImGui::OpenPopup("##clipboard_profile_picker");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Select another clipboard");
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+        m_clipboardDropdownOpen = !m_clipboardDropdownOpen;
+    const bool clipboardInputHovered = ImGui::IsItemHovered();
+    if (clipboardInputHovered && !clipboardNameActive)
+        ImGui::SetTooltip("Click to select or create a clipboard profile");
 
-    if (ImGui::BeginPopup("##clipboard_profile_picker")) {
-        if (app) {
-            for (const ClipboardProfileConfig& profile : app->GetClipboardProfiles()) {
-                const bool selected = active && profile.id == active->id;
-                std::string label = profile.name;
-                if (!profile.processName.empty())
-                    label += " (" + profile.processName + ")";
-                if (ImGui::Selectable(label.c_str(), selected)) {
-                    app->SetActiveClipboardProfile(profile.id);
-                    std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", profile.name.c_str());
-                    m_lastClipboardId = profile.id;
-                    m_dialogTextCapture = false;
-                }
-                if (selected)
-                    ImGui::SetItemDefaultFocus();
+    const ImVec2 inputMin = ImGui::GetItemRectMin();
+    const ImVec2 inputMax = ImGui::GetItemRectMax();
+
+    if (m_clipboardDropdownOpen && app) {
+        const float dropW = inputMax.x - inputMin.x;
+        ImGui::SetNextWindowPos({inputMin.x, inputMax.y}, ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints({dropW, 0.0f}, {dropW, 300.0f});
+        ImGui::SetNextWindowBgAlpha(1.0f);
+        constexpr ImGuiWindowFlags kDropFlags =
+            ImGuiWindowFlags_NoTitleBar        | ImGuiWindowFlags_NoResize     |
+            ImGuiWindowFlags_NoMove            | ImGuiWindowFlags_NoScrollbar  |
+            ImGuiWindowFlags_NoSavedSettings   | ImGuiWindowFlags_NoNav        |
+            ImGuiWindowFlags_NoFocusOnAppearing;
+        ImGui::Begin("##clipboard_profile_dropdown", nullptr, kDropFlags);
+        const bool dropdownHovered = ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+            ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+
+        const std::vector<ClipboardProfileConfig>& profiles = app->GetClipboardProfiles();
+        for (const ClipboardProfileConfig& profile : profiles) {
+            const bool selected = active && profile.id == active->id;
+            std::string displayLabel = profile.name;
+            if (!profile.processName.empty())
+                displayLabel += " (" + profile.processName + ")";
+            const std::string selectableId = displayLabel + "##prof_" + profile.id;
+
+            if (ImGui::Selectable(selectableId.c_str(), selected)) {
+                app->SetActiveClipboardProfile(profile.id);
+                std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", profile.name.c_str());
+                m_lastClipboardId = profile.id;
+                m_dialogTextCapture = false;
+                m_clipboardDropdownOpen = false;
             }
+            if (selected)
+                ImGui::SetItemDefaultFocus();
+
+            if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+                m_contextMenuProfileId   = profile.id;
+                m_contextMenuProfileName = profile.name;
+                m_contextMenuX           = ImGui::GetIO().MousePos.x;
+                m_contextMenuY           = ImGui::GetIO().MousePos.y;
+                m_openProfileContextMenu = true;
+            }
+        }
+        ImGui::End();
+
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !dropdownHovered && !clipboardInputHovered)
+            m_clipboardDropdownOpen = false;
+    }
+
+    // Profile context menu — parented to ##popup so input routing works correctly
+    if (m_openProfileContextMenu) {
+        ImGui::SetNextWindowPos({m_contextMenuX, m_contextMenuY}, ImGuiCond_Always);
+        ImGui::OpenPopup("##profile_ctx_menu");
+        m_openProfileContextMenu = false;
+    }
+    if (ImGui::BeginPopup("##profile_ctx_menu")) {
+        if (app) {
+            if (ImGui::MenuItem("Duplicate")) {
+                app->CreateClipboardProfile(m_contextMenuProfileName + " - duplicate");
+                if (const ClipboardProfileConfig* dup = app->GetActiveClipboardProfile()) {
+                    std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", dup->name.c_str());
+                    m_lastClipboardId = dup->id;
+                }
+                m_clipboardDropdownOpen = false;
+            }
+            ImGui::Separator();
+            const bool canDelete = app->GetClipboardProfiles().size() > 1;
+            if (!canDelete) ImGui::BeginDisabled();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.35f, 1.0f));
+            if (ImGui::MenuItem("Delete")) {
+                m_pendingDeleteProfileId   = m_contextMenuProfileId;
+                m_pendingDeleteProfileName = m_contextMenuProfileName;
+                m_openDeleteConfirm        = true;
+            }
+            ImGui::PopStyleColor();
+            if (!canDelete) ImGui::EndDisabled();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Delete confirmation modal — parented to the main ##popup window
+    if (m_openDeleteConfirm) {
+        ImGui::OpenPopup("##confirm_delete");
+        m_openDeleteConfirm = false;
+    }
+    if (ImGui::BeginPopupModal("##confirm_delete", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::TextUnformatted("Delete clipboard profile?");
+        ImGui::Spacing();
+        ImGui::TextDisabled("%s", m_pendingDeleteProfileName.c_str());
+        ImGui::Spacing();
+        ImGui::TextWrapped("All history for this profile will be permanently lost.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.72f, 0.08f, 0.08f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.14f, 0.14f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.58f, 0.04f, 0.04f, 1.0f));
+        if (ImGui::Button("Delete", {110.0f, 0.0f}) && app) {
+            app->SetActiveClipboardProfile(m_pendingDeleteProfileId);
+            app->DeleteActiveClipboardProfile();
+            if (const ClipboardProfileConfig* cur = app->GetActiveClipboardProfile()) {
+                std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", cur->name.c_str());
+                m_lastClipboardId = cur->id;
+            }
+            m_pendingDeleteProfileId.clear();
+            m_clipboardDropdownOpen = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine(0.0f, 8.0f);
+        if (ImGui::Button("Cancel", {110.0f, 0.0f})) {
+            m_pendingDeleteProfileId.clear();
+            m_clipboardDropdownOpen = false;
+            ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
 
     if (showSave) {
         ImGui::SameLine(0.0f, gap);
-        if (!active)
-            ImGui::BeginDisabled();
         if (ImGui::Button("Save", {saveW, 0.0f}) && app) {
-            app->RenameActiveClipboardProfile(m_clipboardName);
-            if (const ClipboardProfileConfig* renamed = app->GetActiveClipboardProfile()) {
-                std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", renamed->name.c_str());
-                m_lastClipboardId = renamed->id;
+            app->CreateClipboardProfile(m_clipboardName);
+            if (const ClipboardProfileConfig* created = app->GetActiveClipboardProfile()) {
+                std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", created->name.c_str());
+                m_lastClipboardId = created->id;
             }
             m_dialogTextCapture = false;
         }
-        if (!active)
-            ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Save clipboard name");
+            ImGui::SetTooltip("Create new clipboard profile");
     }
 
-    if (m_dialogTextCapture && !clipboardNameActive &&
-               !ImGui::IsPopupOpen("##clipboard_profile_picker")) {
+    if (m_dialogTextCapture && !clipboardNameActive && !m_clipboardDropdownOpen)
         m_dialogTextCapture = false;
-    }
 
     ImGui::Spacing();
 }
