@@ -8,6 +8,7 @@
 #include "../clipboard/ClipboardHistoryStore.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
+#include "../clipboard/ImageStore.h"
 #include "../hotkeys/HotkeyManager.h"
 #include "../util/Win32Util.h"
 
@@ -235,6 +236,13 @@ void Application::SetDeveloperSettings(const DeveloperSettings& settings) {
     if (!logWasEnabled && settings.eventLogEnabled)
         AddDeveloperEvent("developer event log enabled");
 #endif
+}
+
+void Application::SetImageSettings(const ImageSettings& settings) {
+    m_config.images = settings;
+    if (m_imageStore)
+        m_imageStore->SetSettings(settings);
+    SaveConfig();
 }
 
 void Application::AddDeveloperEvent(const std::string& event) {
@@ -784,9 +792,20 @@ bool Application::Init() {
     m_tray = std::make_unique<TrayIcon>(m_hwnd, m_hInstance);
     if (!m_tray->Create()) return false;
 
+    // Image store
+    m_imageStore = std::make_unique<ImageStore>();
+    m_imageStore->Open(ConfigStore::Directory() / "images.db");
+    m_imageStore->SetSettings(m_config.images);
+
     // Clipboard histories + monitor
     RebuildClipboardHistories();
     m_monitor = std::make_unique<ClipboardMonitor>();
+    m_monitor->SetImageStore(m_imageStore.get());
+    m_monitor->SetProfileIdGetter([this]() -> std::string {
+        if (const ClipboardProfileConfig* p = GetActiveClipboardProfile())
+            return p->id;
+        return "default";
+    });
     m_monitor->Start(m_hInstance, [this](ClipboardItem item) {
         if (!item.sourceProcess.empty())
             m_lastForegroundProcess = item.sourceProcess;

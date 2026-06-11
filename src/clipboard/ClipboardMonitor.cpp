@@ -1,7 +1,9 @@
 #include "ClipboardMonitor.h"
 #include "ContentDetector.h"
+#include "ImageStore.h"
 #include "../util/Win32Util.h"
 #include <shellapi.h>   // DragQueryFileW
+#include <chrono>
 #include <vector>
 
 static constexpr wchar_t kMonitorClass[] = L"CPPClipboardMonitor";
@@ -153,23 +155,9 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
         }
         item.type = ContentType::Text;
     }
-    // -- DIB image -------------------------------------------------------------
-    else if (IsClipboardFormatAvailable(CF_DIB)) {
-        HANDLE h = GetClipboardData(CF_DIB);
-        if (h) {
-            auto* bmi = static_cast<BITMAPINFO*>(GlobalLock(h));
-            if (bmi) {
-                item.imageW = bmi->bmiHeader.biWidth;
-                item.imageH = std::abs(bmi->bmiHeader.biHeight);
-                SIZE_T sz   = GlobalSize(h);
-                item.imageData.resize(sz);
-                std::memcpy(item.imageData.data(), bmi, sz);
-                GlobalUnlock(h);
-            }
-        }
-        item.type = ContentType::Image;
-        item.text = "[Image " + std::to_string(item.imageW)
-                  + "x"      + std::to_string(item.imageH) + "]";
+    // -- Image: PNG clipboard format > CF_DIBV5 > CF_DIB > CF_BITMAP ----------
+    else if (IsImageAvailable()) {
+        ReadImageFormats(item);
     }
     CloseClipboard();
 
@@ -189,4 +177,130 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
 
 std::string ClipboardMonitor::GetForegroundProcessName() {
     return win32util::ProcessNameFromWindow(GetForegroundWindow());
+}
+
+bool ClipboardMonitor::IsImageAvailable() {
+    // Registered PNG format used by Chrome, Firefox, Edge, Photoshop, etc.
+    static const UINT CF_PNG = RegisterClipboardFormatW(L"PNG");
+    return IsClipboardFormatAvailable(CF_PNG)
+        || IsClipboardFormatAvailable(CF_DIBV5)
+        || IsClipboardFormatAvailable(CF_DIB)
+        || IsClipboardFormatAvailable(CF_BITMAP);
+}
+
+void ClipboardMonitor::ReadImageFormats(ClipboardItem& item) const {
+    static const UINT CF_PNG  = RegisterClipboardFormatW(L"PNG");
+    static const UINT CF_JFIF = RegisterClipboardFormatW(L"JFIF"); // JPEG
+
+    std::vector<uint8_t> rawBytes; // DIB bytes (for GDI+ path) or PNG bytes directly
+    bool isPngDirect = false;      // true when rawBytes already contains a PNG
+
+    // Priority 1: PNG clipboard format — already perfect, no conversion needed
+    if (IsClipboardFormatAvailable(CF_PNG)) {
+        HANDLE h = GetClipboardData(CF_PNG);
+        if (h) {
+            SIZE_T sz = GlobalSize(h);
+            auto* ptr = static_cast<const uint8_t*>(GlobalLock(h));
+            if (ptr && sz > 0) {
+                rawBytes.assign(ptr, ptr + sz);
+                isPngDirect = true;
+            }
+            GlobalUnlock(h);
+        }
+    }
+
+    // Priority 2: CF_DIBV5 — higher quality DIB with alpha + ICC profile
+    if (rawBytes.empty() && IsClipboardFormatAvailable(CF_DIBV5)) {
+        HANDLE h = GetClipboardData(CF_DIBV5);
+        if (h) {
+            SIZE_T sz = GlobalSize(h);
+            auto* ptr = static_cast<const uint8_t*>(GlobalLock(h));
+            if (ptr && sz >= sizeof(BITMAPV5HEADER)) {
+                const auto* hdr = reinterpret_cast<const BITMAPV5HEADER*>(ptr);
+                item.imageW = hdr->bV5Width;
+                item.imageH = std::abs(hdr->bV5Height);
+                rawBytes.assign(ptr, ptr + sz);
+            }
+            GlobalUnlock(h);
+        }
+    }
+
+    // Priority 3: CF_DIB — standard DIB
+    if (rawBytes.empty() && IsClipboardFormatAvailable(CF_DIB)) {
+        HANDLE h = GetClipboardData(CF_DIB);
+        if (h) {
+            SIZE_T sz = GlobalSize(h);
+            auto* ptr = static_cast<const uint8_t*>(GlobalLock(h));
+            if (ptr && sz >= sizeof(BITMAPINFOHEADER)) {
+                const auto* hdr = reinterpret_cast<const BITMAPINFOHEADER*>(ptr);
+                item.imageW = hdr->biWidth;
+                item.imageH = std::abs(hdr->biHeight);
+                rawBytes.assign(ptr, ptr + sz);
+            }
+            GlobalUnlock(h);
+        }
+    }
+
+    // Priority 4: CF_BITMAP — legacy HBITMAP, convert to DIB
+    if (rawBytes.empty() && IsClipboardFormatAvailable(CF_BITMAP)) {
+        HBITMAP hbmp = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP));
+        if (hbmp) {
+            BITMAP bm{};
+            GetObjectW(hbmp, sizeof(bm), &bm);
+            item.imageW = bm.bmWidth;
+            item.imageH = std::abs(bm.bmHeight);
+
+            BITMAPINFOHEADER bi{};
+            bi.biSize      = sizeof(bi);
+            bi.biWidth     = bm.bmWidth;
+            bi.biHeight    = bm.bmHeight;
+            bi.biPlanes    = 1;
+            bi.biBitCount  = 24;
+            bi.biCompression = BI_RGB;
+            const DWORD rowBytes = ((bm.bmWidth * 3 + 3) & ~3u);
+            bi.biSizeImage = rowBytes * static_cast<DWORD>(std::abs(bm.bmHeight));
+
+            rawBytes.resize(sizeof(bi) + bi.biSizeImage);
+            std::memcpy(rawBytes.data(), &bi, sizeof(bi));
+
+            HDC hdc = GetDC(nullptr);
+            BITMAPINFO bmiGet{};
+            bmiGet.bmiHeader = bi;
+            GetDIBits(hdc, hbmp, 0,
+                      static_cast<UINT>(std::abs(bm.bmHeight)),
+                      rawBytes.data() + sizeof(bi),
+                      &bmiGet, DIB_RGB_COLORS);
+            ReleaseDC(nullptr, hdc);
+        }
+    }
+
+    if (rawBytes.empty()) return;
+
+    item.type = ContentType::Image;
+
+    // If we got PNG dimensions from the PNG header, extract them
+    if (isPngDirect && item.imageW == 0 && rawBytes.size() >= 24) {
+        // PNG IHDR: bytes 16-19 = width, 20-23 = height (big-endian)
+        item.imageW = (rawBytes[16] << 24) | (rawBytes[17] << 16)
+                    | (rawBytes[18] << 8)  |  rawBytes[19];
+        item.imageH = (rawBytes[20] << 24) | (rawBytes[21] << 16)
+                    | (rawBytes[22] << 8)  |  rawBytes[23];
+    }
+
+    item.text = "[Image " + std::to_string(item.imageW)
+              + "x"       + std::to_string(item.imageH) + "]";
+
+    // Store into ImageStore if available
+    if (m_imageStore) {
+        const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+
+        const std::string profileId = m_profileIdGetter ? m_profileIdGetter() : "default";
+        const std::string proc = GetForegroundProcessName();
+
+        item.imageStoreId = m_imageStore->StoreImage(rawBytes, isPngDirect,
+                                                       profileId,
+                                                       item.imageW, item.imageH,
+                                                       proc, nowMs);
+    }
 }

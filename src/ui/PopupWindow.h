@@ -1,10 +1,12 @@
 #pragma once
 #include "../clipboard/ClipboardItem.h"
 #include "../clipboard/ClipboardHistory.h"
+#include "../clipboard/ImageStore.h"
 #include "Appearance.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct ImGuiContext;
@@ -72,11 +74,13 @@ private:
     void DrawFilterStrip();
     void DrawSearchBar();
     void DrawItemList();
+    void DrawImageBrowser();
     bool ItemPassesFilter(const ClipboardItem& item) const;
     std::vector<size_t> BuildVisibleHistoryIndices(bool pinnedOnly) const;
     void DrawItemDragDrop(uint64_t itemId, int qpos);
     bool DrawItemContextMenu(const ClipboardItem& item, int qpos);
     void DrawTitleBar();
+    void ClearThumbCache();
 
     // -- Paste -----------------------------------------------------------------
     void PasteItemKeepOpen(const ClipboardItem& item);
@@ -134,4 +138,18 @@ private:
     std::string m_lastClipboardId;
     std::vector<uint64_t> m_queue;
     std::vector<uint64_t> m_dragIds;
+
+    // -- Image browser ---------------------------------------------------------
+    struct ThumbEntry {
+        ID3D11ShaderResourceView* srv{};
+        int w{};
+        int h{};
+    };
+    std::unordered_map<std::string, ThumbEntry> m_thumbCache;
+    std::vector<ImageRecord> m_cachedImageList;
+    bool m_imageListDirty{true};
+    int  m_imgSort{0};         // 0=newest  1=oldest  2=largest  3=smallest
+    int  m_imgDateFilter{0};   // 0=all  1=today  2=week  3=month
+    int  m_imgSizeFilter{0};   // 0=any  1=>100KB  2=>500KB  3=>1MB
+    std::string m_imgCtxMenuId;
 };

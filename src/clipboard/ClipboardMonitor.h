@@ -1,7 +1,10 @@
 #pragma once
 #include <windows.h>
 #include <functional>
+#include <string>
 #include "ClipboardItem.h"
+
+class ImageStore;
 
 class ClipboardMonitor {
 public:
@@ -17,6 +20,13 @@ public:
 
     bool IsRunning() const { return m_hwnd != nullptr; }
 
+    // Must be set before Start() for images to be stored in the DB.
+    void SetImageStore(ImageStore* store) { m_imageStore = store; }
+
+    // Callback that returns the active clipboard profile ID at capture time.
+    using ProfileIdGetter = std::function<std::string()>;
+    void SetProfileIdGetter(ProfileIdGetter fn) { m_profileIdGetter = std::move(fn); }
+
     // Call this before writing to the clipboard yourself to suppress echo updates.
     void SuppressNextUpdate();
 
@@ -25,11 +35,15 @@ private:
 
     void OnClipboardUpdate();
     ClipboardItem ReadClipboard() const;
+    static bool IsImageAvailable();
+    void ReadImageFormats(ClipboardItem& item) const;
     static std::string GetForegroundProcessName();
 
     HWND         m_hwnd{};
     HINSTANCE    m_hInstance{};
     ItemCallback m_callback;
+    ImageStore*    m_imageStore{};
+    ProfileIdGetter m_profileIdGetter;
     ULONGLONG    m_ignoreUntilTick{};
     DWORD        m_lastSeq{};   // suppress duplicate WM_CLIPBOARDUPDATE
 };

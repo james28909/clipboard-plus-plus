@@ -29,7 +29,7 @@ bool ClipboardHistory::Push(ClipboardItem item) {
             existing.type = item.type;
             existing.tags = item.tags;
             existing.text = std::move(item.text);
-            existing.imageData = std::move(item.imageData);
+            existing.imageStoreId = std::move(item.imageStoreId);
             existing.imageW = item.imageW;
             existing.imageH = item.imageH;
             existing.sourceProcess = std::move(item.sourceProcess);

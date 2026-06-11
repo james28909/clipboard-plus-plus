@@ -270,6 +270,20 @@ void LoadDeveloper(const json& root, AppConfig& config) {
         d.value("eventLogEnabled", config.developer.eventLogEnabled);
 }
 
+void LoadImages(const json& root, AppConfig& config) {
+    const json& im = root.value("images", json::object());
+    ImageSettings& s = config.images;
+    s.captureImages   = im.value("captureImages",   s.captureImages);
+    s.format          = static_cast<ImageFormat>(std::clamp(im.value("format", 0), 0, 2));
+    s.jpegQuality     = std::clamp(im.value("jpegQuality",   s.jpegQuality),   1, 100);
+    s.scaleDown       = im.value("scaleDown",       s.scaleDown);
+    s.maxDimension    = std::clamp(im.value("maxDimension",  s.maxDimension),  64, 16384);
+    s.skipSmallImages = im.value("skipSmallImages", s.skipSmallImages);
+    s.minWidth        = std::clamp(im.value("minWidth",      s.minWidth),      1, 4096);
+    s.minHeight       = std::clamp(im.value("minHeight",     s.minHeight),     1, 4096);
+    s.maxImages       = std::clamp(im.value("maxImages",     s.maxImages),     0, 100000);
+}
+
 ClipboardProfileConfig DefaultClipboardProfile() {
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -347,6 +361,7 @@ AppConfig Load() {
         LoadAppearance(root, config);
         LoadHotkeys(root, config);
         LoadDeveloper(root, config);
+        LoadImages(root, config);
         config.newItemsAtTop = root.value("newItemsAtTop", config.newItemsAtTop);
         config.appendNewlineAfterPaste = root.value("appendNewlineAfterPaste", config.appendNewlineAfterPaste);
         config.pasteMoveTarget = std::clamp(root.value("pasteMoveTarget", config.pasteMoveTarget), 0, 2);
@@ -421,6 +436,17 @@ bool Save(const AppConfig& config) {
             {"cliEnabled", config.developer.cliEnabled},
             {"showSourceProcess", config.developer.showSourceProcess},
             {"eventLogEnabled", config.developer.eventLogEnabled},
+        }},
+        {"images", {
+            {"captureImages",   config.images.captureImages},
+            {"format",          static_cast<int>(config.images.format)},
+            {"jpegQuality",     config.images.jpegQuality},
+            {"scaleDown",       config.images.scaleDown},
+            {"maxDimension",    config.images.maxDimension},
+            {"skipSmallImages", config.images.skipSmallImages},
+            {"minWidth",        config.images.minWidth},
+            {"minHeight",       config.images.minHeight},
+            {"maxImages",       config.images.maxImages},
         }},
         {"newItemsAtTop", config.newItemsAtTop},
         {"appendNewlineAfterPaste", config.appendNewlineAfterPaste},

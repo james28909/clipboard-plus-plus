@@ -137,8 +137,8 @@ uint64_t ClipboardItem::ComputeContentHash() const {
     if (type == ContentType::Image) {
         HashBytes(hash, &imageW, sizeof(imageW));
         HashBytes(hash, &imageH, sizeof(imageH));
-        if (!imageData.empty())
-            HashBytes(hash, imageData.data(), imageData.size());
+        if (!imageStoreId.empty())
+            HashString(hash, imageStoreId, false);
     } else {
         const bool pathLike = type == ContentType::FilePaths || (tags & TAG_PATH) != 0;
         HashString(hash, text, pathLike);

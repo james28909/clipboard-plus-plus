@@ -150,10 +150,10 @@ json ItemToJson(const ClipboardItem& item) {
 
     switch (item.type) {
     case ContentType::Image:
-        out["width"] = item.imageW;
+        out["width"]  = item.imageW;
         out["height"] = item.imageH;
-        if (!item.imageData.empty())
-            out["dibBase64"] = Base64Encode(item.imageData);
+        if (!item.imageStoreId.empty())
+            out["imageStoreId"] = item.imageStoreId;
         if (!item.text.empty())
             out["description"] = item.text;
         break;
@@ -185,10 +185,11 @@ ClipboardItem ItemFromJson(const json& j, bool pinnedSection) {
 
     switch (item.type) {
     case ContentType::Image:
-        item.imageW = j.value("width", j.value("imageW", 0));
-        item.imageH = j.value("height", j.value("imageH", 0));
-        item.imageData = Base64Decode(j.value("dibBase64", j.value("imageData", std::string{})));
-        item.text = j.value("description", j.value("text", std::string{}));
+        item.imageW       = j.value("width",  j.value("imageW", 0));
+        item.imageH       = j.value("height", j.value("imageH", 0));
+        item.imageStoreId = j.value("imageStoreId", std::string{});
+        item.text         = j.value("description", j.value("text", std::string{}));
+        // Legacy: dibBase64 field is ignored — old inline images are dropped on first save
         break;
     case ContentType::FilePaths:
         item.text = j.value("pathsText", j.value("text", std::string{}));

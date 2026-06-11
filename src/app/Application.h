@@ -11,6 +11,7 @@
 
 class TrayIcon;
 class ClipboardMonitor;
+class ImageStore;
 class PopupWindow;
 class TrayPopupWindow;
 class DebugWindow;
@@ -53,10 +54,14 @@ public:
     ClipboardHistory*    GetHistory() const { return m_history; }
     ClipboardMonitor*    GetMonitor() const { return m_monitor.get(); }
     PopupWindow*         GetPopup()   const { return m_popup.get(); }
+    ImageStore*          GetImageStore() const { return m_imageStore.get(); }
     TrayIcon*            GetTray()    const { return m_tray.get(); }
     HotkeyManager*       GetHotkeys() const { return m_hotkeys.get(); }
+    const AppConfig&          GetConfig()     const { return m_config; }
     const AppearanceSettings& GetAppearance() const { return m_appearance; }
     void RequestAppearance(const AppearanceSettings& settings);
+    void SetImageSettings(const ImageSettings& settings);
+    void SaveConfig();
     void SetPopupOpacity(float opacity);
     void SetPopupOutlineStrength(float strength);
     const HotkeySettings& GetHotkeySettings() const { return m_hotkeySettings; }
@@ -102,7 +107,6 @@ private:
     void Shutdown();
     void RenderFrame();
     void ApplyAppearanceNow();
-    void SaveConfig();
     void CommitAppearanceChange();
     bool HasRenderableUi() const;
     void ApplyLoadedConfig(const AppConfig& config);
@@ -135,6 +139,7 @@ private:
     mutable ClipboardHistory* m_history{};
     mutable std::string m_lastForegroundProcess;
     std::string m_manualClipboardProcessOverride;
+    std::unique_ptr<ImageStore>       m_imageStore;
     std::unique_ptr<ClipboardMonitor> m_monitor;
     std::unique_ptr<PopupWindow>      m_popup;
     std::unique_ptr<TrayPopupWindow>  m_trayPopup;

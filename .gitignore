@@ -28,3 +28,6 @@ third_party/imgui/
 # OS
 Thumbs.db
 desktop.ini
+
+# Local dev notes
+TODO.md

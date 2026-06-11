@@ -14,6 +14,25 @@ struct ClipboardProfileConfig {
     std::string processName;
 };
 
+// Values are persisted in config.json — do not renumber existing entries.
+enum class ImageFormat {
+    PNG  = 0,  // convert to PNG (lossless, much smaller than raw DIB) — default
+    JPEG = 1,  // convert to JPEG (lossy, smallest file size)
+    Raw  = 2   // store exact clipboard bytes with no GDI+ conversion
+};
+
+struct ImageSettings {
+    bool        captureImages{true};
+    ImageFormat format{ImageFormat::PNG};
+    int         jpegQuality{85};       // 1–100, JPEG only
+    bool        scaleDown{false};
+    int         maxDimension{1920};    // longest side; scales proportionally
+    bool        skipSmallImages{true};
+    int         minWidth{32};
+    int         minHeight{32};
+    int         maxImages{0};          // 0 = unlimited; oldest removed when limit exceeded
+};
+
 struct DeveloperSettings {
     bool enabled{false};
     bool cliEnabled{true};
@@ -25,6 +44,7 @@ struct AppConfig {
     AppearanceSettings appearance{};
     HotkeySettings hotkeys{HotkeyManager::DefaultSettings()};
     DeveloperSettings developer{};
+    ImageSettings images{};
     bool newItemsAtTop{true};
     bool appendNewlineAfterPaste{false};
     int pasteMoveTarget{0}; // 0=keep, 1=top, 2=bottom

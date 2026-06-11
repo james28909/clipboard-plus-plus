@@ -1,5 +1,6 @@
 #include "PopupWindow.h"
 #include "../app/Application.h"
+#include "../clipboard/ImageStore.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
@@ -16,6 +17,7 @@
 #include <windowsx.h>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <cstdio>
 #include <cfloat>
@@ -181,6 +183,7 @@ void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
 }
 
 void PopupWindow::Destroy() {
+    ClearThumbCache();
     if (m_imguiCtx) {
         ImGuiContext* prevCtx = ImGui::GetCurrentContext();
         ImGui::SetCurrentContext(m_imguiCtx);
@@ -218,6 +221,7 @@ void PopupWindow::Show(bool focusSearch) {
     m_queueMode         = false;
     m_queue.clear();
     std::memset(m_searchBuf, 0, sizeof(m_searchBuf));
+    m_imageListDirty = true;   // refresh image list on next open
 }
 
 void PopupWindow::Hide() {
@@ -235,6 +239,7 @@ void PopupWindow::Hide() {
     m_maximized = false;
     m_queueMode     = false;
     m_queue.clear();
+    ClearThumbCache();
 }
 
 void PopupWindow::OpenSettingsWindow() {
@@ -774,7 +779,7 @@ std::vector<size_t> PopupWindow::BuildVisibleHistoryIndices(bool pinnedOnly) con
     std::transform(lquery.begin(), lquery.end(), lquery.begin(),
                    [](unsigned char c){ return (char)std::tolower(c); });
 
-    for (size_t i = 0; i < hist->Size() && indices.size() < 35; ++i) {
+    for (size_t i = 0; i < hist->Size(); ++i) {
         const ClipboardItem* item = hist->Get(i);
         if (!item || !ItemPassesFilter(*item)) continue;
         if (item->pinned != pinnedOnly) continue;
@@ -793,6 +798,12 @@ std::vector<size_t> PopupWindow::BuildVisibleHistoryIndices(bool pinnedOnly) con
 }
 
 void PopupWindow::DrawItemList() {
+    // Image filter mode gets its own dedicated browser UI
+    if (m_filterMode == 2) {
+        DrawImageBrowser();
+        return;
+    }
+
     ClipboardHistory* hist = Application::Get()->GetHistory();
     if (!hist) return;
 
@@ -1027,6 +1038,249 @@ void PopupWindow::NoteExternalMouseDown(POINT screenPoint) {
     }
 }
 
+// -- Image browser -------------------------------------------------------------
+
+void PopupWindow::ClearThumbCache() {
+    for (auto& kv : m_thumbCache)
+        if (kv.second.srv) kv.second.srv->Release();
+    m_thumbCache.clear();
+}
+
+void PopupWindow::DrawImageBrowser() {
+    Application* app = Application::Get();
+    ImageStore* store = app ? app->GetImageStore() : nullptr;
+
+    if (!store || !store->IsOpen()) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("  Image store not available.");
+        return;
+    }
+
+    // -- Sub-filter bar -------------------------------------------------------
+    const PopupToggleColors tc = GetPopupToggleColors(m_appearance);
+    static const char* kSortLabels[] = {"Newest", "Oldest", "Largest", "Smallest"};
+    static const char* kDateLabels[] = {"All time", "Today", "This week", "This month"};
+    static const char* kSizeLabels[] = {"Any size", "> 100 KB", "> 500 KB", "> 1 MB"};
+
+    ImGui::SetNextItemWidth(88.0f);
+    ImGui::Combo("##img_sort", &m_imgSort, kSortLabels, 4);
+    ImGui::SameLine(0, 6.0f);
+    ImGui::SetNextItemWidth(88.0f);
+    ImGui::Combo("##img_date", &m_imgDateFilter, kDateLabels, 4);
+    ImGui::SameLine(0, 6.0f);
+    ImGui::SetNextItemWidth(84.0f);
+    ImGui::Combo("##img_size", &m_imgSizeFilter, kSizeLabels, 4);
+    ImGui::SameLine(0, 6.0f);
+    if (ImGui::SmallButton("Refresh")) {
+        m_imageListDirty = true;
+        ClearThumbCache();
+    }
+    ImGui::Separator();
+
+    // -- Load or refresh image list -------------------------------------------
+    if (m_imageListDirty) {
+        m_cachedImageList = store->ListAll();
+        m_imageListDirty = false;
+    }
+
+    // -- Filter + sort --------------------------------------------------------
+    using namespace std::chrono;
+    const int64_t nowMs = duration_cast<milliseconds>(
+        system_clock::now().time_since_epoch()).count();
+    const int64_t kDayMs   = 24LL * 3600 * 1000;
+    const int64_t kWeekMs  = 7  * kDayMs;
+    const int64_t kMonthMs = 30 * kDayMs;
+
+    std::vector<const ImageRecord*> rows;
+    rows.reserve(m_cachedImageList.size());
+    for (const auto& r : m_cachedImageList) {
+        const int64_t age = nowMs - r.capturedAt;
+        if (m_imgDateFilter == 1 && age > kDayMs)   continue;
+        if (m_imgDateFilter == 2 && age > kWeekMs)  continue;
+        if (m_imgDateFilter == 3 && age > kMonthMs) continue;
+        if (m_imgSizeFilter == 1 && r.byteSize < 100  * 1024) continue;
+        if (m_imgSizeFilter == 2 && r.byteSize < 500  * 1024) continue;
+        if (m_imgSizeFilter == 3 && r.byteSize < 1024 * 1024) continue;
+
+        // Search text: match dimensions or source process
+        const std::string query(m_searchBuf);
+        if (!query.empty()) {
+            const std::string dim = std::to_string(r.width) + "x" + std::to_string(r.height);
+            auto lcMatch = [&](const std::string& s) {
+                std::string ls = s, lq = query;
+                auto lc = [](unsigned char c){ return (char)std::tolower(c); };
+                std::transform(ls.begin(), ls.end(), ls.begin(), lc);
+                std::transform(lq.begin(), lq.end(), lq.begin(), lc);
+                return ls.find(lq) != std::string::npos;
+            };
+            if (!lcMatch(dim) && !lcMatch(r.sourceProc) && !lcMatch(r.profileId)) continue;
+        }
+        rows.push_back(&r);
+    }
+
+    std::sort(rows.begin(), rows.end(), [&](const ImageRecord* a, const ImageRecord* b) {
+        switch (m_imgSort) {
+        case 1: return a->capturedAt < b->capturedAt;
+        case 2: return a->byteSize   > b->byteSize;
+        case 3: return a->byteSize   < b->byteSize;
+        default: return a->capturedAt > b->capturedAt;
+        }
+    });
+
+    ImGui::TextDisabled("  %zu image%s", rows.size(), rows.size() == 1 ? "" : "s");
+
+    // -- Scrollable image list ------------------------------------------------
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
+    ImGuiWindowFlags listFlags = m_appearance.showScrollbars
+        ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoScrollbar;
+
+    if (ImGui::BeginChild("##imglist", {0.f, 0.f}, ImGuiChildFlags_None, listFlags)) {
+        if (rows.empty()) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("  No images match the current filters.");
+        }
+
+        bool openCtxMenu = false;
+
+        for (const ImageRecord* r : rows) {
+            ImGui::PushID(r->id.c_str());
+
+            // -- Lazy-load thumbnail ------------------------------------------
+            ThumbEntry& entry = m_thumbCache[r->id];
+            if (!entry.srv && entry.w == 0) {
+                int tw = 0, th = 0;
+                entry.srv = store->CreateThumbnailSRV(r->id, m_device, 128, tw, th);
+                entry.w = tw ? tw : 1;
+                entry.h = th ? th : 1;
+            }
+
+            // -- Row start ----------------------------------------------------
+            const float kThumbH = 78.0f;
+            const float kThumbMaxW = 120.0f;
+            const float rowPadY = 5.0f;
+            ImVec2 rowTL = ImGui::GetCursorScreenPos();
+
+            // Thumbnail display dimensions
+            float dispH = kThumbH;
+            float dispW = (entry.h > 0)
+                ? std::min(kThumbMaxW, dispH * (float)entry.w / (float)entry.h)
+                : kThumbH;
+
+            ImGui::Dummy({0.f, rowPadY}); // top padding
+
+            if (entry.srv) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 4.0f);
+                ImGui::Image((ImTextureID)(intptr_t)entry.srv, {dispW, dispH});
+            } else {
+                // Placeholder box while thumb loads (or failed)
+                ImVec2 boxTL = ImGui::GetCursorScreenPos();
+                boxTL.x += 4.0f;
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    boxTL, {boxTL.x + 64.0f, boxTL.y + kThumbH},
+                    ImGui::GetColorU32(ImGuiCol_FrameBg), 4.0f);
+                ImGui::Dummy({68.0f, kThumbH});
+            }
+            ImGui::SameLine(0, 10.0f);
+
+            // -- Metadata -----------------------------------------------------
+            const float metaX = ImGui::GetCursorPosX();
+            ImGui::BeginGroup();
+
+            // Format badge
+            const char* fmtTag =
+                r->storedFormat == StoredFormat::Jpeg   ? "[JPEG]" :
+                r->storedFormat == StoredFormat::RawDib ? "[RAW]"  : "[PNG]";
+            ImGui::TextDisabled("%s", fmtTag);
+            ImGui::SameLine(0, 6.0f);
+            ImGui::Text("%dx%d", r->width, r->height);
+
+            // File size
+            if (r->byteSize >= 1024 * 1024)
+                ImGui::TextDisabled("%.2f MB", (double)r->byteSize / (1024.0 * 1024.0));
+            else
+                ImGui::TextDisabled("%.1f KB", (double)r->byteSize / 1024.0);
+
+            // Source
+            if (!r->sourceProc.empty())
+                ImGui::TextDisabled("%s", r->sourceProc.c_str());
+
+            // Age
+            const int64_t age = nowMs - r->capturedAt;
+            std::string ageStr;
+            if (age < 60000)         ageStr = std::to_string(age / 1000) + "s ago";
+            else if (age < 3600000)  ageStr = std::to_string(age / 60000) + "m ago";
+            else if (age < 86400000) ageStr = std::to_string(age / 3600000) + "h ago";
+            else                     ageStr = std::to_string(age / 86400000) + "d ago";
+            ImGui::TextDisabled("%s", ageStr.c_str());
+
+            ImGui::EndGroup();
+
+            ImGui::Dummy({0.f, rowPadY}); // bottom padding
+
+            // -- Click detection over the full row ----------------------------
+            ImVec2 rowBR = ImGui::GetCursorScreenPos();
+            rowBR.x = rowTL.x + ImGui::GetContentRegionAvail().x + ImGui::GetScrollX();
+
+            const bool hovered = ImGui::IsMouseHoveringRect(
+                rowTL, {rowBR.x, rowBR.x > rowTL.x ? rowBR.y : rowTL.y + kThumbH + rowPadY * 2});
+
+            if (hovered) {
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    rowTL, {rowBR.x, ImGui::GetCursorScreenPos().y},
+                    ImGui::GetColorU32(ImGuiCol_ButtonHovered, 0.4f));
+            }
+
+            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                ClipboardItem fake;
+                fake.type         = ContentType::Image;
+                fake.imageStoreId = r->id;
+                fake.imageW       = r->width;
+                fake.imageH       = r->height;
+                PasteItemKeepOpen(fake);
+            }
+
+            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                m_imgCtxMenuId = r->id;
+                openCtxMenu = true;
+            }
+
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+
+        if (openCtxMenu)
+            ImGui::OpenPopup("##img_ctx");
+
+        if (ImGui::BeginPopup("##img_ctx")) {
+            ImGui::TextDisabled("%s", m_imgCtxMenuId.substr(0, 8).c_str());
+            ImGui::Separator();
+            if (ImGui::MenuItem("Paste image")) {
+                ClipboardItem fake;
+                fake.type         = ContentType::Image;
+                fake.imageStoreId = m_imgCtxMenuId;
+                PasteItemKeepOpen(fake);
+            }
+            if (ImGui::MenuItem("Copy to clipboard")) {
+                ClipboardItem fake;
+                fake.type         = ContentType::Image;
+                fake.imageStoreId = m_imgCtxMenuId;
+                WriteToClipboard(fake);
+            }
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.35f, 0.35f, 1.f));
+            if (ImGui::MenuItem("Delete from database")) {
+                store->Delete(m_imgCtxMenuId);
+                m_thumbCache.erase(m_imgCtxMenuId);
+                m_imageListDirty = true;
+            }
+            ImGui::PopStyleColor();
+            ImGui::EndPopup();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
 void PopupWindow::DrawItemDragDrop(uint64_t itemId, int qpos) {
     ClipboardHistory* hist = Application::Get()->GetHistory();
     if (!hist) return;
@@ -1160,12 +1414,13 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
     if (!OpenClipboard(nullptr)) return;
     EmptyClipboard();
 
-    if (item.type == ContentType::Image && !item.imageData.empty()) {
-        HGLOBAL hm = GlobalAlloc(GMEM_MOVEABLE, item.imageData.size());
-        if (hm) {
-            std::memcpy(GlobalLock(hm), item.imageData.data(), item.imageData.size());
-            GlobalUnlock(hm);
-            SetClipboardData(CF_DIB, hm);
+    if (item.type == ContentType::Image && !item.imageStoreId.empty()) {
+        Application* app = Application::Get();
+        ImageStore* store = app ? app->GetImageStore() : nullptr;
+        if (store) {
+            HGLOBAL hDib = store->GetDibForPaste(item.imageStoreId);
+            if (hDib)
+                SetClipboardData(CF_DIB, hDib);
         }
     } else {
         int wlen = MultiByteToWideChar(CP_UTF8, 0,

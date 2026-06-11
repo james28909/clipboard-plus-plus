@@ -57,7 +57,7 @@ struct ClipboardItem {
     uint32_t    tags{TAG_NONE};
 
     std::string text;               // UTF-8; "[Image WxH]" for images
-    std::vector<uint8_t> imageData; // raw DIB bytes
+    std::string imageStoreId;       // UUID in ImageStore DB (images only)
     int imageW{};
     int imageH{};
 

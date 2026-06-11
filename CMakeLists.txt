@@ -1,13 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
-project(clipboardpp VERSION 0.1.0 LANGUAGES CXX)
+project(clipboardpp VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(CLIPBOARDPP_RESTART_AFTER_BUILD "Stop running clipboardpp.exe before build and launch the new build afterward" ON)
 
 # -- Third-party paths ---------------------------------------------------------
-set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")
+set(IMGUI_DIR   "${CMAKE_SOURCE_DIR}/third_party/imgui")
 set(NLOHMANN_DIR "${CMAKE_SOURCE_DIR}/third_party/nlohmann")
+set(SQLITE_DIR  "${CMAKE_SOURCE_DIR}/third_party/sqlite")
 
 # -- ImGui (vendored docking branch) ------------------------------------------
 set(IMGUI_SOURCES
@@ -41,6 +42,8 @@ set(APP_SOURCES
     src/clipboard/ClipboardHistoryStore.cpp
     src/clipboard/ClipboardMonitor.cpp
     src/clipboard/ContentDetector.cpp
+    src/clipboard/ImageStore.cpp
+    ${SQLITE_DIR}/sqlite3.c
 )
 
 set(PORTABLE_CORE_SOURCES
@@ -66,6 +69,7 @@ if(WIN32)
         ${IMGUI_DIR}
         ${IMGUI_DIR}/backends
         ${NLOHMANN_DIR}
+        ${SQLITE_DIR}
     )
 
     target_link_libraries(clipboardpp PRIVATE
@@ -108,6 +112,8 @@ if(WIN32)
         WIN32_LEAN_AND_MEAN
         NOMINMAX
         _CRT_SECURE_NO_WARNINGS
+        SQLITE_DEFAULT_FOREIGN_KEYS=1
+        SQLITE_OMIT_LOAD_EXTENSION
     )
 endif()
 

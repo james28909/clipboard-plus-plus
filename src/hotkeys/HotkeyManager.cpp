@@ -108,7 +108,7 @@ std::string HotkeyManager::SlotLabelText(int slot) {
     if (slot >= 0 && slot < 9) return std::string(1, static_cast<char>('1' + slot));
     if (slot >= 9 && slot < 35) return std::string(1, static_cast<char>('A' + (slot - 9)));
     if (slot >= 35 && slot < 47) return "F" + std::to_string(slot - 34);
-    return "?";
+    return {};  // slots beyond F12 have no keyboard label — still shown in list
 }
 
 const char* HotkeyManager::ActionName(HotkeyAction action) {
