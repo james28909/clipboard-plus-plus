@@ -323,10 +323,11 @@ bool ImageStore::CreateSchema() {
     if (sqlite3_exec(m_db, create, nullptr, nullptr, nullptr) != SQLITE_OK)
         return false;
 
-    // Migrate older DBs that lack the stored_format column (SQLite 3.37+ supports IF NOT EXISTS)
+    // Migrate older DBs that lack the stored_format column.
+    // SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS — just attempt the add
+    // and ignore the error if the column already exists ("duplicate column name").
     sqlite3_exec(m_db,
-        "ALTER TABLE images ADD COLUMN IF NOT EXISTS"
-        " stored_format INTEGER NOT NULL DEFAULT 1;",
+        "ALTER TABLE images ADD COLUMN stored_format INTEGER NOT NULL DEFAULT 1;",
         nullptr, nullptr, nullptr);
 
     return true;
@@ -362,48 +363,82 @@ std::string ImageStore::StoreImage(const std::vector<uint8_t>& rawBytes, bool is
     if (m_skipSmallImages && width > 0 && height > 0 &&
         (width < m_minWidth || height < m_minHeight)) return {};
 
+    // Load a GDI+ Bitmap from either PNG/file-format bytes or raw DIB bytes.
+    // Tries BitmapFromBytes first (handles PNG, JPEG, BMP file, GIF, TIFF, WebP),
+    // then falls back to BitmapFromDib (raw clipboard DIB).
+    auto loadBitmap = [&]() -> std::unique_ptr<Gdiplus::Bitmap> {
+        if (isPng) return BitmapFromBytes(rawBytes);
+        auto bmp = BitmapFromBytes(rawBytes);  // handles JPEG, BMP file, GIF, TIFF…
+        if (bmp) return bmp;
+        return BitmapFromDib(rawBytes);
+    };
+
+    // Fill in width/height from PNG header if not provided
+    auto resolveDims = [&](int& w, int& h, Gdiplus::Bitmap* bmp) {
+        if (w == 0 && h == 0) {
+            if (isPng && rawBytes.size() >= 24) {
+                w = (rawBytes[16] << 24) | (rawBytes[17] << 16) |
+                    (rawBytes[18] <<  8) |  rawBytes[19];
+                h = (rawBytes[20] << 24) | (rawBytes[21] << 16) |
+                    (rawBytes[22] <<  8) |  rawBytes[23];
+            } else if (bmp) {
+                w = static_cast<int>(bmp->GetWidth());
+                h = static_cast<int>(bmp->GetHeight());
+            }
+        }
+    };
+
+    int w = width, h = height;
     std::string id;
 
     switch (static_cast<ImageFormat>(m_storedFormat)) {
 
     case ImageFormat::Raw: {
-        // Store byte-for-byte: DIB bytes stay as RawDib, PNG bytes stay as Png
-        StoredFormat sf = isPng ? StoredFormat::Png : StoredFormat::RawDib;
-        id = InsertBlob(rawBytes, sf, profileId, width, height, sourceProc, capturedAtMs);
+        // Detect stored format from magic bytes for non-PNG inputs
+        StoredFormat sf = StoredFormat::RawDib;
+        if (isPng) {
+            sf = StoredFormat::Png;
+        } else if (rawBytes.size() >= 3 &&
+                   rawBytes[0] == 0xFF && rawBytes[1] == 0xD8 && rawBytes[2] == 0xFF) {
+            sf = StoredFormat::Jpeg;
+        } else if (rawBytes.size() >= 8 &&
+                   rawBytes[0] == 0x89 && rawBytes[1] == 0x50 &&
+                   rawBytes[2] == 0x4E && rawBytes[3] == 0x47) {
+            sf = StoredFormat::Png;
+        }
+        if (w == 0 || h == 0) {
+            auto bmp = loadBitmap();
+            if (bmp) { w = static_cast<int>(bmp->GetWidth()); h = static_cast<int>(bmp->GetHeight()); }
+        }
+        id = InsertBlob(rawBytes, sf, profileId, w, h, sourceProc, capturedAtMs);
         break;
     }
 
     case ImageFormat::PNG: {
-        if (isPng) {
-            // Already PNG — optionally scale then re-encode
-            if (m_scaleDown && m_maxDimension > 0) {
-                auto bmp = BitmapFromBytes(rawBytes);
-                if (!bmp) break;
-                const auto out = EncodePng(*bmp, m_scaleDown, m_maxDimension);
-                id = InsertBlob(out.empty() ? rawBytes : out,
-                                StoredFormat::Png, profileId, width, height, sourceProc, capturedAtMs);
-            } else {
-                id = InsertBlob(rawBytes, StoredFormat::Png,
-                                profileId, width, height, sourceProc, capturedAtMs);
+        if (isPng && !m_scaleDown) {
+            if (w == 0 && rawBytes.size() >= 24) {
+                w = (rawBytes[16] << 24) | (rawBytes[17] << 16) | (rawBytes[18] << 8) | rawBytes[19];
+                h = (rawBytes[20] << 24) | (rawBytes[21] << 16) | (rawBytes[22] << 8) | rawBytes[23];
             }
+            id = InsertBlob(rawBytes, StoredFormat::Png, profileId, w, h, sourceProc, capturedAtMs);
         } else {
-            // DIB → PNG (with optional scale)
-            auto bmp = BitmapFromDib(rawBytes);
+            auto bmp = loadBitmap();
             if (!bmp) break;
+            resolveDims(w, h, bmp.get());
             const auto out = EncodePng(*bmp, m_scaleDown, m_maxDimension);
-            if (out.empty()) break;
-            id = InsertBlob(out, StoredFormat::Png, profileId, width, height, sourceProc, capturedAtMs);
+            id = InsertBlob(out.empty() ? rawBytes : out,
+                            StoredFormat::Png, profileId, w, h, sourceProc, capturedAtMs);
         }
         break;
     }
 
     case ImageFormat::JPEG: {
-        std::unique_ptr<Gdiplus::Bitmap> bmp =
-            isPng ? BitmapFromBytes(rawBytes) : BitmapFromDib(rawBytes);
+        auto bmp = loadBitmap();
         if (!bmp) break;
+        resolveDims(w, h, bmp.get());
         const auto out = EncodeJpeg(*bmp, m_jpegQuality, m_scaleDown, m_maxDimension);
         if (out.empty()) break;
-        id = InsertBlob(out, StoredFormat::Jpeg, profileId, width, height, sourceProc, capturedAtMs);
+        id = InsertBlob(out, StoredFormat::Jpeg, profileId, w, h, sourceProc, capturedAtMs);
         break;
     }
     }

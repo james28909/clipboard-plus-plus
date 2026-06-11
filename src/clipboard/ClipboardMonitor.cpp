@@ -4,6 +4,7 @@
 #include "../util/Win32Util.h"
 #include <shellapi.h>   // DragQueryFileW
 #include <chrono>
+#include <fstream>
 #include <vector>
 
 static constexpr wchar_t kMonitorClass[] = L"CPPClipboardMonitor";
@@ -26,6 +27,16 @@ std::string FileDropPathsUtf8(HDROP hDrop) {
         }
     }
     return paths;
+}
+
+bool IsImageExtension(const std::wstring& path) {
+    auto dot = path.rfind(L'.');
+    if (dot == std::wstring::npos) return false;
+    std::wstring ext = path.substr(dot + 1);
+    for (auto& c : ext) c = static_cast<wchar_t>(towlower(c));
+    return ext == L"png"  || ext == L"jpg"  || ext == L"jpeg" ||
+           ext == L"bmp"  || ext == L"gif"  || ext == L"tiff" ||
+           ext == L"tif"  || ext == L"webp";
 }
 
 } // namespace
@@ -116,6 +127,22 @@ void ClipboardMonitor::OnClipboardUpdate() {
     ClipboardItem item = ReadClipboard();
     if (item.IsEmpty()) return;
 
+    // Image-capture debounce: Windows fires WM_CLIPBOARDUPDATE twice per screenshot
+    // because it updates the clipboard with delayed-render formats after the initial set.
+    // Drop the second event if same dimensions arrive within 500ms.
+    if (item.type == ContentType::Image) {
+        const ULONGLONG now = GetTickCount64();
+        if (now - m_lastImgTickMs < 500 &&
+            item.imageW == m_lastImgW && item.imageH == m_lastImgH) {
+            if (m_imageStore && !item.imageStoreId.empty())
+                m_imageStore->Delete(item.imageStoreId);
+            return;
+        }
+        m_lastImgW      = item.imageW;
+        m_lastImgH      = item.imageH;
+        m_lastImgTickMs = now;
+    }
+
     if (m_callback)
         m_callback(std::move(item));
 }
@@ -137,12 +164,62 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
     if (!opened)
         return item;
 
-    // -- Plain / unicode text (most common) ------------------------------------
+    // -- File drop: single image file → treat as image; otherwise file paths ---
     if (IsClipboardFormatAvailable(CF_HDROP)) {
         HANDLE h = GetClipboardData(CF_HDROP);
-        if (h)
-            item.text = FileDropPathsUtf8(static_cast<HDROP>(h));
-        item.type = ContentType::FilePaths;
+        if (h) {
+            HDROP hDrop = static_cast<HDROP>(h);
+            UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+            bool handledAsImage = false;
+            if (count == 1 && m_imageStore) {
+                const UINT len = DragQueryFileW(hDrop, 0, nullptr, 0);
+                if (len > 0) {
+                    std::vector<wchar_t> buf(static_cast<size_t>(len) + 1);
+                    DragQueryFileW(hDrop, 0, buf.data(), static_cast<UINT>(buf.size()));
+                    std::wstring wpath(buf.data());
+                    if (IsImageExtension(wpath)) {
+                        std::ifstream ifs(wpath, std::ios::binary);
+                        if (ifs) {
+                            std::vector<uint8_t> fileBytes(
+                                (std::istreambuf_iterator<char>(ifs)), {});
+                            if (!fileBytes.empty()) {
+                                // Detect PNG by magic bytes
+                                const bool isPng = fileBytes.size() >= 8 &&
+                                    fileBytes[0] == 0x89 && fileBytes[1] == 0x50 &&
+                                    fileBytes[2] == 0x4E && fileBytes[3] == 0x47;
+
+                                const int64_t nowMs = std::chrono::duration_cast<
+                                    std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch()).count();
+                                const std::string profileId =
+                                    m_profileIdGetter ? m_profileIdGetter() : "default";
+                                const std::string proc = GetForegroundProcessName();
+
+                                item.imageStoreId = m_imageStore->StoreImage(
+                                    fileBytes, isPng, profileId,
+                                    0, 0, proc, nowMs);
+
+                                if (!item.imageStoreId.empty()) {
+                                    // Retrieve the dimensions stored
+                                    ImageRecord rec;
+                                    m_imageStore->GetRecord(item.imageStoreId, rec);
+                                    item.imageW = rec.width;
+                                    item.imageH = rec.height;
+                                    item.text   = "[Image " + std::to_string(item.imageW)
+                                                + "x"       + std::to_string(item.imageH) + "]";
+                                    item.type   = ContentType::Image;
+                                    handledAsImage = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (!handledAsImage) {
+                item.text = FileDropPathsUtf8(hDrop);
+                item.type = ContentType::FilePaths;
+            }
+        }
     }
     else if (IsClipboardFormatAvailable(CF_UNICODETEXT)) {
         HANDLE h = GetClipboardData(CF_UNICODETEXT);

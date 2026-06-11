@@ -1183,35 +1183,53 @@ void PopupWindow::DrawImageBrowser() {
             ImGui::SameLine(0, 10.0f);
 
             // -- Metadata -----------------------------------------------------
-            const float metaX = ImGui::GetCursorPosX();
             ImGui::BeginGroup();
 
-            // Format badge
+            // Line 1: dimensions + format badge
             const char* fmtTag =
-                r->storedFormat == StoredFormat::Jpeg   ? "[JPEG]" :
-                r->storedFormat == StoredFormat::RawDib ? "[RAW]"  : "[PNG]";
-            ImGui::TextDisabled("%s", fmtTag);
+                r->storedFormat == StoredFormat::Jpeg   ? "JPEG" :
+                r->storedFormat == StoredFormat::RawDib ? "RAW"  : "PNG";
+            ImGui::Text("%d \xc3\x97 %d", r->width, r->height);  // × (UTF-8 multiplication sign)
             ImGui::SameLine(0, 6.0f);
-            ImGui::Text("%dx%d", r->width, r->height);
+            ImGui::TextDisabled("[%s]", fmtTag);
 
-            // File size
+            // Line 2: file size
+            char sizeStr[32];
             if (r->byteSize >= 1024 * 1024)
-                ImGui::TextDisabled("%.2f MB", (double)r->byteSize / (1024.0 * 1024.0));
+                snprintf(sizeStr, sizeof(sizeStr), "%.2f MB", (double)r->byteSize / (1024.0 * 1024.0));
             else
-                ImGui::TextDisabled("%.1f KB", (double)r->byteSize / 1024.0);
+                snprintf(sizeStr, sizeof(sizeStr), "%.1f KB", (double)r->byteSize / 1024.0);
+            ImGui::TextDisabled("%s", sizeStr);
 
-            // Source
-            if (!r->sourceProc.empty())
-                ImGui::TextDisabled("%s", r->sourceProc.c_str());
+            // Line 3: source process (trimmed to 28 chars)
+            if (!r->sourceProc.empty()) {
+                const std::string& sp = r->sourceProc;
+                if (sp.size() <= 28)
+                    ImGui::TextDisabled("%s", sp.c_str());
+                else
+                    ImGui::TextDisabled("%.28s\xe2\x80\xa6", sp.c_str());  // …
+            }
 
-            // Age
-            const int64_t age = nowMs - r->capturedAt;
-            std::string ageStr;
-            if (age < 60000)         ageStr = std::to_string(age / 1000) + "s ago";
-            else if (age < 3600000)  ageStr = std::to_string(age / 60000) + "m ago";
-            else if (age < 86400000) ageStr = std::to_string(age / 3600000) + "h ago";
-            else                     ageStr = std::to_string(age / 86400000) + "d ago";
-            ImGui::TextDisabled("%s", ageStr.c_str());
+            // Line 4: captured date/time + relative age
+            {
+                const int64_t ageMs = nowMs - r->capturedAt;
+                char relStr[24];
+                if (ageMs < 60000)         snprintf(relStr, sizeof(relStr), "%llds ago", (long long)(ageMs/1000));
+                else if (ageMs < 3600000)  snprintf(relStr, sizeof(relStr), "%lldm ago", (long long)(ageMs/60000));
+                else if (ageMs < 86400000) snprintf(relStr, sizeof(relStr), "%lldh ago", (long long)(ageMs/3600000));
+                else                       snprintf(relStr, sizeof(relStr), "%lldd ago", (long long)(ageMs/86400000));
+
+                const time_t t = static_cast<time_t>(r->capturedAt / 1000);
+                std::tm tm{};
+#ifdef _WIN32
+                localtime_s(&tm, &t);
+#else
+                localtime_r(&t, &tm);
+#endif
+                char dtStr[32];
+                strftime(dtStr, sizeof(dtStr), "%b %d, %I:%M %p", &tm);
+                ImGui::TextDisabled("%s  (%s)", dtStr, relStr);
+            }
 
             ImGui::EndGroup();
 
@@ -1222,7 +1240,7 @@ void PopupWindow::DrawImageBrowser() {
             rowBR.x = rowTL.x + ImGui::GetContentRegionAvail().x + ImGui::GetScrollX();
 
             const bool hovered = ImGui::IsMouseHoveringRect(
-                rowTL, {rowBR.x, rowBR.x > rowTL.x ? rowBR.y : rowTL.y + kThumbH + rowPadY * 2});
+                rowTL, {rowBR.x, rowBR.y > rowTL.y ? rowBR.y : rowTL.y + kThumbH + rowPadY * 2});
 
             if (hovered) {
                 ImGui::GetWindowDrawList()->AddRectFilled(
