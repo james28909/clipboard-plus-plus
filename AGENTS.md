@@ -7,350 +7,262 @@ This file is for coding agents working in this repository. It captures the proje
 Clipboard++ is a Windows clipboard manager written in C++17 using:
 
 - Win32 API
-- Dear ImGui docking branch
-- DirectX 11
-- nlohmann/json
-- CMake / Visual Studio
+- Dear ImGui (docking branch, vendored at `third_party/imgui`)
+- DirectX 11 (swap chain per window, no compute shaders)
+- nlohmann/json (vendored at `third_party/nlohmann`)
+- CMake 3.20+ / Visual Studio 2022
 
-The executable is `clipboardpp.exe`. It runs primarily as a tray app with:
+The single executable `clipboardpp.exe` serves three roles depending on arguments:
+- **GUI mode**: tray app + main settings window + popup window + hotkeys + clipboard monitor
+- **CLI mode**: short-lived process that talks to the running GUI instance via Win32 IPC
+- **Single-instance guard**: running without args when an instance exists brings that instance's settings window to the foreground and exits
 
-- a main settings GUI
-- a separate always-on-top popup clipboard UI
-- global hotkeys
-- clipboard monitoring
-- CLI/IPC support
-- multiple in-memory clipboard profiles
-
-The app is still under active development. Some planned areas, such as encrypted persistent history/vault storage and fuller developer options, are not finished yet.
+---
 
 ## Build
 
-The user usually builds from Visual Studio. The command that has worked from this repo root is:
+### Preferred commands (from repo root)
+
+```powershell
+# Configure (first time, or after CMakeLists.txt changes)
+cmake -S . -B build
+
+# Clean + Release build
+cmake --build build --config Release --clean-first
+
+# Incremental Release build
+cmake --build build --config Release
+
+# Debug build
+cmake --build build --config Debug
+```
+
+Output is at `build\Release\clipboardpp.exe` or `build\Debug\clipboardpp.exe`.
+
+### CMakeLists.txt behavior
+
+`CLIPBOARDPP_RESTART_AFTER_BUILD` is `ON` by default. The CMake `PRE_BUILD` step runs:
 
 ```powershell
 Stop-Process -Name clipboardpp -Force -ErrorAction SilentlyContinue
-& cmd.exe /c '"C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul && "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build out\build\x64-Debug --config Debug'
 ```
 
-`CMakeLists.txt` has `CLIPBOARDPP_RESTART_AFTER_BUILD` enabled by default. On Windows it:
+The `POST_BUILD` step launches the newly built exe. This means:
+- Always kill any running instance before linking
+- The new build launches automatically after link success
 
-- stops a running `clipboardpp.exe` before build
-- launches the newly built executable after build
+`imgui_demo.cpp` is intentionally **not included** in `IMGUI_SOURCES` — the demo is dead weight for this app. Do not add it back.
 
-Do not assume the user sees command output. Summarize build failures and important output in responses.
+The static MSVC runtime is used (`MultiThreaded` / `MultiThreadedDebug`), so no MSVC redistributable is needed to distribute the binary.
+
+Do not assume the user sees raw command output. Summarize build failures and key output in responses.
+
+---
 
 ## Source Layout
 
-Important files and directories:
+```text
+src/main.cpp                     Entry point, CLI dispatch, single-instance logic
+src/app/Application.*            Central owner: D3D, windows, hotkeys, monitor, config, profiles
+src/app/ConfigStore.*            JSON config persistence
+src/app/TrayIcon.*               System tray icon and right-click menu
+src/ui/MainWindow.*              Settings window (General, Hotkeys, Appearance, History, Privacy, Developer, About)
+src/ui/PopupWindow.*             Always-on-top quick paste popup (the main UX)
+src/ui/TrayPopupWindow.*         Small ImGui overlay launched from tray icon
+src/ui/DebugWindow.*             Floating debug output console window
+src/ui/Appearance.*              Theme definitions, AppearanceSettings struct, color application
+src/hotkeys/HotkeyManager.*      Low-level keyboard/mouse hooks, configurable bindings, hidden paste
+src/clipboard/ClipboardMonitor.* Win32 clipboard listener and format reader
+src/clipboard/ClipboardHistory.* Mutex-protected in-memory history with pin/move/search/dedup
+src/clipboard/ClipboardItem.*    Item struct: id, hash, type, tags, text/image/file data, timestamps
+src/clipboard/ClipboardHistoryStore.* Per-profile JSON persistence under %APPDATA%\Clipboard++\history\
+src/clipboard/ContentDetector.*  Tags copied content with 30+ type/format labels
+src/cli/CLI.*                    CLI command dispatch
+src/ipc/IpcClient.*              IPC helpers: find instance, signal, send clipboard text
+src/util/Win32Util.*             Shared Win32 helpers
+resources/app.rc                 Windows resources (manifest, icon)
+third_party/imgui/               Vendored Dear ImGui
+third_party/nlohmann/            Vendored nlohmann/json
+```
 
-- `src/main.cpp`: process entry point, GUI launcher, CLI dispatch, single-instance behavior.
-- `src/app/Application.*`: central application owner for Win32 main window, D3D, render loop, config, tray, popup, hotkeys, monitor, profile switching, IPC messages.
-- `src/app/ConfigStore.*`: JSON config persistence in `%APPDATA%\Clipboard++\config.json`.
-- `src/app/TrayIcon.*`: tray menu and tray double-click behavior.
-- `src/ui/MainWindow.*`: main settings GUI.
-- `src/ui/PopupWindow.*`: always-on-top popup list, search, paste, queue, drag/drop, right-click item menu.
-- `src/ui/Appearance.*`: themes, popup toggle colors, font/style application.
-- `src/hotkeys/HotkeyManager.*`: low-level keyboard and mouse hooks, configurable hotkeys, visible/hidden paste logic.
-- `src/clipboard/ClipboardMonitor.*`: Win32 clipboard listener and clipboard format reading.
-- `src/clipboard/ClipboardHistory.*`: in-memory history list, dedupe, move, queue support, pinned/delete mutations.
-- `src/clipboard/ClipboardItem.*`: item metadata, timestamps, content hash, preview.
-- `src/clipboard/ContentDetector.*`: tags copied content by content/type/extension.
-- `src/cli/CLI.*`: command-line interface.
-- `src/ipc/IpcClient.*`: IPC helpers for finding/signaling the running GUI and sending clipboard text.
-- `third_party/imgui`: vendored Dear ImGui.
-- `third_party/nlohmann`: vendored JSON library.
-- `resources/app.rc`: Windows resources.
+---
 
-## Main Architecture
+## Architecture Overview
 
-`Application` owns almost everything:
+### Application owns everything
 
-- main Win32 HWND
-- D3D11 device/context/swap chain
-- tray icon
-- popup window
-- clipboard monitor
-- hotkey manager
-- config
-- clipboard profile metadata
-- one `ClipboardHistory` per active clipboard profile
+`Application` is a singleton (`Application::Get()`). It owns:
+- Main Win32 HWND (invisible message loop window used for app lifetime, hotkey messages, WM_COPYDATA IPC)
+- D3D11 device + device context (shared between main window and popup)
+- `PopupWindow` — has its own swap chain + render target
+- `TrayPopupWindow` — has its own swap chain + render target
+- `DebugWindow` — rendered into the main window's swap chain
+- `MainWindow` — rendered into the main window's D3D swap chain
+- `TrayIcon`
+- `HotkeyManager`
+- `ClipboardMonitor`
+- `AppConfig` + `ConfigStore`
+- `vector<unique_ptr<ClipboardHistory>>` — one per clipboard profile, loaded from disk at startup
+- `ClipboardHistory* m_history` — pointer to the active profile's history (mutable, not owned)
 
-The main window and popup are separate Win32 windows and separate ImGui contexts. Be careful to switch ImGui contexts correctly in popup code.
+### Two ImGui contexts
 
-The popup has its own swap chain and render target. It is rendered from `Application::RenderFrame()` after the main window render.
+The main window and popup each have their own `ImGuiContext`. Always switch contexts correctly before making ImGui calls. The popup's `Render()` switches to its own context internally. Do not mix calls across contexts.
+
+### Render loop
+
+`Application::RenderFrame()` runs on every frame (via `PeekMessage` loop with idle throttling). It renders:
+1. Main window (settings UI) — only when visible
+2. `PopupWindow::Render()` — only when popup is visible
+3. `TrayPopupWindow::Render()` — only when tray popup is visible
+4. `DebugWindow` — rendered inside the main window frame
+
+Idle throttling: when all windows are hidden, the loop sleeps to avoid burning CPU. `WS_EX_NOACTIVATE` on the popup means it never gets `WM_ACTIVATE`, so the popup cannot rely on activation messages to trigger redraws.
+
+---
 
 ## Main Window Details
 
-The main settings window is custom chrome:
+Created with `WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX` — no native title bar. Custom chrome drawn by ImGui. Custom hit-testing in `Application::WndProc` handles resize borders and title bar dragging.
 
-- created as `WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX`
-- no native title bar
-- custom hit testing in `Application::WndProc`
-- custom title buttons in `MainWindow::DrawTitleBar`
+**Settings pages** (sidebar navigation):
+- **General**: new-items-at-top toggle, deduplication toggle, start-with-Windows (stub), clipboard profile management
+- **Hotkeys**: table of all hotkey bindings with capture/reset per row; hidden paste modifier configuration (Ctrl/Shift/Alt, F-key toggle); append-newline and paste-move-target options
+- **Appearance**: theme selector (12 built-in + saved custom); full color customization (14 colors); popup opacity + outline strength sliders; animated outline parameters; default window sizes; font import + size; scrollbar controls; corner rounding; save/delete custom theme
+- **History**: max items slider (1–8192); persist-history toggle + session-only sub-option; vault size; live history preview with inline tag badges
+- **Privacy**: secret detection toggle + auto-discard; clear-on-lock; process exclusion list text area
+- **Developer** (enabled via config): developer mode toggle; CLI toggle; show source process metadata; event log; advanced clipboard routing controls; full runtime diagnostics panel; clipboard item inspector (first 25 items, tree view with all metadata); developer event log textarea
+- **About**: version, built-with list, license stub
 
-Focus gotcha: the settings window had a bug where reopening it required two clicks before ImGui controls reacted. The working fix includes:
+**Focus gotcha**: the settings window had a bug where reopening required two clicks before ImGui controls responded. The working fix:
+- `Application::ShowMainWindow()` and `HideMainWindow()` both call `ClearMainInputState()` to clear ImGui active/input state
+- `WM_MOUSEACTIVATE` is processed before `ImGui_ImplWin32_WndProcHandler` in `Application::WndProc`
+- Settings-open paths go through `Application::OpenSettingsWindow()`
 
-- `Application::ShowMainWindow()` clears main ImGui active/input state via `ClearMainInputState()`.
-- `Application::HideMainWindow()` also clears main ImGui active/input state.
-- `WM_MOUSEACTIVATE` is handled before `ImGui_ImplWin32_WndProcHandler`.
-- settings-open routes go through `Application::OpenSettingsWindow()` where appropriate.
+Do not remove any of those pieces without carefully retesting the two-click regression.
 
-Do not casually remove those pieces unless you are specifically retesting the two-click focus bug.
+---
 
 ## Popup Window Details
 
-`PopupWindow` is intentionally unusual:
+`PopupWindow` is intentionally unusual. Win32 extended styles:
+- `WS_EX_TOPMOST` — always on top
+- `WS_EX_LAYERED` — enables opacity via `SetLayeredWindowAttributes`
+- `WS_EX_NOACTIVATE` — does not steal keyboard focus from the target app
 
-- `WS_EX_TOPMOST`: stays above standard windows.
-- `WS_EX_LAYERED`: opacity support.
-- `WS_EX_NOACTIVATE`: popup does not steal focus from the target app.
-- `WS_POPUP | WS_THICKFRAME`: borderless but resizable.
+Because `WS_EX_NOACTIVATE` means the popup never receives `WM_ACTIVATE` or normal keyboard messages, all keyboard input is forwarded from the low-level keyboard hook in `HotkeyManager`.
 
-Because the popup does not activate, keyboard handling uses the low-level keyboard hook in `HotkeyManager`, which forwards keys into the popup when needed.
+### Popup layout (top to bottom)
 
-Popup behavior:
+1. **Title bar** (`DrawTitleBar`):
+   - Close button (X)
+   - Two circular opacity knobs (window opacity + outline strength), adjustable by mouse wheel
+   - Clipboard profile combo input — click to open dropdown list, type to name a new profile, Save button creates a new profile; right-click in the list shows Duplicate/Delete context menu with confirmation modal for Delete
 
-- `Ctrl+Shift+V`: toggles quick paste popup.
-- `Ctrl+Shift+S`: opens/focuses popup search.
-- visible popup supports 1-9/a-z quick paste of visible filtered items.
-- visible popup supports mouse selection, queue mode, newline toggle, paste move mode, right-click item menu, drag/drop reordering.
-- hidden paste uses configured modifiers, currently default `Ctrl+Alt+1-z` plus optional function keys.
-- popup can stay visible while pasting multiple items.
-- popup should not disturb the cursor/focus in the target app.
+2. **Filter strip** (`DrawFilterStrip`):
+   - 10 toggle filter buttons: All, Text, Image, URL, File, Code, Secret, JSON, Email, Color
+   - Queue mode toggle
+   - Paste All button (visible in queue mode)
+   - Newline-after-paste toggle
+   - Paste move-target selector
+   - Settings gear button
 
-Popup context menu currently supports:
+3. **Search bar** (`DrawSearchBar`):
+   - Hint text "Search... Shift+Enter for web"
+   - Keyboard focus managed via `m_searchCapture` / `m_focusSearchOnOpen`
 
-- Paste
-- Copy to clipboard
-- Add/remove queue
-- Move to top
-- Move to bottom
-- Pin/unpin
-- Delete
+4. **Item list** (`DrawItemList`):
+   - "Pinned entries" collapsible header, then pinned items
+   - "History" header, then regular items
+   - Each item shows: slot label (`1`–`9`, `a`–`z`), optional `[#]` queue position, optional `[P]` pin marker, preview text
+   - Secret-tagged items text is styled in red
+   - Drag-and-drop reordering via `DrawItemDragDrop`
+   - Right-click → `DrawItemContextMenu`: Paste, Copy, Add/Remove Queue, Move Top/Bottom, Pin/Unpin, Delete
 
-## Hotkeys And Slot Numbering
+### Keyboard capture state
 
-Default hotkeys are in `HotkeyManager::DefaultBindings()`:
+`PopupWindow` maintains several capture flags to correctly route keys:
+- `m_keyboardCapture` — general keyboard capture active
+- `m_searchCapture` — search box has focus
+- `m_searchActive` — search text is non-empty
+- `m_focusSearchOnOpen` — set when opening with `Ctrl+Shift+S`, causes search to receive focus on next frame
+- `m_dialogTextCapture` — clipboard name input in title bar has focus
 
-- `Ctrl+Shift+V`: toggle popup
-- `Ctrl+Shift+S`: focus popup search
-- `Ctrl+Shift+I`: incognito placeholder
-- `Ctrl+Shift+,`: open settings
+`IsKeyboardCaptureActive()` returns true when any of these are set. `HotkeyManager` checks this before processing slot-paste keys so typing in a search box or name field does not trigger pastes.
 
-Hidden paste defaults are:
+### Profile dropdown implementation
 
-- ctrl: true
-- alt: true
-- shift: false
-- function keys enabled
+The profile picker is an integrated combo box, not a native ImGui `Combo`. It is built from:
+- `ImGui::InputText("##clipboard_name", ...)` — editable field
+- A floating `ImGui::Begin("##clipboard_profile_dropdown", ...)` window anchored below the input using `ImGuiWindowFlags_NoFocusOnAppearing | NoNav | NoTitleBar | NoResize | NoMove | NoScrollbar | NoSavedSettings`
 
-The low-level keyboard hook ignores injected paste events tagged with `kClipboardPasteMagic`.
+The `NoFocusOnAppearing` flag is critical — without it the dropdown window steals keyboard focus from the InputText on the same frame it opens, making text entry impossible.
 
-When popup is visible:
+**Context menu routing gotcha**: `BeginPopupContextItem` inside a `Begin` window with `NoFocusOnAppearing` and `NoNav` breaks ImGui's input routing — the popup renders but MenuItem clicks never register. The fix is:
+- Detect right-clicks manually inside the dropdown with `IsItemHovered() && IsMouseReleased(Right)`
+- Store profile ID, name, and mouse position to `m_contextMenuProfileId/Name/X/Y` + set `m_openProfileContextMenu = true`
+- After `ImGui::End()` for the dropdown (back in the `##popup` window context), call `ImGui::OpenPopup("##profile_ctx_menu")` and `BeginPopup` from there — the parent window context has normal input routing
 
-- normal slot keys paste visible slot if search is not active
-- search input receives forwarded keys
-- escape closes popup
+### Paste flow
 
-When popup is hidden:
+`PopupWindow::PasteItemKeepOpen(item)` is the primary paste path when the popup stays open:
+1. Writes the item to the system clipboard via `WriteToClipboard`
+2. Calls `RestoreFocusAndPaste(m_prevForeground)` which:
+   - Calls `WaitForForeground` to ensure the target window is ready
+   - Sends `Ctrl+V` via `SendInput` (tagged with `kClipboardPasteMagic` to suppress the hook re-capturing it)
+3. Updates `lastUsedAt` and moves item per the paste-move-target setting
 
-- regular history paste uses current target foreground window and then calls `PasteHistorySlot`.
-- pinned paste uses current target foreground window and then calls `PastePinnedSlot`.
-- hidden paste must sync the active clipboard to the target process before reading the slot.
+`m_prevForeground` is captured when the popup opens (the foreground window at that point is the paste target).
 
-Slot numbering is independent per section. Do not share one counter across pinned and regular history.
+---
 
-Slot order for every section is:
+## Hotkey System
 
-```text
-1-9, then A-Z, then F1-F12
-```
+`HotkeyManager` installs a `WH_KEYBOARD_LL` hook via `SetWindowsHookEx`. All keystrokes system-wide pass through this hook while the app is running.
 
-Pinned entries:
+### Default bindings (`HotkeyManager::DefaultBindings()`)
 
-- section: `Pinned entries`
-- hotkey: `Ctrl+Shift+1` through `Ctrl+Shift+9`, then `Ctrl+Shift+A-Z`, then `Ctrl+Shift+F1-F12`
-- numbering starts at `1` inside pinned entries
+| Action | Default |
+|---|---|
+| TogglePopup | Ctrl+Shift+V |
+| ShowPopupSearch | Ctrl+Shift+S |
+| Incognito | Ctrl+Shift+I |
+| OpenSettings | Ctrl+Shift+, |
+| LaunchClipboardWebSearch | Ctrl+Shift+G |
+| ToggleDebugWindow | Alt+Shift+D |
 
-Regular history:
+### Hidden paste slot system
 
-- section: `History`
-- hidden hotkey default: `Ctrl+Alt+1` through `Ctrl+Alt+9`, then `Ctrl+Alt+A-Z`, then `Ctrl+Alt+F1-F12`
-- numbering starts at `1` inside regular history, regardless of how many pinned entries exist
+Slot keys produce pastes without opening the popup. Slots are numbered `1–9`, `A–Z`, `F1–F12` (in that order) — 44 slots per category.
 
-Example:
+- `Ctrl+Alt+[slot]` → paste regular history slot N
+- `Ctrl+Shift+[slot]` → paste pinned entry slot N  
+- `Alt+Shift+[slot]` → activate clipboard profile slot N
 
-```text
-Pinned entries
-1  pinned item
+Modifiers are configurable (any combination of Ctrl/Shift/Alt). F1–F12 can be enabled/disabled independently.
 
-History
-1  newest regular item
-2  next regular item
-```
+Slot numbering is **per-section**. Pinned entries start at slot 1 independently of regular history. Regular history starts at slot 1 independently of how many pinned entries exist. Never share a counter across the two sections.
 
-Never render this as regular history starting at `2` just because one pinned item exists.
+Injected paste keystrokes are tagged with `kClipboardPasteMagic` so the hook ignores them and does not re-capture the pasted content.
 
-## Multiple Clipboard Profiles
+### Key forwarding to popup
 
-Clipboard profiles are implemented as metadata in config plus persistent per-profile history files.
+When the popup is visible and `WS_EX_NOACTIVATE` prevents normal keyboard delivery, the hook forwards relevant keys to `PopupWindow` via direct method calls on the `Application::Get()->GetPopup()` pointer. Search keys and slot keys are forwarded only when `IsKeyboardCaptureActive()` correctly reflects the UI state.
 
-The storage split is important:
+---
 
-- `%APPDATA%\Clipboard++\config.json` stores settings and clipboard profile metadata only.
-- `%APPDATA%\Clipboard++\history\<profile-id>.json` stores actual clipboard items for that profile.
-- Pinned entries are not stored in `config.json`; they are stored under `pinned-history` in that profile's history JSON file.
-- Regular, non-pinned entries are stored under `regular-history`.
+## Clipboard Profile System
 
-Config fields:
-
-- `activeClipboardId`
-- `autoSwitchClipboardByProcess`
-- `autoCreateClipboardByProcess`
-- `clipboards[]`
-
-Each profile has:
-
-- `id`
-- `name`
-- `createdAt`
-- `updatedAt`
-- `processName`
-
-Important behavior:
-
-- `Application::GetHistory()` returns the active profile's history.
-- `Application::SwitchClipboardForProcess()` switches to a profile bound to a process.
-- If auto-create is enabled and no profile exists for a process, a new profile is created and bound automatically.
-- User-created clipboards should allow naming before creation.
-- Deleting a clipboard must remove the profile metadata, in-memory history, and `%APPDATA%\Clipboard++\history\<profile-id>.json`.
-- Do not allow deleting the final remaining clipboard profile.
-- Popup render calls `SyncClipboardForForegroundProcess()`.
-- External mouse clicks outside the popup call `SyncClipboardForWindow()`.
-- Hidden paste syncs to the target HWND before using the requested slot.
-- Copy events also switch by `ClipboardItem::sourceProcess`.
-
-Current limitation:
-
-- profile history contents persist as JSON, but are not encrypted yet.
-- future vault/history storage should migrate these per-profile items into encrypted storage.
-
-## Clipboard History
-
-`ClipboardHistory` is a mutex-protected in-memory vector of `ClipboardItem`.
-
-At runtime, pinned and regular items are held in the same `ClipboardHistory` for the active profile, but the container enforces pinned-first ordering. UI and hotkeys must treat pinned and regular items as separate sections with separate numbering.
-
-Important operations:
-
-- `Push`
-- `Insert`
-- `Get` / `GetCopy`
-- `GetById` / `GetByIdCopy`
-- `MoveItem`
-- `MoveItemById`
-- `MoveItemsByIdBefore`
-- `RemoveItemById`
-- `SetPinnedById`
-- `Clear`
-
-Deduplication uses `ClipboardItem::contentHash`. Moving items should not duplicate them. Prefer moving by item ID instead of index when UI filters/search are involved.
-
-Search/filter UI uses visible indices, but paste/move/delete operations should prefer stable item IDs.
-
-Pinned behavior:
-
-- `ClipboardItem::pinned` is persisted per item.
-- Pinned items stay at the top of the profile history.
-- Pinned items render under `Pinned entries`.
-- Regular items render under `History`.
-- Overflow trimming should prefer removing regular entries before pinned entries.
-- Pinning/unpinning should preserve item identity and should not duplicate the item.
-- Pinned slot hotkeys read only pinned items.
-- Regular history hotkeys read only regular, non-pinned items.
-
-## Clipboard Item Metadata
-
-`ClipboardItem` includes:
-
-- stable `id`
-- `contentHash`
-- `type`
-- `tags`
-- text/image/file data
-- source process
-- timestamps:
-  - `timestamp`
-  - `createdAt`
-  - `updatedAt`
-  - `lastUsedAt`
-- `pinned`
-
-Content detection tags copied data with URL, email, code, JSON, file, folder, document, archive, media, color, secret, etc. File/folder classification uses path/extension checks.
-
-## CLI and IPC
-
-`src/main.cpp` dispatches to CLI unless the internal `--clipboardpp-run-gui` argument is present.
-
-Running `clipboardpp.exe` without args:
-
-- if an instance is already running, signals it to show settings and exits
-- otherwise starts a detached GUI process and exits the shell
-
-The GUI single instance uses mutex `Local\ClipboardPlusPlus`.
-
-IPC:
-
-- `ipc::FindRunningInstance()` finds `ClipboardPlusPlus_Main`.
-- `ipc::SignalRunning()` sends app messages to the GUI.
-- `ipc::SendClipboardHistoryText()` sends text insertion data via `WM_COPYDATA`.
-
-Current command-line behavior includes settings/config/status and `--clipboard` insertion paths. `--clipboard set` writes the real Windows clipboard. History insertion requires the running Clipboard++ GUI process.
-
-## Config
-
-Config path:
+### Storage model
 
 ```text
-%APPDATA%\Clipboard++\config.json
+%APPDATA%\Clipboard++\config.json            Profile metadata + all other settings
+%APPDATA%\Clipboard++\history\<id>.json      Per-profile clipboard items
 ```
 
-`config.json` stores settings and profile metadata, including:
+`config.json` contains profile metadata (`id`, `name`, `createdAt`, `updatedAt`, `processName`) and `activeClipboardId` but never the actual item content.
 
-- appearance settings
-- hotkey settings
-- paste behavior settings
-- active clipboard profile ID
-- process auto-switch/auto-create settings
-- clipboard profile names, IDs, timestamps, and bound process names
-
-`config.json` does not store actual copied items and does not store pinned entries directly.
-
-History path:
-
-```text
-%APPDATA%\Clipboard++\history
-```
-
-Each clipboard profile has a separate history file:
-
-```text
-%APPDATA%\Clipboard++\history\<profile-id>.json
-```
-
-Those history files store actual copied items, including:
-
-- item ID
-- text
-- image data as base64
-- content type
-- tags
-- content hash
-- source process
-- timestamps
-
-History files use this top-level shape:
-
+History file format:
 ```json
 {
   "version": 1,
@@ -361,129 +273,266 @@ History files use this top-level shape:
 }
 ```
 
-Item JSON should only include fields relevant to that item type. Do not write image fields on text items, and do not write empty/default fields just because the C++ struct has those members.
+Only write fields relevant to each item type. Do not write image fields on text items.
 
-Examples:
+### Runtime model
+
+`Application` maintains `vector<unique_ptr<ClipboardHistory>> m_histories` — one per profile entry in `config.clipboards`. The active profile's history is referenced by the raw `m_history` pointer. This pointer is re-set every time the active profile changes. **Do not store `m_history` across profile switches** — fetch it near use via `Application::GetHistory()`.
+
+### Key profile operations
+
+- `CreateClipboardProfile(name, processName)` — generates UUID, creates a new `ClipboardHistory`, appends to `m_histories` and `m_config.clipboards`, sets as active, saves config
+- `DeleteActiveClipboardProfile()` — requires `size() > 1`; removes from vectors, deletes history file on disk, switches to next profile
+- `SetActiveClipboardProfile(id)` — saves current history to disk, switches `m_history` pointer, triggers monitor sync
+- `RenameActiveClipboardProfile(name)` — updates name + updatedAt, saves config
+- `SyncClipboardForForegroundProcess()` — called each time the popup opens; if `autoSwitchClipboardByProcess` is enabled and the foreground app matches a different profile's `processName`, switches to that profile
+
+---
+
+## Clipboard History
+
+`ClipboardHistory` is mutex-protected (`std::mutex m_mutex`). All public methods acquire this lock.
+
+### Important operations
+
+- `Push(item)` — adds to top or bottom based on config; deduplicates by content hash (moves existing item instead of inserting duplicate)
+- `Insert(item, index)` — position insert with deduplication
+- `MoveItemById(id, MoveTarget)` — moves to Top/Bottom/None; updates `lastUsedAt`
+- `MoveItemsByIdBefore(ids, beforeId)` — batch reorder for drag-drop
+- `SetPinnedById(id, bool)` — pin/unpin; pinned items always sort to the front
+- `RemoveItemById(id)` — delete by stable ID
+- `GetPinnedCopy(slot)` / `GetRegularCopy(slot)` — 1-indexed slot access for hotkeys
+- `Snapshot()` / `LoadSnapshot()` — full serialization for persistence
+
+Pinned items are stored at the head of the vector. Overflow trimming removes from the tail (non-pinned items first).
+
+Always prefer stable item IDs over visible indices for move/delete operations, especially when search/filter is active, because filters change what index N refers to.
+
+---
+
+## Content Detection (`ContentDetector`)
+
+`ContentDetector::Detect(text)` returns a set of string tags. Tag constants are defined in `ClipboardItem.h`.
+
+The 30+ tags in detection order (roughly):
+
+```
+TAG_SECRET, TAG_URL, TAG_EMAIL, TAG_IP, TAG_UUID,
+TAG_JSON, TAG_XML, TAG_HTML, TAG_CSV, TAG_MARKDOWN, TAG_SQL, TAG_CODE, TAG_COMMAND,
+TAG_CONFIG, TAG_PATH, TAG_FILE, TAG_FOLDER,
+TAG_IMAGE_FILE, TAG_DOCUMENT, TAG_ARCHIVE, TAG_EXECUTABLE, TAG_SCRIPT, TAG_DATA, TAG_AUDIO, TAG_VIDEO,
+TAG_HEX, TAG_DATE, TAG_BASE64, TAG_LOG, TAG_PHONE
+```
+
+Secret detection runs first, before any other tag. Secret patterns include: AWS access keys, GitHub tokens (`ghp_`, `ghs_`, `gho_`, `ghr_`), PEM blocks, JWTs, Slack tokens (`xox*`), and generic `*_api_key*` / `*_secret*` patterns.
+
+Path detection distinguishes `TAG_FILE` vs `TAG_FOLDER` vs `TAG_PATH` by whether the path refers to a file with a recognized extension vs a directory-like path.
+
+File extension tags (`TAG_IMAGE_FILE`, `TAG_DOCUMENT`, `TAG_ARCHIVE`, etc.) are applied when a path matches the corresponding extension list.
+
+---
+
+## Appearance System
+
+### AppearanceSettings struct (key fields)
+
+```cpp
+ThemeId      theme;                    // Built-in theme selector
+float        opacity;                  // Popup window opacity (0.1–1.0)
+float        outlineStrength;          // Outline brightness multiplier (0.0–1.0)
+bool         animatedOutline;          // Enable multicolor animated outline
+float        outlineAnimSpeed;         // Animation speed multiplier
+float        outlineColorSpread;       // Hue range of animation
+float        outlineSharpness;         // Edge sharpness of outline
+float        outlineSaturation;        // Color saturation
+float        outlineBrightness;        // Base brightness
+bool         outlineReverseDir;        // Reverse animation direction
+int          popupW, popupH;           // Default popup size
+int          mainW, mainH;             // Default settings window size
+std::string  fontPath;                 // Path to imported .ttf/.otf
+float        fontSize;                 // Font size in points (9–32)
+bool         useCustomColors;          // Enable per-field color overrides
+// 14 ImVec4 color fields: windowBg, panelBg, text, mutedText, accent,
+//   hover, selectedTab, buttonOff, buttonOn, closeButton,
+//   closeButtonHover, closeButtonText, opacityKnobFill, opacityKnobRing
+bool         showScrollbars;
+float        scrollbarSize, scrollbarRounding, scrollbarPadding;
+ImVec4       scrollbarBg, scrollbarGrab, scrollbarGrabHovered, scrollbarGrabActive;
+float        popupRounding;            // Popup window corner rounding
+float        controlRounding;          // Button/input corner rounding
+```
+
+### Built-in themes (ThemeId enum)
+
+`Dark_Default`, `Dracula`, `Nord`, `Monokai`, `OneDarkPro`, `TokyoNight`, `SolarizedDark`, `GitHubDark`, `GitHubLight`, `SolarizedLight`, `VSLight`, `QuietLight`
+
+Each theme sets a full palette via `Appearance::Apply(AppearanceSettings, ImGuiContext*)`.
+
+### Custom themes
+
+Saved as `vector<SavedAppearanceTheme>` in `config.json`. Each entry stores: name + the color/shape subset the user customized. Applied by loading the saved fields back into `AppearanceSettings` and calling `Apply`.
+
+### Font management
+
+`Application::RequestAppearance()` handles font import:
+- Copies the font file into `%APPDATA%\Clipboard++\fonts\` if it is not already there
+- Rebuilds the ImGui font atlas
+- Applies the new atlas to both the main window and popup contexts
+
+---
+
+## Config (`AppConfig` / `ConfigStore`)
+
+### Key fields in `config.json`
 
 ```json
 {
-  "id": 1,
-  "type": "text",
-  "contentHash": 123,
-  "text": "copied text",
-  "timestamps": {
-    "captured": 1760000000000,
-    "created": 1760000000000,
-    "updated": 1760000000000
-  }
+  "appearance": { ... AppearanceSettings ... },
+  "hotkeys": [ { "action": ..., "ctrl": ..., "shift": ..., "alt": ..., "vkey": ... } ],
+  "developer": { "enabled": false, "cliEnabled": false, "showSourceProcess": false, "eventLogEnabled": false },
+  "newItemsAtTop": true,
+  "appendNewlineAfterPaste": false,
+  "pasteMoveTarget": 0,
+  "activeClipboardId": "default",
+  "autoSwitchClipboardByProcess": false,
+  "autoCreateClipboardByProcess": false,
+  "clipboards": [
+    { "id": "default", "name": "Default", "createdAt": "...", "updatedAt": "...", "processName": "" }
+  ],
+  "savedThemes": [ { "name": "My Theme", ... } ]
 }
 ```
 
-```json
-{
-  "id": 2,
-  "type": "image",
-  "width": 640,
-  "height": 480,
-  "dibBase64": "..."
+`ConfigStore::Load()` fills in missing fields with defaults, so the file is forward-compatible — adding new fields with defaults does not break existing config files.
+
+`ConfigStore::Save()` is called by `Application::SaveConfig()` which is triggered after any mutation.
+
+---
+
+## IPC / CLI
+
+`src/main.cpp` checks for `--clipboardpp-run-gui` to decide whether to run in GUI mode. Without that flag:
+- if `--show`, `--popup`, `config`, `status`, `--clipboard` etc. are present, dispatch to `CLI`
+- if no args and an instance is running → signal it to show settings and exit
+- if no args and no instance → launch a detached GUI process with `--clipboardpp-run-gui` and exit
+
+Single-instance mutex: `Local\ClipboardPlusPlus`
+
+IPC window class: `ClipboardPlusPlus_Main`
+
+`ipc::SignalRunning(WM_SHOWCPP_MAIN)` or `WM_SHOWPOPUP` — sends window messages to the GUI HWND.
+
+`ipc::SendClipboardHistoryText(text, position, setSystemClipboard)` — sends a `WM_COPYDATA` message with a `ClipboardTextCommand` payload. The GUI inserts the text into the active profile's history at the requested position.
+
+---
+
+## ImGui Conventions and Gotchas
+
+### Window types used
+
+| Type | Focus behavior | Use case |
+|---|---|---|
+| `BeginPopup` | Steals keyboard focus | Context menus, option popups |
+| `BeginPopupModal` | Blocks all input behind it | Confirmation dialogs |
+| `Begin` with `NoFocusOnAppearing` | Does not steal focus | Dropdown overlays, floating lists |
+
+### Profile dropdown pattern
+
+The popup title bar profile picker is NOT a native `ImGui::Combo`. It is an `InputText` plus a floating `Begin` window with `NoFocusOnAppearing`. This is because `ImGui::Combo` does not support editable text input.
+
+**Critical**: `BeginPopupContextItem` called inside a `Begin` window carrying `NoFocusOnAppearing | NoNav` will render the popup but MenuItem clicks will silently not register. Always open context menus from the outermost reliable window context (`##popup`) using the stored-state pattern:
+
+```cpp
+// Inside dropdown Begin window:
+if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+    m_contextMenuProfileId   = profile.id;
+    m_contextMenuProfileName = profile.name;
+    m_contextMenuX           = ImGui::GetIO().MousePos.x;
+    m_contextMenuY           = ImGui::GetIO().MousePos.y;
+    m_openProfileContextMenu = true;
 }
+// ... ImGui::End() for dropdown ...
+
+// Back in ##popup context:
+if (m_openProfileContextMenu) {
+    ImGui::SetNextWindowPos({m_contextMenuX, m_contextMenuY}, ImGuiCond_Always);
+    ImGui::OpenPopup("##profile_ctx_menu");
+    m_openProfileContextMenu = false;
+}
+if (ImGui::BeginPopup("##profile_ctx_menu")) { ... }
 ```
 
-Fonts directory:
+### Size constraints for auto-resize windows
 
-```text
-%APPDATA%\Clipboard++\fonts
-```
+`SetNextWindowSize({w, 0}, ImGuiCond_Always)` with height 0 resets to zero every frame — window becomes invisible. Use `SetNextWindowSizeConstraints({minW, 0}, {maxW, maxH})` instead to let the window auto-size to content with width constraints.
 
-Font import copies `.ttf`/`.otf` files into the fonts directory when possible. Appearance changes rebuild the ImGui font atlas and apply to both main and popup contexts.
+### IsItemActivated vs IsItemClicked
 
-## UI Conventions
+- `IsItemActivated()` fires only on the frame the item transitions from inactive to active (one shot)
+- `IsItemClicked()` fires every click including while the item is already active (needed for toggle behavior)
 
-Keep UI dense and functional. This is a utility, not a landing page.
+Use `IsItemClicked` when implementing a toggle that should open/close on repeated clicks of the same item.
 
-Use existing patterns:
-
-- ImGui controls
-- small buttons/toggles
-- combo boxes for selection
-- child windows for panes
-- theme colors from `Appearance`
-
-Avoid:
-
-- large decorative layout changes
-- unrelated visual rewrites
-- nested card-like panels
-- changing focus behavior casually
-
-Popup controls should be compact because popup width can be small.
+---
 
 ## Known Gotchas
 
-The popup uses `WS_EX_NOACTIVATE`, so normal keyboard focus assumptions are wrong.
+**Popup keyboard**: `WS_EX_NOACTIVATE` means no `WM_ACTIVATE`, no normal keyboard delivery. All key handling goes through the `WH_KEYBOARD_LL` hook. Do not call `SetForegroundWindow` on the popup.
 
-Do not call `SetForegroundWindow` on the popup as a general fix. It is intentionally non-activating.
+**Settings window two-click bug**: was caused by stale ImGui input state. Fixed by `ClearMainInputState()` in `ShowMainWindow`/`HideMainWindow` and early `WM_MOUSEACTIVATE` handling. Do not remove these without a regression test.
 
-The settings window two-click bug was caused by stale ImGui input/activation state. Do not remove `ClearMainInputState()` or early `WM_MOUSEACTIVATE` handling without a careful regression test.
+**GetHistory() pointer staleness**: `Application::GetHistory()` returns a raw pointer to the active profile's `ClipboardHistory`. This pointer is re-pointed on every profile switch. Never cache it across frames or function calls that may trigger a profile switch.
 
-The popup's `@` settings button historically behaved differently because it ran inside the popup ImGui click path. Settings-open behavior is now centralized, but this area is sensitive.
+**Visible index vs item ID**: When search/filter is active, visible index N does not correspond to history index N. All move/delete/pin operations must use stable item IDs.
 
-The build script restarts the app after linking. If testing build-only behavior, remember it may launch a new `clipboardpp.exe`.
+**History file on delete**: `DeleteActiveClipboardProfile()` must delete the `%APPDATA%\Clipboard++\history\<id>.json` file on disk, not just remove the in-memory entry.
 
-`GetHistory()` returns the active profile history. If code stores that pointer for long, it may become stale after profile switching. Prefer fetching it near use.
+**imgui_demo.cpp**: Intentionally excluded from `IMGUI_SOURCES` in `CMakeLists.txt`. `ShowDemoWindow` is never called. Do not add it back.
 
-Profile histories persist under `%APPDATA%\Clipboard++\history`. They are not encrypted yet.
+**Build output paths**: The standard paths are `build\Release\clipboardpp.exe` and `build\Debug\clipboardpp.exe`. Paths under `out\build\*` are Visual Studio-internal CMake integration paths and may exist in dev environments but are not the canonical build output.
 
-When adding operations that alter list order while search/filter is active, use item IDs rather than visible indices.
+---
 
-## Editing Guidelines
+## Verification Checklist
 
-Stay inside this project unless the user explicitly asks otherwise.
+After hotkey / popup / history changes:
+- Popup opens with `Ctrl+Shift+V`, closes with same or Escape
+- Popup search opens with `Ctrl+Shift+S`, search field focused
+- Visible slot paste (1-9, a-z) works for filtered list positions
+- Hidden paste targets the correct foreground app without opening the popup
+- Popup stays topmost and does not steal focus from target app
+- Search input does not consume slot keys when text entry is not active
+- Context menu actions do not trigger accidental pastes
+- Queue mode items show `[#]` indicators, Paste All works in sequence
+- Drag-drop reordering persists after drop
+- Move top/bottom does not duplicate items
+- Pinned slot hotkeys only paste pinned items; regular hotkeys only paste regular items
+- Slot numbering resets to 1 within each section independently
+- Profile combo opens/closes on click; text editing works while list is open
+- Right-click on profile item shows context menu; Duplicate and Delete both work
+- Delete confirmation modal blocks input; red Delete button and Cancel both work correctly
+- Process-bound clipboard switching follows the focused app when enabled
 
-Prefer small, scoped changes that match existing patterns.
+After config / theme / font changes:
+- Config loads with missing fields (defaults fill in)
+- Config saves new fields correctly
+- Both main window and popup reflect appearance changes
+- Custom theme round-trip: save → reload → apply matches original
 
-Use `rg` for searches.
+After profile operations:
+- New profile appears in picker list and has empty history
+- Duplicate profile gets name `"original - duplicate"` and copies content
+- Delete (with confirmation) removes profile from list and does not allow deleting last profile
+- History file for deleted profile is removed from `%APPDATA%\Clipboard++\history\`
 
-Use `apply_patch` for manual edits.
-
-Do not revert unrelated user changes.
-
-Default to ASCII in source files unless the file already requires otherwise. Some older mojibake/comment cleanup has already happened; avoid reintroducing non-ASCII separators.
-
-Run a build after code changes when practical.
-
-## Good Verification Checklist
-
-After hotkey/popup/history changes, test or at least reason through:
-
-- popup opens with `Ctrl+Shift+V`
-- popup search opens/focuses with `Ctrl+Shift+S`
-- visible slot paste works for filtered list positions
-- hidden paste targets the foreground app
-- popup remains topmost and does not steal focus
-- search input does not consume keys unexpectedly after paste
-- context menu actions do not paste accidentally
-- queue mode still works
-- move top/bottom does not duplicate items
-- process-bound clipboard switching follows the focused app
-- settings window opens with first click working after close/reopen
-
-After config/theme/font changes, check:
-
-- config loads with missing fields
-- config saves new fields
-- default config is valid
-- main and popup both update appearance/font
+---
 
 ## Future Work Notes
 
 Likely next major areas:
-
-- encrypted vault/history storage using Windows protection APIs
-- persistent per-profile history contents
-- stronger developer options
-- richer right-click item actions
-- web search from popup search bar
-- multiple named/loadable clipboards with better management UI
-- more file type filters
-- full CLI/IPC coverage for profile/history/vault commands
+- Encrypted vault / history storage using Windows DPAPI
+- Full privacy exclusions UI (per-process rules, tag-based rules)
+- Richer developer tools: raw format inspection, transforms, templates, export
+- Full CLI/IPC coverage for profile and vault commands
+- Expanded content filter types in popup
+- Multiple paste workflows (paste as plain text, paste with formatting, etc.)
