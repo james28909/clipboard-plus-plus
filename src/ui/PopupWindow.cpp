@@ -702,7 +702,7 @@ void PopupWindow::DrawFilterStrip() {
     struct Btn { const char* label; int mode; };
     static constexpr Btn kFilters[] = {
         {"All",0},{"Text",1},{"Image",2},{"URL",3},{"File",4},
-        {"Code",5},{"Secret",6},{"JSON",7},{"Email",8},{"Color",9}
+        {"Code",5},{"Secret",6},{"JSON",7},{"Email",8},{"Color",9},{"CMD",10}
     };
     for (const auto& f : kFilters) {
         bool active = (m_filterMode == f.mode);
@@ -764,7 +764,8 @@ bool PopupWindow::ItemPassesFilter(const ClipboardItem& item) const {
     case 6: return (item.tags & TAG_SECRET) != 0;
     case 7: return (item.tags & TAG_JSON) != 0;
     case 8: return (item.tags & TAG_EMAIL) != 0;
-    case 9: return (item.tags & TAG_HEX) != 0;
+    case 9:  return (item.tags & TAG_HEX) != 0;
+    case 10: return (item.tags & TAG_COMMAND) != 0;
     default: return true;
     }
 }

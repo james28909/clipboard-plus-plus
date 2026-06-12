@@ -90,6 +90,17 @@ void LoadColorFields(T& s, const json& j) {
     s.closeButton     = ColorFromJson(j.value("closeButton",      json::array()), s.closeButton);
     s.closeButtonHover= ColorFromJson(j.value("closeButtonHover", json::array()), s.closeButtonHover);
     s.closeButtonText = ColorFromJson(j.value("closeButtonText",  json::array()), s.closeButtonText);
+    s.titleMinBase    = ColorFromJson(j.value("titleMinBase",     json::array()), s.titleMinBase);
+    s.titleMaxBase    = ColorFromJson(j.value("titleMaxBase",     json::array()), s.titleMaxBase);
+    s.titleCloseBase  = ColorFromJson(j.value("titleCloseBase",   json::array()), s.titleCloseBase);
+    s.titleMinHover   = ColorFromJson(j.value("titleMinHover",    json::array()), s.titleMinHover);
+    s.titleMaxHover   = ColorFromJson(j.value("titleMaxHover",    json::array()), s.titleMaxHover);
+    s.titleCloseHover = ColorFromJson(j.value("titleCloseHover",  json::array()), s.titleCloseHover);
+    s.iconBoardTop    = ColorFromJson(j.value("iconBoardTop",     json::array()), s.iconBoardTop);
+    s.iconBoardBottom = ColorFromJson(j.value("iconBoardBottom",  json::array()), s.iconBoardBottom);
+    s.iconPaper       = ColorFromJson(j.value("iconPaper",        json::array()), s.iconPaper);
+    s.iconMarginLine  = ColorFromJson(j.value("iconMarginLine",   json::array()), s.iconMarginLine);
+    s.iconRuledLines  = ColorFromJson(j.value("iconRuledLines",   json::array()), s.iconRuledLines);
     s.opacityKnobFill = ColorFromJson(j.value("opacityKnobFill",  json::array()), s.opacityKnobFill);
     s.opacityKnobRing = ColorFromJson(j.value("opacityKnobRing",  json::array()), s.opacityKnobRing);
     s.scrollbarBg         = ColorFromJson(j.value("scrollbarBg",         json::array()), s.scrollbarBg);
@@ -119,6 +130,17 @@ json SaveColorFields(const T& s) {
         {"closeButton",       ColorToJson(s.closeButton)},
         {"closeButtonHover",  ColorToJson(s.closeButtonHover)},
         {"closeButtonText",   ColorToJson(s.closeButtonText)},
+        {"titleMinBase",      ColorToJson(s.titleMinBase)},
+        {"titleMaxBase",      ColorToJson(s.titleMaxBase)},
+        {"titleCloseBase",    ColorToJson(s.titleCloseBase)},
+        {"titleMinHover",     ColorToJson(s.titleMinHover)},
+        {"titleMaxHover",     ColorToJson(s.titleMaxHover)},
+        {"titleCloseHover",   ColorToJson(s.titleCloseHover)},
+        {"iconBoardTop",      ColorToJson(s.iconBoardTop)},
+        {"iconBoardBottom",   ColorToJson(s.iconBoardBottom)},
+        {"iconPaper",         ColorToJson(s.iconPaper)},
+        {"iconMarginLine",    ColorToJson(s.iconMarginLine)},
+        {"iconRuledLines",    ColorToJson(s.iconRuledLines)},
         {"opacityKnobFill",   ColorToJson(s.opacityKnobFill)},
         {"opacityKnobRing",   ColorToJson(s.opacityKnobRing)},
         {"scrollbarBg",           ColorToJson(s.scrollbarBg)},

@@ -152,48 +152,112 @@ using ImGuiWidgets::KeepMouseWheelOnLastItem;
 using ImGuiWidgets::SliderFloatWheel;
 using ImGuiWidgets::SliderIntWheel;
 
+// -- Clipboard icon (theme-driven, ImDrawList) ---------------------------------
+
+static void DrawClipboardIconAt(ImDrawList* dl, ImVec2 pos, float sz,
+                                const AppearanceSettings& ap) {
+    const float s = sz / 64.0f;
+    auto P = [&](float x, float y) { return ImVec2{pos.x + x * s, pos.y + y * s}; };
+    auto C = [](const ImVec4& v)   { return ImGui::ColorConvertFloat4ToU32(v); };
+
+    const ImU32 outline = IM_COL32(17, 17, 17, 255);
+
+    // Board (gradient via two overlapping rects: top-half tint, bottom-half tint)
+    ImVec2 b0 = P(9,  12), b1 = P(55, 61);
+    float  bMy = (b0.y + b1.y) * 0.5f;
+    dl->AddRectFilled(b0, {b1.x, bMy}, C(ap.iconBoardTop),  3.0f * s);
+    dl->AddRectFilled({b0.x, bMy}, b1, C(ap.iconBoardBottom), 3.0f * s);
+    dl->AddRect(b0, b1, outline, 3.0f * s, 0, 2.5f * s);
+
+    // Clip housing (metallic gray, fixed)
+    const ImU32 clipTop = IM_COL32(220, 220, 220, 255);
+    const ImU32 clipBot = IM_COL32( 80,  80,  80, 255);
+    ImVec2 c0 = P(21, 3), c1 = P(43, 17);
+    float  cMy = (c0.y + c1.y) * 0.5f;
+    dl->AddRectFilled(c0, {c1.x, cMy}, clipTop, 3.0f * s);
+    dl->AddRectFilled({c0.x, cMy}, c1, clipBot,  3.0f * s);
+    dl->AddRect(c0, c1, outline, 3.0f * s, 0, 2.0f * s);
+    // Clip slot
+    dl->AddRectFilled(P(26, 7), P(38, 15), IM_COL32(10, 10, 10, 255), 2.0f * s);
+    dl->AddRect(P(26, 7), P(38, 15), IM_COL32(70, 70, 70, 255), 2.0f * s, 0, 1.0f * s);
+
+    // Paper
+    dl->AddRectFilled(P(13, 18), P(51, 61), C(ap.iconPaper), 2.0f * s);
+    dl->AddRect(P(13, 18), P(51, 61), outline, 2.0f * s, 0, 1.75f * s);
+
+    // Red margin line (vertical) — double-stroke
+    dl->AddLine(P(20, 22), P(20, 58), IM_COL32(0,0,0,255),    5.75f * s);
+    dl->AddLine(P(20, 22), P(20, 58), C(ap.iconMarginLine),    4.0f  * s);
+
+    // 4 ruled lines (horizontal) — double-stroke
+    for (int i = 0; i < 4; i++) {
+        float y = 28.0f + i * 9.0f;
+        dl->AddLine(P(23, y), P(48, y), IM_COL32(0,0,0,255),  3.25f * s);
+        dl->AddLine(P(23, y), P(48, y), C(ap.iconRuledLines),  2.0f  * s);
+    }
+}
+
+static void DrawClipboardIcon(float sz, const AppearanceSettings& ap) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::Dummy({sz, sz});
+    DrawClipboardIconAt(ImGui::GetWindowDrawList(), pos, sz, ap);
+}
+
 // -- Title bar helpers ---------------------------------------------------------
 
-// Draws a single title bar button. Handles hover highlight and click detection.
-// Returns true on click. The caller draws the icon on top via ImDrawList.
-static bool TitleBtn(const char* id, float x, float w, float h, bool isClose) {
+// Draws a single title bar button. Returns true on click.
+static bool TitleBtn(const char* id, float x, float w, float h, ImU32 baseCol, ImU32 hoverCol) {
     ImGui::SetCursorPos(ImVec2(x, 0.0f));
     ImGui::InvisibleButton(id, ImVec2(w, h));
-    bool hovered = ImGui::IsItemHovered();
     bool clicked = ImGui::IsItemClicked();
-
-    if (hovered) {
-        ImVec2 wp  = ImGui::GetWindowPos();
-        ImU32  col = isClose ? IM_COL32(196, 43, 28, 255)
-                             : ImGui::GetColorU32(ImGuiCol_ButtonHovered);
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            {wp.x + x,     wp.y},
-            {wp.x + x + w, wp.y + h}, col);
-    }
+    ImVec2 wp = ImGui::GetWindowPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (ImGui::IsItemHovered())
+        dl->AddRectFilled({wp.x + x, wp.y}, {wp.x + x + w, wp.y + h}, hoverCol);
+    else if ((baseCol >> 24) != 0)
+        dl->AddRectFilled({wp.x + x, wp.y}, {wp.x + x + w, wp.y + h}, baseCol);
     return clicked;
 }
 
 // -- Title bar -----------------------------------------------------------------
 
 void MainWindow::DrawTitleBar() {
-    const float W = ImGui::GetWindowWidth();
-    const float H = S((float)kTitleBarHeight);
+    const float W  = ImGui::GetWindowWidth();
+    const float H  = S((float)kTitleBarHeight);
     const float BW = S((float)kTitleBtnWidth);
 
-    ImVec2      wp = ImGui::GetWindowPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2      wp  = ImGui::GetWindowPos();
+    ImDrawList* dl  = ImGui::GetWindowDrawList();
     HWND        wnd = Application::Get()->GetHwnd();
 
+    // -- Themed button hover colors -------------------------------------------
+    const AppearanceSettings& ap = Application::Get()->GetAppearance();
+    const ImU32 minBaseCol    = ImGui::ColorConvertFloat4ToU32(ap.titleMinBase);
+    const ImU32 maxBaseCol    = ImGui::ColorConvertFloat4ToU32(ap.titleMaxBase);
+    const ImU32 closeBaseCol  = ImGui::ColorConvertFloat4ToU32(ap.titleCloseBase);
+    const ImU32 minHoverCol   = ImGui::ColorConvertFloat4ToU32(ap.titleMinHover);
+    const ImU32 maxHoverCol   = ImGui::ColorConvertFloat4ToU32(ap.titleMaxHover);
+    const ImU32 closeHoverCol = ImGui::ColorConvertFloat4ToU32(ap.titleCloseHover);
+
     // -- Background -----------------------------------------------------------
-    const ImU32 titleBg = ImGui::GetColorU32(ImGuiCol_WindowBg);
-    const ImU32 titleLine = ImGui::GetColorU32(ImGuiCol_Border);
-    const ImU32 titleText = ImGui::GetColorU32(ImGuiCol_Text);
+    const ImU32 titleBg    = ImGui::GetColorU32(ImGuiCol_WindowBg);
+    const ImU32 titleLine  = ImGui::GetColorU32(ImGuiCol_Border);
     const ImU32 titleMuted = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    const ImU32 titleText  = ImGui::GetColorU32(ImGuiCol_Text);
     dl->AddRectFilled(wp, {wp.x + W, wp.y + H}, titleBg);
 
-    // -- App title text (left-aligned, vertically centred) --------------------
-    float textY = (H - ImGui::GetTextLineHeight()) * 0.5f;
-    ImGui::SetCursorPos({S(12.0f), textY});
+    // -- App icon + title text ------------------------------------------------
+    float textY   = (H - ImGui::GetTextLineHeight()) * 0.5f;
+    float cursorX = S(10.0f);
+
+    {
+        float iconSz = H - S(10.0f);
+        ImGui::SetCursorPos({cursorX, (H - iconSz) * 0.5f});
+        DrawClipboardIcon(iconSz, ap);
+        cursorX += iconSz + S(6.0f);
+    }
+
+    ImGui::SetCursorPos({cursorX, textY});
     ImGui::PushStyleColor(ImGuiCol_Text, titleText);
     ImGui::TextUnformatted("Clipboard++");
     ImGui::PopStyleColor();
@@ -203,33 +267,29 @@ void MainWindow::DrawTitleBar() {
     float bx = W - BW * 3.0f;
 
     // - Minimize -
-    if (TitleBtn("##min", bx, BW, H, false)) {
+    if (TitleBtn("##min", bx, BW, H, minBaseCol, minHoverCol)) {
         ShowWindow(wnd, SW_MINIMIZE);
         Application::Get()->HideMainWindow();
     }
-    {   // icon: horizontal bar centred in the button
+    {
         ImVec2 c = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f + 1.0f};
-        dl->AddLine({c.x - S(5.0f), c.y}, {c.x + S(5.0f), c.y},
-                    titleMuted, S(1.5f));
+        dl->AddLine({c.x - S(5.0f), c.y}, {c.x + S(5.0f), c.y}, titleMuted, S(1.5f));
     }
     bx += BW;
 
     // - Maximize / Restore -
-    if (TitleBtn("##max", bx, BW, H, false))
+    if (TitleBtn("##max", bx, BW, H, maxBaseCol, maxHoverCol))
         PostMessageW(wnd, WM_SYSCOMMAND, isMax ? SC_RESTORE : SC_MAXIMIZE, 0);
     {
         ImVec2 c = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f};
         if (isMax) {
-            // Restore: two overlapping squares (back then front)
             dl->AddRect({c.x - S(2.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(2.0f)},
                         titleMuted, 0, 0, S(1.2f));
-            // Erase overlap area so back square doesn't bleed through front
             dl->AddRectFilled({c.x - S(5.0f), c.y - S(2.0f)}, {c.x + S(1.0f), c.y + S(5.0f)},
                               titleBg);
             dl->AddRect({c.x - S(5.0f), c.y - S(2.0f)}, {c.x + S(2.0f), c.y + S(5.0f)},
                         titleMuted, 0, 0, S(1.2f));
         } else {
-            // Maximize: single square
             dl->AddRect({c.x - S(5.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(5.0f)},
                         titleMuted, 0, 0, S(1.2f));
         }
@@ -237,20 +297,18 @@ void MainWindow::DrawTitleBar() {
     bx += BW;
 
     // - Close -
-    if (TitleBtn("##close", bx, BW, H, true))
+    if (TitleBtn("##close", bx, BW, H, closeBaseCol, closeHoverCol))
         PostMessageW(wnd, WM_CLOSE, 0, 0);
     {
-        ImVec2 c    = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f};
-        bool hov    = ImGui::IsMouseHoveringRect({wp.x + bx, wp.y},
-                                                  {wp.x + bx + BW, wp.y + H});
-        ImU32 xcol  = hov ? IM_COL32(255, 255, 255, 255) : titleMuted;
+        ImVec2 c   = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f};
+        bool   hov = ImGui::IsMouseHoveringRect({wp.x + bx, wp.y}, {wp.x + bx + BW, wp.y + H});
+        ImU32  xcol = hov ? titleText : titleMuted;
         dl->AddLine({c.x - S(5.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(5.0f)}, xcol, S(1.5f));
         dl->AddLine({c.x + S(5.0f), c.y - S(5.0f)}, {c.x - S(5.0f), c.y + S(5.0f)}, xcol, S(1.5f));
     }
 
     // -- Separator line --------------------------------------------------------
-    dl->AddLine({wp.x, wp.y + H}, {wp.x + W, wp.y + H},
-                titleLine);
+    dl->AddLine({wp.x, wp.y + H}, {wp.x + W, wp.y + H}, titleLine);
 
     // Advance ImGui cursor below the title bar
     ImGui::SetCursorPos({0.0f, H});
@@ -500,8 +558,6 @@ void MainWindow::DrawGeneral() {
                                 : activeProfile->processName.c_str());
     }
 
-    ImGui::Spacing(); ImGui::Spacing();
-    ImGui::TextDisabled("Full configuration wired in Milestone 5.");
 }
 
 // -- Section: Hotkeys ---------------------------------------------------------
@@ -1223,6 +1279,31 @@ void MainWindow::DrawAppearance() {
         ColorControlWithReset("Popup close", draft.closeButton, reset.closeButton);
         ColorControlWithReset("Popup close hover", draft.closeButtonHover, reset.closeButtonHover);
         ColorControlWithReset("Popup close text", draft.closeButtonText, reset.closeButtonText);
+        ImGui::Spacing();
+        ImGui::TextDisabled("Title bar buttons");
+        ColorControlWithReset("Minimize base",  draft.titleMinBase,   reset.titleMinBase);
+        ColorControlWithReset("Minimize hover", draft.titleMinHover,  reset.titleMinHover);
+        ColorControlWithReset("Restore base",   draft.titleMaxBase,   reset.titleMaxBase);
+        ColorControlWithReset("Restore hover",  draft.titleMaxHover,  reset.titleMaxHover);
+        ColorControlWithReset("Close base",     draft.titleCloseBase, reset.titleCloseBase);
+        ColorControlWithReset("Close hover",    draft.titleCloseHover, reset.titleCloseHover);
+        ImGui::Spacing();
+        ImGui::TextDisabled("Icon");
+        {
+            AppearanceSettings iconPreview = draft.customColors ? draft : ThemeDefaults(draft.theme);
+            float previewSz = 48.0f;
+            ImGui::BeginGroup();
+            ColorControlWithReset("Board top",    draft.iconBoardTop,    reset.iconBoardTop);
+            ColorControlWithReset("Board bottom", draft.iconBoardBottom, reset.iconBoardBottom);
+            ColorControlWithReset("Paper",        draft.iconPaper,       reset.iconPaper);
+            ColorControlWithReset("Margin line",  draft.iconMarginLine,  reset.iconMarginLine);
+            ColorControlWithReset("Ruled lines",  draft.iconRuledLines,  reset.iconRuledLines);
+            ImGui::EndGroup();
+            ImGui::SameLine(0, 16.0f);
+            // Live icon preview using draft colors (always reflects current pickers)
+            AppearanceSettings livePreview = draft;
+            DrawClipboardIcon(previewSz, livePreview);
+        }
         ColorControlWithReset("Opacity knob fill", draft.opacityKnobFill, reset.opacityKnobFill);
         ColorControlWithReset("Opacity knob ring", draft.opacityKnobRing, reset.opacityKnobRing);
         if (!draft.customColors)
@@ -1300,9 +1381,6 @@ void MainWindow::DrawHistory() {
         ImGui::InputInt("Max vault size (MB)", &vaultLimitMB);
         if (vaultLimitMB < 1) vaultLimitMB = 1;
     }
-    ImGui::Spacing();
-    ImGui::TextDisabled("Storage engine wired in Milestone 5.");
-
     // -- Live history preview --------------------------------------------------
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
     ClipboardHistory* hist = Application::Get()->GetHistory();
@@ -1550,8 +1628,6 @@ void MainWindow::DrawPrivacy() {
     ImGui::Spacing();
     ImGui::Text("Process exclusion list (one per line):");
     ImGui::InputTextMultiline("##excl", exclusionBuf, sizeof(exclusionBuf), {-1, 120});
-    ImGui::Spacing();
-    ImGui::TextDisabled("Exclusion enforcement wired in Milestone 9.");
 }
 
 // -- Section: Developer -------------------------------------------------------
@@ -1710,17 +1786,37 @@ void MainWindow::DrawAbout() {
     ImGui::Separator();
     ImGui::Spacing();
 
+    // -- Icon + app identity --------------------------------------------------
+    Application* app = Application::Get();
+    float iconSz = S(64.0f);
+    if (app) {
+        DrawClipboardIcon(iconSz, app->GetAppearance());
+        ImGui::SameLine(0, S(16.0f));
+    }
+    ImGui::BeginGroup();
     ImGui::Text("Clipboard++");
-    ImGui::TextDisabled("Version 0.1.0 - Milestone 1");
+    ImGui::TextDisabled("Version 0.1.0  (Beta 2)");
     ImGui::Spacing();
     ImGui::TextWrapped(
-        "A lean, modern Windows clipboard manager built with C++17, "
-        "Dear ImGui (docking branch), and DirectX 11.");
+        "A lean, modern Windows clipboard manager built with\n"
+        "C++17, Dear ImGui (docking branch), and DirectX 11.");
+    ImGui::EndGroup();
+
     ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
     ImGui::TextDisabled("Built with:");
-    ImGui::BulletText("Dear ImGui (docking branch) - ocornut/imgui");
+    ImGui::BulletText("Dear ImGui (docking branch)  —  ocornut/imgui");
     ImGui::BulletText("nlohmann/json v3.11.3");
-    ImGui::BulletText("DirectX 11 / Win32 API");
+    ImGui::BulletText("SQLite 3.45.0");
+    ImGui::BulletText("DirectX 11 / WIC / Win32 API");
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Tools:");
+    ImGui::BulletText("SQLite Editor  —  standalone database browser");
+    ImGui::BulletText("JSON Viewer    —  standalone JSON file viewer");
+
     ImGui::Spacing();
     ImGui::TextDisabled("License: MIT");
 }

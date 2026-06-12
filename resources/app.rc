@@ -12,8 +12,8 @@
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
 
-// Application icon (add clipboardpp.ico to this directory to use it)
-// IDI_APP ICON "clipboardpp.ico"
+// Application icon
+1 ICON "..\icons\clipboardpp.ico"
 
 // Version info
 VS_VERSION_INFO VERSIONINFO

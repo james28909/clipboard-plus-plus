@@ -739,7 +739,11 @@ bool Application::Init() {
     wc.style         = CS_CLASSDC;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = m_hInstance;
-    wc.hIcon         = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));   // IDI_APPLICATION
+    wc.hIcon         = LoadIconW(m_hInstance, MAKEINTRESOURCEW(1));
+    if (!wc.hIcon) wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIconSm       = (HICON)LoadImageW(m_hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                           GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                           LR_DEFAULTCOLOR);
     wc.hCursor       = LoadCursorW(nullptr, MAKEINTRESOURCEW(32514)); // IDC_ARROW
     wc.hbrBackground = nullptr; // D3D owns the background - prevents white flash on resize
     wc.lpszClassName = L"ClipboardPlusPlus_Main";
@@ -760,6 +764,14 @@ bool Application::Init() {
 
     if (!m_hwnd) return false;
     m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
+
+    // Set window icon explicitly so it appears in the taskbar and title bar
+    if (HICON hBig = LoadIconW(m_hInstance, MAKEINTRESOURCEW(1)))
+        SendMessageW(m_hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(hBig));
+    if (HICON hSm = (HICON)LoadImageW(m_hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                       GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                                       LR_DEFAULTCOLOR))
+        SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(hSm));
 
     // DWM drop-shadow for borderless window (1px inset on all sides is enough)
     MARGINS shadow = {1, 1, 1, 1};
@@ -862,6 +874,7 @@ void Application::Shutdown() {
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 
+    if (m_appIconSrv) { m_appIconSrv->Release(); m_appIconSrv = nullptr; }
     DestroyD3D();
 
     if (m_hwnd) {
@@ -934,6 +947,8 @@ void Application::ApplyAppearanceNow() {
         m_trayPopup->ApplyAppearance(m_appearance);
     if (m_debugWindow)
         m_debugWindow->ApplyAppearance(m_appearance);
+    if (m_tray)
+        m_tray->ApplyTheme(m_appearance);
     ImGui::SetCurrentContext(prevCtx);
 }
 
@@ -1227,4 +1242,72 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// -- Icon texture (cached, loaded on first use) --------------------------------
+
+ID3D11ShaderResourceView* Application::GetAppIconSrv() {
+    if (m_appIconSrv) return m_appIconSrv;
+    if (!m_d3dDevice) return nullptr;
+
+    constexpr int kSize = 64;
+    HICON hIcon = (HICON)LoadImageW(m_hInstance, MAKEINTRESOURCEW(1),
+                                    IMAGE_ICON, kSize, kSize, LR_DEFAULTCOLOR);
+    if (!hIcon) return nullptr;
+
+    HDC hdcScreen = GetDC(nullptr);
+    HDC hdc       = CreateCompatibleDC(hdcScreen);
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = kSize;
+    bmi.bmiHeader.biHeight      = -kSize; // top-down
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void*   pixels = nullptr;
+    HBITMAP hDIB   = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    if (hDIB && pixels) {
+        memset(pixels, 0, kSize * kSize * 4);
+        HGDIOBJ old = SelectObject(hdc, hDIB);
+        DrawIconEx(hdc, 0, 0, hIcon, kSize, kSize, 0, nullptr, DI_NORMAL);
+        GdiFlush();
+        SelectObject(hdc, old);
+
+        // GDI gives BGRA; D3D11 RGBA needs bytes 0↔2 swapped
+        auto* p = static_cast<uint8_t*>(pixels);
+        for (int i = 0; i < kSize * kSize; ++i, p += 4)
+            std::swap(p[0], p[2]);
+
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width            = kSize;
+        desc.Height           = kSize;
+        desc.MipLevels        = 1;
+        desc.ArraySize        = 1;
+        desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage            = D3D11_USAGE_IMMUTABLE;
+        desc.BindFlags        = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA init{};
+        init.pSysMem     = pixels;
+        init.SysMemPitch = kSize * 4;
+
+        ID3D11Texture2D* tex = nullptr;
+        if (SUCCEEDED(m_d3dDevice->CreateTexture2D(&desc, &init, &tex))) {
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format                    = DXGI_FORMAT_R8G8B8A8_UNORM;
+            srvDesc.ViewDimension             = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels       = 1;
+            m_d3dDevice->CreateShaderResourceView(tex, &srvDesc, &m_appIconSrv);
+            tex->Release();
+        }
+        DeleteObject(hDIB);
+    }
+
+    DeleteDC(hdc);
+    ReleaseDC(nullptr, hdcScreen);
+    DestroyIcon(hIcon);
+    return m_appIconSrv;
 }

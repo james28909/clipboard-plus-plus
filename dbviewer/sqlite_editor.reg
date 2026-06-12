@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\SQLiteEditor]
+"MUIVerb"="Open with imGui SQLite Editor"
+"Icon"="C:\\Users\\no0bz\\projects\\clipboard-plus-plus\\dbviewer\\build\\Release\\sqlite_editor.exe,0"
+"ext"="db;sqlite;sqlite3;db3"
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\SQLiteEditor\command]
+@="\"C:\\Users\\no0bz\\projects\\clipboard-plus-plus\\dbviewer\\build\\Release\\sqlite_editor.exe\" \"%1\""

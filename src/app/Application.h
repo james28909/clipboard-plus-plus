@@ -101,6 +101,7 @@ public:
     void UseCurrentPopupSizeAsDefault();
     void SyncClipboardForForegroundProcess();
     void SyncClipboardForWindow(HWND hwnd);
+    ID3D11ShaderResourceView* GetAppIconSrv();
 
 private:
     bool Init();
@@ -129,10 +130,11 @@ private:
     HINSTANCE m_hInstance{};
     HWND      m_hwnd{};
 
-    ID3D11Device*           m_d3dDevice{};
-    ID3D11DeviceContext*    m_d3dContext{};
-    IDXGISwapChain*         m_swapChain{};
-    ID3D11RenderTargetView* m_renderTarget{};
+    ID3D11Device*              m_d3dDevice{};
+    ID3D11DeviceContext*       m_d3dContext{};
+    IDXGISwapChain*            m_swapChain{};
+    ID3D11RenderTargetView*    m_renderTarget{};
+    ID3D11ShaderResourceView*  m_appIconSrv{};
 
     std::unique_ptr<TrayIcon>         m_tray;
     std::vector<std::unique_ptr<ClipboardHistory>> m_histories;

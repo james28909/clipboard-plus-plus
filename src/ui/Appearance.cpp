@@ -69,6 +69,12 @@ AppearanceSettings ThemeDefaults(ThemeId theme) {
     settings.closeButton = settings.buttonOff;
     settings.closeButtonHover = light ? Color(220, 53, 69) : Color(196, 43, 28);
     settings.closeButtonText = light ? Color(255, 255, 255) : settings.text;
+    settings.titleMinBase    = ImVec4{0.0f, 0.0f, 0.0f, 0.0f};
+    settings.titleMaxBase    = ImVec4{0.0f, 0.0f, 0.0f, 0.0f};
+    settings.titleCloseBase  = ImVec4{0.0f, 0.0f, 0.0f, 0.0f};
+    settings.titleMinHover   = settings.hover;
+    settings.titleMaxHover   = settings.hover;
+    settings.titleCloseHover = settings.closeButtonHover;
     ImVec4 knobFill = Color(20, 38, 54);
     ImVec4 knobRing = Color(92, 178, 255);
 
@@ -133,6 +139,11 @@ AppearanceSettings ThemeDefaults(ThemeId theme) {
     settings.scrollbarGrab = Mix(settings.panelBg, settings.accent, light ? 0.24f : 0.34f);
     settings.scrollbarGrabHover = settings.hover;
     settings.scrollbarGrabActive = Brighten(settings.accent, light ? 0.06f : 0.16f);
+    settings.iconBoardTop    = settings.hover;
+    settings.iconBoardBottom = Mix(settings.accent, Color(8, 12, 30), 0.55f);
+    settings.iconPaper       = Color(255, 255, 255);
+    settings.iconMarginLine  = settings.closeButtonHover;
+    settings.iconRuledLines  = settings.accent;
     return settings;
 }
 
@@ -156,6 +167,17 @@ static AppearanceSettings EffectiveSettings(const AppearanceSettings& settings) 
     effective.closeButton     = theme.closeButton;
     effective.closeButtonHover = theme.closeButtonHover;
     effective.closeButtonText = theme.closeButtonText;
+    effective.titleMinBase    = theme.titleMinBase;
+    effective.titleMaxBase    = theme.titleMaxBase;
+    effective.titleCloseBase  = theme.titleCloseBase;
+    effective.titleMinHover   = theme.titleMinHover;
+    effective.titleMaxHover   = theme.titleMaxHover;
+    effective.titleCloseHover = theme.titleCloseHover;
+    effective.iconBoardTop    = theme.iconBoardTop;
+    effective.iconBoardBottom = theme.iconBoardBottom;
+    effective.iconPaper       = theme.iconPaper;
+    effective.iconMarginLine  = theme.iconMarginLine;
+    effective.iconRuledLines  = theme.iconRuledLines;
     effective.opacityKnobFill = theme.opacityKnobFill;
     effective.opacityKnobRing = theme.opacityKnobRing;
     effective.scrollbarBg          = theme.scrollbarBg;
@@ -183,6 +205,17 @@ SavedAppearanceTheme ToSavedTheme(const AppearanceSettings& settings, const std:
     saved.closeButton = effective.closeButton;
     saved.closeButtonHover = effective.closeButtonHover;
     saved.closeButtonText = effective.closeButtonText;
+    saved.titleMinBase    = effective.titleMinBase;
+    saved.titleMaxBase    = effective.titleMaxBase;
+    saved.titleCloseBase  = effective.titleCloseBase;
+    saved.titleMinHover   = effective.titleMinHover;
+    saved.titleMaxHover   = effective.titleMaxHover;
+    saved.titleCloseHover = effective.titleCloseHover;
+    saved.iconBoardTop    = effective.iconBoardTop;
+    saved.iconBoardBottom = effective.iconBoardBottom;
+    saved.iconPaper       = effective.iconPaper;
+    saved.iconMarginLine  = effective.iconMarginLine;
+    saved.iconRuledLines  = effective.iconRuledLines;
     saved.opacityKnobFill = effective.opacityKnobFill;
     saved.opacityKnobRing = effective.opacityKnobRing;
     saved.scrollbarBg = effective.scrollbarBg;
@@ -213,6 +246,17 @@ void ApplySavedTheme(AppearanceSettings& settings, const SavedAppearanceTheme& s
     settings.closeButton = saved.closeButton;
     settings.closeButtonHover = saved.closeButtonHover;
     settings.closeButtonText = saved.closeButtonText;
+    settings.titleMinBase    = saved.titleMinBase;
+    settings.titleMaxBase    = saved.titleMaxBase;
+    settings.titleCloseBase  = saved.titleCloseBase;
+    settings.titleMinHover   = saved.titleMinHover;
+    settings.titleMaxHover   = saved.titleMaxHover;
+    settings.titleCloseHover = saved.titleCloseHover;
+    settings.iconBoardTop    = saved.iconBoardTop;
+    settings.iconBoardBottom = saved.iconBoardBottom;
+    settings.iconPaper       = saved.iconPaper;
+    settings.iconMarginLine  = saved.iconMarginLine;
+    settings.iconRuledLines  = saved.iconRuledLines;
     settings.opacityKnobFill = saved.opacityKnobFill;
     settings.opacityKnobRing = saved.opacityKnobRing;
     settings.scrollbarBg = saved.scrollbarBg;

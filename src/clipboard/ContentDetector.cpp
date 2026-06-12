@@ -150,10 +150,28 @@ bool ContentDetector::IsCode(const std::string& text) {
 
 bool ContentDetector::IsCommand(const std::string& text) {
     std::string t = Trim(text);
-    if (t.find('\n') != std::string::npos) return false;
-    static const std::regex cmd(R"(^(git|npm|pnpm|yarn|python|pip|cmake|ninja|dotnet|cargo|docker|kubectl|powershell|cmd|winget|curl|ssh|scp|copy|xcopy|robocopy)\b)",
-                                std::regex::icase | std::regex::optimize);
-    return std::regex_search(t, cmd);
+
+    // Single-line fast path
+    static const std::regex singleCmd(
+        R"(^(git|npm|npx|pnpm|yarn|python|python3|pip|pip3|cmake|ninja|make|msbuild|dotnet|cargo|rustc|go|node|docker|kubectl|helm|terraform|az|aws|gh|curl|wget|ssh|scp|rsync|winget|choco|scoop|powershell|pwsh|cmd|copy|xcopy|robocopy|reg|netsh|ipconfig|ping|tracert|nslookup|tasklist|taskkill|sc|net|wmic|certutil|cipher|attrib|icacls|bcdedit|diskpart|format|chkdsk|sfc|dism|wusa|msiexec|runas)\b)",
+        std::regex::icase | std::regex::optimize);
+
+    if (t.find('\n') == std::string::npos)
+        return std::regex_search(t, singleCmd);
+
+    // Multi-line: check that the majority of non-empty lines look like commands
+    // (covers git command sequences, shell scripts, PS1 snippets, etc.)
+    std::istringstream ss(t);
+    std::string line;
+    int total = 0, matching = 0;
+    while (std::getline(ss, line)) {
+        std::string lt = Trim(line);
+        if (lt.empty() || lt.front() == '#') continue;  // skip blank / comment lines
+        ++total;
+        if (std::regex_search(lt, singleCmd)) ++matching;
+    }
+    // Require at least 2 lines, 60%+ matching command pattern
+    return total >= 2 && matching * 10 >= total * 6;
 }
 
 bool ContentDetector::IsUUID(const std::string& text) {

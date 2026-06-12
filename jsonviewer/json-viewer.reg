@@ -1,0 +1,65 @@
+Windows Registry Editor Version 5.00
+;
+; AwesomeMenu Plugin File — Example / Template
+; =============================================
+;
+; HOW TO USE THIS FILE:
+;   1. Make a copy of this file and rename it (e.g. my_tool.reg)
+;   2. Edit the copy — see the fields explained below
+;   3. Copy the finished file to:
+;          %APPDATA%\AwesomeMenuHost\menus\
+;      which on this machine is:
+;          C:\Users\no0bz\AppData\Roaming\AwesomeMenuHost\menus\
+;      (there is a shortcut to that folder called AppData.lnk in the project root)
+;   4. Right-click any file in Explorer — no rebuild needed, the folder
+;      is scanned fresh on every right-click.
+;
+; To add MULTIPLE entries, add another [key] + [key\command] block below
+; the first one with a different name (e.g. MyTool2 instead of MyTool).
+;
+; -----------------------------------------------------------------------
+; FIELD REFERENCE
+; -----------------------------------------------------------------------
+;
+; [HKEY_CURRENT_USER\Software\Classes\*\shell\<UniqueName>]
+;   The key name after \shell\ must be unique — use your tool name,
+;   no spaces. This is only an internal identifier, not what is displayed.
+;
+; "MUIVerb"="..."
+;   The label shown in the AwesomeMenu flyout. This is what the user sees.
+;
+; "Icon"="C:\\full\\path\\to\\app.exe,0"
+;   Path to any .exe, .dll, or .ico to pull the icon from.
+;   The ,0 means icon index 0 (the first icon in the file).
+;   Use double backslashes \\ in paths.
+;   Leave this line out entirely to show no icon.
+;
+; "ext"="ext1;ext2;ext3"
+;   OPTIONAL. Semicolon-separated list of file extensions (no dots,
+;   lowercase) that this entry should appear for.
+;   Example: "db;sqlite;sqlite3"
+;   Leave this line out entirely to show the entry for ALL file types
+;   and also in folder/background right-click menus.
+;
+; "HasLUAShield"=""
+;   OPTIONAL. Add this line (value does not matter) to show the UAC
+;   shield icon and run the program as Administrator.
+;
+; [HKEY_CURRENT_USER\Software\Classes\*\shell\<UniqueName>\command]
+;   Must match the key name above exactly.
+;
+; @="\"C:\\full\\path\\to\\app.exe\" \"%1\""
+;   The command to run. Use double backslashes \\ in paths.
+;   %1  — replaced at runtime with the full path of the right-clicked file
+;   %SEL% — same as %1, alternative syntax
+;   If the path might contain spaces, keep the \" quotes around %1.
+;
+; -----------------------------------------------------------------------
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\imguijsonviewer]
+"MUIVerb"="Open with imGui json-viewer"
+"Icon"="C:\\Users\\no0bz\\projects\\clipboard-plus-plus\\jsonviewer\\build\\Release\\json_viewer.exe,0"
+"ext"="json;jsonc"
+
+[HKEY_CURRENT_USER\Software\Classes\*\shell\imguijsonviewer\command]
+@="\"C:\\Users\\no0bz\\projects\\clipboard-plus-plus\\jsonviewer\\build\\Release\\json_viewer.exe\" \"%1\""

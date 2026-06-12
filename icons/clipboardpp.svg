@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Board: app theme blue gradient -->
+    <linearGradient id="board" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0%"   stop-color="#4DA8FF"/>
+      <stop offset="100%" stop-color="#0D3DB5"/>
+    </linearGradient>
+    <!-- Clip housing: high-contrast metallic chrome -->
+    <linearGradient id="clip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#FFFFFF"/>
+      <stop offset="28%"  stop-color="#D6D6D6"/>
+      <stop offset="68%"  stop-color="#888888"/>
+      <stop offset="100%" stop-color="#3A3A3A"/>
+    </linearGradient>
+    <!-- Clip inner top highlight -->
+    <linearGradient id="clipSheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="rgba(255,255,255,0.70)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0.00)"/>
+    </linearGradient>
+    <!-- Paper: crisp white -->
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#EAF0FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ── Clipboard board ─────────────────────────────────── -->
+  <rect x="72" y="100" width="368" height="390" rx="30" ry="30"
+        fill="url(#board)" stroke="#111" stroke-width="20"/>
+
+  <!-- Board highlight (subtle sheen top-left) -->
+  <rect x="72" y="100" width="368" height="390" rx="30" ry="30"
+        fill="none" stroke="rgba(255,255,255,0.14)" stroke-width="10"/>
+
+  <!-- ── Clip housing ────────────────────────────────────── -->
+  <!-- Cast shadow underneath clip (gives separation from board) -->
+  <rect x="180" y="50" width="164" height="100" rx="24" ry="24"
+        fill="rgba(0,0,0,0.45)"/>
+
+  <!-- Outer housing body -->
+  <rect x="170" y="30" width="172" height="108" rx="26" ry="26"
+        fill="url(#clip)" stroke="#111" stroke-width="22"/>
+
+  <!-- Top-third sheen (bright highlight) -->
+  <rect x="178" y="34" width="156" height="36" rx="18" ry="18"
+        fill="url(#clipSheen)"/>
+
+  <!-- Clip slot cutout — slightly lighter so it reads as a real void -->
+  <rect x="207" y="52" width="98" height="58" rx="14" ry="14"
+        fill="#0A0A0A" stroke="#444" stroke-width="5"/>
+
+  <!-- Slot interior gleam (just the top edge catching light) -->
+  <line x1="218" y1="60" x2="294" y2="60"
+        stroke="rgba(255,255,255,0.22)" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- ── Paper sheet ─────────────────────────────────────── -->
+  <rect x="106" y="148" width="300" height="310" rx="10" ry="10"
+        fill="url(#paper)" stroke="#111" stroke-width="14"/>
+
+  <!-- Red margin line — black outline + vivid red on top -->
+  <line x1="160" y1="162" x2="160" y2="444"
+        stroke="#111" stroke-width="46" stroke-linecap="round"/>
+  <line x1="160" y1="162" x2="160" y2="444"
+        stroke="#FF0022" stroke-width="32" stroke-linecap="round"/>
+
+  <!-- Ruled lines — double-stroke: black outline + deep navy on top -->
+  <line x1="180" y1="207" x2="382" y2="207"
+        stroke="#111" stroke-width="26" stroke-linecap="round"/>
+  <line x1="180" y1="207" x2="382" y2="207"
+        stroke="#1E4F8C" stroke-width="16" stroke-linecap="round"/>
+
+  <line x1="180" y1="269" x2="382" y2="269"
+        stroke="#111" stroke-width="26" stroke-linecap="round"/>
+  <line x1="180" y1="269" x2="382" y2="269"
+        stroke="#1E4F8C" stroke-width="16" stroke-linecap="round"/>
+
+  <line x1="180" y1="331" x2="362" y2="331"
+        stroke="#111" stroke-width="26" stroke-linecap="round"/>
+  <line x1="180" y1="331" x2="362" y2="331"
+        stroke="#1E4F8C" stroke-width="16" stroke-linecap="round"/>
+
+  <line x1="180" y1="393" x2="330" y2="393"
+        stroke="#111" stroke-width="26" stroke-linecap="round"/>
+  <line x1="180" y1="393" x2="330" y2="393"
+        stroke="#1E4F8C" stroke-width="16" stroke-linecap="round"/>
+</svg>

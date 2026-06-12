@@ -1,0 +1,948 @@
+#include "JsonViewer.h"
+
+#include <imgui.h>
+#include <imgui_impl_win32.h>
+#include <imgui_impl_dx11.h>
+#include <dxgi.h>
+#include <dwmapi.h>
+#include <commdlg.h>
+#include <shellapi.h>
+#include <shlwapi.h>
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <sstream>
+#include <string>
+
+#pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "dwmapi.lib")
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
+    HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+// ---------------------------------------------------------------------------
+// String helpers
+// ---------------------------------------------------------------------------
+static std::string WideToUtf8(const std::wstring& w) {
+    if (w.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), -1, nullptr, 0, nullptr, nullptr);
+    std::string s(n - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), -1, s.data(), n, nullptr, nullptr);
+    return s;
+}
+static std::wstring Utf8ToWide(const std::string& s) {
+    if (s.empty()) return {};
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), -1, nullptr, 0);
+    std::wstring w(n - 1, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), -1, w.data(), n);
+    return w;
+}
+
+// ---------------------------------------------------------------------------
+// Recents path
+// ---------------------------------------------------------------------------
+static std::wstring GetRecentsPath() {
+    wchar_t appdata[MAX_PATH]{};
+    if (!GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH)) return {};
+    return std::wstring(appdata) + L"\\json_viewer_recents.txt";
+}
+
+// ---------------------------------------------------------------------------
+// Win32 window
+// ---------------------------------------------------------------------------
+static constexpr wchar_t kWndClass[] = L"JsonViewerWindow";
+
+LRESULT CALLBACK JsonViewerApp::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
+        return true;
+
+    auto* app = reinterpret_cast<JsonViewerApp*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    switch (msg) {
+    case WM_SIZE:
+        if (app && wParam != SIZE_MINIMIZED) {
+            app->m_resizeW = LOWORD(lParam);
+            app->m_resizeH = HIWORD(lParam);
+        }
+        return 0;
+    case WM_DROPFILES:
+        if (app) app->CheckDroppedFile(reinterpret_cast<HDROP>(wParam));
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xFFF0) == SC_KEYMENU) return 0;
+        break;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+bool JsonViewerApp::CreateAppWindow(HINSTANCE hInstance) {
+    WNDCLASSEXW wc{};
+    wc.cbSize        = sizeof(wc);
+    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc   = WndProc;
+    wc.hInstance     = hInstance;
+    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hIcon         = LoadIconW(hInstance, MAKEINTRESOURCEW(1));
+    wc.hIconSm       = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                           GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                           LR_DEFAULTCOLOR);
+    if (!wc.hIcon)   wc.hIcon   = LoadIconW(nullptr, IDI_APPLICATION);
+    if (!wc.hIconSm) wc.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.lpszClassName = kWndClass;
+    RegisterClassExW(&wc);
+
+    m_hwnd = CreateWindowExW(
+        WS_EX_ACCEPTFILES,
+        kWndClass, L"JSON Viewer",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1100, 750,
+        nullptr, nullptr, hInstance, nullptr);
+
+    if (!m_hwnd) return false;
+    SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+
+    if (HICON h = LoadIconW(hInstance, MAKEINTRESOURCEW(1)))
+        SendMessageW(m_hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(h));
+    if (HICON h = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                       GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                       LR_DEFAULTCOLOR))
+        SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(h));
+
+    ShowWindow(m_hwnd, SW_SHOWDEFAULT);
+    UpdateWindow(m_hwnd);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// D3D11
+// ---------------------------------------------------------------------------
+bool JsonViewerApp::CreateD3D() {
+    DXGI_SWAP_CHAIN_DESC sd{};
+    sd.BufferCount        = 2;
+    sd.BufferDesc.Format  = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow       = m_hwnd;
+    sd.SampleDesc.Count   = 1;
+    sd.Windowed           = TRUE;
+    sd.SwapEffect         = DXGI_SWAP_EFFECT_DISCARD;
+
+    const D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
+    D3D_FEATURE_LEVEL flOut;
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &fl, 1,
+        D3D11_SDK_VERSION, &sd, &m_swapChain, &m_device, &flOut, &m_context);
+    if (FAILED(hr)) return false;
+    CreateRenderTarget();
+    return true;
+}
+
+void JsonViewerApp::DestroyD3D() {
+    DestroyRenderTarget();
+    if (m_swapChain) { m_swapChain->Release(); m_swapChain = nullptr; }
+    if (m_context)   { m_context->Release();   m_context   = nullptr; }
+    if (m_device)    { m_device->Release();     m_device    = nullptr; }
+}
+
+void JsonViewerApp::CreateRenderTarget() {
+    ID3D11Texture2D* back = nullptr;
+    m_swapChain->GetBuffer(0, IID_PPV_ARGS(&back));
+    if (back) {
+        m_device->CreateRenderTargetView(back, nullptr, &m_renderTarget);
+        back->Release();
+    }
+}
+
+void JsonViewerApp::DestroyRenderTarget() {
+    if (m_renderTarget) { m_renderTarget->Release(); m_renderTarget = nullptr; }
+}
+
+void JsonViewerApp::ResizeSwapChain(UINT w, UINT h) {
+    DestroyRenderTarget();
+    m_swapChain->ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, 0);
+    CreateRenderTarget();
+}
+
+// ---------------------------------------------------------------------------
+// Theme (matches sqlite editor / clipboardpp)
+// ---------------------------------------------------------------------------
+void JsonViewerApp::ApplyTheme() {
+    ImGuiStyle& s = ImGui::GetStyle();
+    s.WindowRounding     = 6.0f;
+    s.ChildRounding      = 4.0f;
+    s.FrameRounding      = 3.0f;
+    s.PopupRounding      = 5.0f;
+    s.ScrollbarRounding  = 7.0f;
+    s.GrabRounding       = 3.0f;
+    s.TabRounding        = 4.0f;
+    s.FramePadding       = {6.0f, 3.0f};
+    s.ItemSpacing        = {8.0f, 4.0f};
+    s.ScrollbarSize      = 10.0f;
+    s.WindowBorderSize   = 0.0f;
+    s.FrameBorderSize    = 0.0f;
+
+    ImVec4* c = s.Colors;
+    c[ImGuiCol_WindowBg]             = {0.118f, 0.118f, 0.118f, 1.0f};
+    c[ImGuiCol_ChildBg]              = {0.118f, 0.118f, 0.118f, 1.0f};
+    c[ImGuiCol_PopupBg]              = {0.145f, 0.145f, 0.149f, 1.0f};
+    c[ImGuiCol_Border]               = {0.220f, 0.220f, 0.240f, 0.6f};
+    c[ImGuiCol_Text]                 = {0.863f, 0.863f, 0.863f, 1.0f};
+    c[ImGuiCol_TextDisabled]         = {0.520f, 0.520f, 0.520f, 1.0f};
+    c[ImGuiCol_Header]               = {0.149f, 0.475f, 1.0f, 0.35f};
+    c[ImGuiCol_HeaderHovered]        = {0.149f, 0.475f, 1.0f, 0.55f};
+    c[ImGuiCol_HeaderActive]         = {0.149f, 0.475f, 1.0f, 0.75f};
+    c[ImGuiCol_Button]               = {0.184f, 0.196f, 0.220f, 1.0f};
+    c[ImGuiCol_ButtonHovered]        = {0.294f, 0.561f, 1.0f, 0.70f};
+    c[ImGuiCol_ButtonActive]         = {0.149f, 0.475f, 1.0f, 1.0f};
+    c[ImGuiCol_FrameBg]              = {0.145f, 0.145f, 0.149f, 1.0f};
+    c[ImGuiCol_FrameBgHovered]       = {0.184f, 0.196f, 0.220f, 1.0f};
+    c[ImGuiCol_FrameBgActive]        = {0.149f, 0.475f, 1.0f, 0.40f};
+    c[ImGuiCol_TitleBg]              = {0.075f, 0.075f, 0.075f, 1.0f};
+    c[ImGuiCol_TitleBgActive]        = {0.075f, 0.075f, 0.075f, 1.0f};
+    c[ImGuiCol_MenuBarBg]            = {0.100f, 0.100f, 0.100f, 1.0f};
+    c[ImGuiCol_Tab]                  = {0.145f, 0.145f, 0.149f, 1.0f};
+    c[ImGuiCol_TabHovered]           = {0.294f, 0.561f, 1.0f, 0.70f};
+    c[ImGuiCol_TabActive]            = {0.149f, 0.475f, 1.0f, 1.0f};
+    c[ImGuiCol_TabUnfocused]         = {0.145f, 0.145f, 0.149f, 1.0f};
+    c[ImGuiCol_TabUnfocusedActive]   = {0.184f, 0.196f, 0.220f, 1.0f};
+    c[ImGuiCol_ScrollbarBg]          = {0.145f, 0.145f, 0.149f, 0.45f};
+    c[ImGuiCol_ScrollbarGrab]        = {0.310f, 0.360f, 0.460f, 1.0f};
+    c[ImGuiCol_ScrollbarGrabHovered] = {0.294f, 0.561f, 1.0f, 1.0f};
+    c[ImGuiCol_ScrollbarGrabActive]  = {0.149f, 0.475f, 1.0f, 1.0f};
+    c[ImGuiCol_CheckMark]            = {0.149f, 0.475f, 1.0f, 1.0f};
+    c[ImGuiCol_SliderGrab]           = {0.149f, 0.475f, 1.0f, 0.8f};
+    c[ImGuiCol_SliderGrabActive]     = {0.149f, 0.475f, 1.0f, 1.0f};
+    c[ImGuiCol_Separator]            = {0.220f, 0.220f, 0.240f, 0.6f};
+    c[ImGuiCol_SeparatorHovered]     = {0.294f, 0.561f, 1.0f, 0.7f};
+    c[ImGuiCol_SeparatorActive]      = {0.149f, 0.475f, 1.0f, 1.0f};
+    c[ImGuiCol_ResizeGrip]           = {0.149f, 0.475f, 1.0f, 0.20f};
+    c[ImGuiCol_ResizeGripHovered]    = {0.149f, 0.475f, 1.0f, 0.67f};
+    c[ImGuiCol_ResizeGripActive]     = {0.149f, 0.475f, 1.0f, 0.95f};
+    c[ImGuiCol_TableHeaderBg]        = {0.090f, 0.090f, 0.095f, 1.0f};
+    c[ImGuiCol_TableBorderLight]     = {0.190f, 0.190f, 0.200f, 1.0f};
+    c[ImGuiCol_TableBorderStrong]    = {0.250f, 0.250f, 0.270f, 1.0f};
+    c[ImGuiCol_TableRowBg]           = {0.000f, 0.000f, 0.000f, 0.0f};
+    c[ImGuiCol_TableRowBgAlt]        = {1.000f, 1.000f, 1.000f, 0.025f};
+    c[ImGuiCol_InputTextCursor]      = {0.863f, 0.863f, 0.863f, 1.0f};
+}
+
+// ---------------------------------------------------------------------------
+// Init + Run
+// ---------------------------------------------------------------------------
+bool JsonViewerApp::Init(HINSTANCE hInstance, const wchar_t* initialFile) {
+    m_hInstance = hInstance;
+
+    if (!CreateAppWindow(hInstance)) return false;
+    if (!CreateD3D()) return false;
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename  = nullptr;
+
+    ImFontConfig fc{};
+    fc.OversampleH = 2;
+    fc.OversampleV = 2;
+    if (GetFileAttributesW(L"C:\\Windows\\Fonts\\segoeui.ttf") != INVALID_FILE_ATTRIBUTES)
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 15.0f, &fc);
+    else
+        io.Fonts->AddFontDefault();
+
+    // Monospace font for raw JSON panel (index 1)
+    if (GetFileAttributesW(L"C:\\Windows\\Fonts\\consola.ttf") != INVALID_FILE_ATTRIBUTES)
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf", 13.0f, &fc);
+
+    ApplyTheme();
+    ImGui_ImplWin32_Init(m_hwnd);
+    ImGui_ImplDX11_Init(m_device, m_context);
+
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+
+    LoadRecents();
+
+    if (initialFile && initialFile[0])
+        OpenFile(initialFile);
+
+    return true;
+}
+
+int JsonViewerApp::Run() {
+    MSG msg{};
+    while (true) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            if (msg.message == WM_QUIT) goto done;
+        }
+
+        if (m_swapChainOccluded) {
+            HRESULT hr = m_swapChain->Present(0, DXGI_PRESENT_TEST);
+            if (hr == DXGI_STATUS_OCCLUDED) { Sleep(8); continue; }
+            m_swapChainOccluded = false;
+        }
+
+        if (m_resizeW && m_resizeH) {
+            ResizeSwapChain(m_resizeW, m_resizeH);
+            m_resizeW = m_resizeH = 0;
+        }
+
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        Render();
+
+        ImGui::Render();
+        const float clearColor[4] = {0.118f, 0.118f, 0.118f, 1.0f};
+        m_context->OMSetRenderTargets(1, &m_renderTarget, nullptr);
+        m_context->ClearRenderTargetView(m_renderTarget, clearColor);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+        HRESULT hr = m_swapChain->Present(1, 0);
+        m_swapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
+    }
+done:
+    Shutdown();
+    return static_cast<int>(msg.wParam);
+}
+
+void JsonViewerApp::Shutdown() {
+    CloseFile();
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+    DestroyD3D();
+    DestroyWindow(m_hwnd);
+    UnregisterClassW(kWndClass, m_hInstance);
+}
+
+// ---------------------------------------------------------------------------
+// Recents
+// ---------------------------------------------------------------------------
+void JsonViewerApp::LoadRecents() {
+    m_recents.clear();
+    const std::wstring path = GetRecentsPath();
+    if (path.empty()) return;
+
+    FILE* f = nullptr;
+    _wfopen_s(&f, path.c_str(), L"rb");
+    if (!f) return;
+
+    std::string content;
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        content.append(buf, n);
+    fclose(f);
+
+    std::istringstream ss(content);
+    std::string line;
+    while (std::getline(ss, line) && (int)m_recents.size() < kMaxRecents) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+            line.pop_back();
+        if (!line.empty())
+            m_recents.push_back(Utf8ToWide(line));
+    }
+}
+
+void JsonViewerApp::SaveRecents() {
+    const std::wstring path = GetRecentsPath();
+    if (path.empty()) return;
+
+    FILE* f = nullptr;
+    _wfopen_s(&f, path.c_str(), L"wb");
+    if (!f) return;
+
+    for (const auto& r : m_recents) {
+        std::string utf8 = WideToUtf8(r) + '\n';
+        fwrite(utf8.data(), 1, utf8.size(), f);
+    }
+    fclose(f);
+}
+
+void JsonViewerApp::AddToRecents(const std::wstring& path) {
+    auto it = std::find(m_recents.begin(), m_recents.end(), path);
+    if (it != m_recents.end()) m_recents.erase(it);
+    m_recents.insert(m_recents.begin(), path);
+    if ((int)m_recents.size() > kMaxRecents)
+        m_recents.resize(kMaxRecents);
+    SaveRecents();
+}
+
+// ---------------------------------------------------------------------------
+// File handling
+// ---------------------------------------------------------------------------
+static int CountNodesRecursive(const nlohmann::ordered_json& j) {
+    if (j.is_object()) {
+        int n = 0;
+        for (auto& [k, v] : j.items()) n += CountNodesRecursive(v);
+        return n;
+    }
+    if (j.is_array()) {
+        int n = 0;
+        for (auto& v : j) n += CountNodesRecursive(v);
+        return n;
+    }
+    return 1;
+}
+
+bool JsonViewerApp::OpenFile(const std::wstring& path) {
+    FILE* f = nullptr;
+    _wfopen_s(&f, path.c_str(), L"rb");
+    if (!f) {
+        m_parseError = "Cannot open file.";
+        m_jsonLoaded = false;
+        return false;
+    }
+
+    fseek(f, 0, SEEK_END);
+    m_fileSize = static_cast<size_t>(ftell(f));
+    fseek(f, 0, SEEK_SET);
+    m_rawJson.resize(m_fileSize);
+    fread(m_rawJson.data(), 1, m_fileSize, f);
+    fclose(f);
+
+    try {
+        m_json       = nlohmann::ordered_json::parse(m_rawJson);
+        m_parseError.clear();
+        m_jsonLoaded = true;
+        m_nodeCount  = CountNodesRecursive(m_json);
+    } catch (const nlohmann::json::parse_error& e) {
+        m_parseError = e.what();
+        m_jsonLoaded = false;
+        m_nodeCount  = 0;
+    }
+
+    m_filePath = path;
+    AddToRecents(path);
+
+    // Update title bar
+    std::string fname = WideToUtf8(path);
+    const auto slash = fname.find_last_of("\\/");
+    const std::string title = "JSON Viewer  \xe2\x80\x94  " +
+        (slash != std::string::npos ? fname.substr(slash + 1) : fname);
+    SetWindowTextA(m_hwnd, title.c_str());
+
+    m_statusMsg = m_jsonLoaded
+        ? std::to_string(m_nodeCount) + " values"
+        : "Parse error";
+
+    return m_jsonLoaded;
+}
+
+void JsonViewerApp::CloseFile() {
+    m_json       = nlohmann::ordered_json{};
+    m_jsonLoaded = false;
+    m_filePath.clear();
+    m_rawJson.clear();
+    m_parseError.clear();
+    m_fileSize   = 0;
+    m_nodeCount  = 0;
+    m_statusMsg.clear();
+    SetWindowTextW(m_hwnd, L"JSON Viewer");
+}
+
+void JsonViewerApp::ReloadFile() {
+    if (m_filePath.empty()) return;
+    const std::wstring p = m_filePath;
+    CloseFile();
+    OpenFile(p);
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+void JsonViewerApp::Render() {
+    ImGuiIO& io = ImGui::GetIO();
+    const float sw = io.DisplaySize.x;
+    const float sh = io.DisplaySize.y;
+
+    ImGui::SetNextWindowPos({0, 0});
+    ImGui::SetNextWindowSize({sw, sh});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
+    ImGui::Begin("##host", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::PopStyleVar();
+
+    DrawMenuBar();
+
+    if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_O)) {
+        auto p = OpenFileDialog();
+        if (!p.empty()) OpenFile(p);
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_F5) && !m_filePath.empty())
+        m_needsReload = true;
+    if (m_needsReload) {
+        ReloadFile();
+        m_needsReload = false;
+    }
+
+    DrawToolbar();
+
+    const float kStatusH = 22.0f;
+    const float availH   = sh - ImGui::GetCursorPosY() - kStatusH;
+
+    if (m_showRaw) {
+        const float treeH = std::max(40.0f, availH - m_rawPanelH - 4.0f);
+        DrawTreePanel(treeH);
+
+        // Horizontal resize handle
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.15f, 0.15f, 0.16f, 1.0f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.149f, 0.475f, 1.0f, 0.5f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.149f, 0.475f, 1.0f, 0.8f});
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0, 0});
+        ImGui::Button("##hresize", {sw, 4.0f});
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemActive()) {
+            m_rawPanelH -= io.MouseDelta.y;
+            m_rawPanelH  = std::clamp(m_rawPanelH, 60.0f, availH * 0.8f);
+        }
+        if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+
+        DrawRawPanel(m_rawPanelH);
+    } else {
+        DrawTreePanel(availH);
+    }
+
+    ImGui::SetCursorPosY(sh - kStatusH);
+    DrawStatusBar();
+
+    // Clear one-shot expand/collapse flags after the tree panel used them
+    m_forceExpandOnce   = false;
+    m_forceCollapseOnce = false;
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Menu bar
+// ---------------------------------------------------------------------------
+void JsonViewerApp::DrawMenuBar() {
+    if (!ImGui::BeginMenuBar()) return;
+
+    if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Open...", "Ctrl+O")) {
+            auto p = OpenFileDialog();
+            if (!p.empty()) OpenFile(p);
+        }
+
+        const bool hasRecents = !m_recents.empty();
+        if (ImGui::BeginMenu("Recent Files", hasRecents)) {
+            for (int i = 0; i < (int)m_recents.size(); ++i) {
+                const auto& r = m_recents[i];
+                std::string display = WideToUtf8(r);
+                const auto slash = display.find_last_of("\\/");
+                if (slash != std::string::npos) display = display.substr(slash + 1);
+
+                ImGui::PushID(i);
+                const bool exists = (GetFileAttributesW(r.c_str()) != INVALID_FILE_ATTRIBUTES);
+                if (!exists)
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                        ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                if (ImGui::MenuItem(display.c_str(), nullptr, false, exists))
+                    OpenFile(r);
+                if (!exists) ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(WideToUtf8(r).c_str());
+                    ImGui::EndTooltip();
+                }
+                ImGui::PopID();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Clear Recent Files")) { m_recents.clear(); SaveRecents(); }
+            ImGui::EndMenu();
+        }
+
+        ImGui::Separator();
+        if (ImGui::MenuItem("Reload", "F5", false, !m_filePath.empty()))
+            m_needsReload = true;
+        if (ImGui::MenuItem("Close", nullptr, false, m_jsonLoaded))
+            CloseFile();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Exit")) PostQuitMessage(0);
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("View")) {
+        if (ImGui::MenuItem("Expand All",   nullptr, false, m_jsonLoaded))
+            m_forceExpandOnce   = true;
+        if (ImGui::MenuItem("Collapse All", nullptr, false, m_jsonLoaded))
+            m_forceCollapseOnce = true;
+        ImGui::Separator();
+        ImGui::MenuItem("Raw JSON Panel", nullptr, &m_showRaw);
+        ImGui::EndMenu();
+    }
+
+    ImGui::EndMenuBar();
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar (search + expand/collapse + raw toggle)
+// ---------------------------------------------------------------------------
+void JsonViewerApp::DrawToolbar() {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{0.100f, 0.100f, 0.100f, 1.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{8.0f, 6.0f});
+    ImGui::BeginChild("##toolbar", {0.0f, 34.0f}, ImGuiChildFlags_None,
+        ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
+
+    ImGui::SetNextItemWidth(260.0f);
+    const bool changed = ImGui::InputTextWithHint("##search",
+        "Search keys and values...", m_searchBuf, sizeof(m_searchBuf));
+    if (changed) {
+        m_searchLower = m_searchBuf;
+        std::transform(m_searchLower.begin(), m_searchLower.end(),
+                       m_searchLower.begin(), ::tolower);
+    }
+    if (m_searchBuf[0]) {
+        ImGui::SameLine(0, 4);
+        if (ImGui::SmallButton("x")) { m_searchBuf[0] = '\0'; m_searchLower.clear(); }
+    }
+
+    ImGui::SameLine(0, 14);
+    ImGui::TextDisabled("|");
+    ImGui::SameLine(0, 14);
+
+    ImGui::BeginDisabled(!m_jsonLoaded);
+    if (ImGui::SmallButton("Expand All"))   m_forceExpandOnce   = true;
+    ImGui::SameLine(0, 6);
+    if (ImGui::SmallButton("Collapse All")) m_forceCollapseOnce = true;
+    ImGui::EndDisabled();
+
+    // "Raw" toggle right-aligned
+    const float rawBtnW = 46.0f;
+    ImGui::SameLine(ImGui::GetWindowWidth() - rawBtnW - 8.0f, 0);
+    if (m_showRaw)
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    if (ImGui::SmallButton("Raw")) m_showRaw = !m_showRaw;
+    if (m_showRaw) ImGui::PopStyleColor();
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+// ---------------------------------------------------------------------------
+// Tree panel
+// ---------------------------------------------------------------------------
+void JsonViewerApp::DrawTreePanel(float availH) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{0.118f, 0.118f, 0.118f, 1.0f});
+    ImGui::BeginChild("##tree", {0.0f, availH}, ImGuiChildFlags_None);
+
+    if (!m_jsonLoaded) {
+        // Centered placeholder text
+        const float textH = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
+        ImGui::SetCursorPosY(std::max(8.0f, (availH - textH) * 0.5f));
+        const char* line1 = m_parseError.empty()
+            ? "Drop a JSON file here, or use File > Open"
+            : "Parse error:";
+        const char* line2 = m_parseError.empty() ? nullptr : m_parseError.c_str();
+
+        auto centerText = [&](const char* t, ImVec4 col) {
+            const float tw = ImGui::CalcTextSize(t).x;
+            ImGui::SetCursorPosX(
+                std::max(8.0f, (ImGui::GetContentRegionAvail().x - tw) * 0.5f));
+            ImGui::TextColored(col, "%s", t);
+        };
+
+        const ImVec4 dimCol = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+        const ImVec4 errCol = {0.878f, 0.424f, 0.459f, 1.0f};
+        centerText(line1, m_parseError.empty() ? dimCol : errCol);
+        if (line2) centerText(line2, errCol);
+        ImGui::Dummy({0, 0});
+    } else {
+        ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 16.0f);
+        m_nodeCounter = 0;
+        DrawJsonNode("", m_json, 0);
+        ImGui::PopStyleVar();
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+// ---------------------------------------------------------------------------
+// JSON tree node (recursive)
+// ---------------------------------------------------------------------------
+static constexpr ImVec4 kColorKey    = {0.671f, 0.698f, 0.749f, 1.0f}; // blue-gray
+static constexpr ImVec4 kColorString = {0.596f, 0.765f, 0.474f, 1.0f}; // green
+static constexpr ImVec4 kColorNumber = {0.820f, 0.604f, 0.400f, 1.0f}; // orange
+static constexpr ImVec4 kColorBool   = {0.337f, 0.714f, 0.761f, 1.0f}; // cyan
+static constexpr ImVec4 kColorNull   = {0.776f, 0.471f, 0.867f, 1.0f}; // purple
+static constexpr ImVec4 kColorMatch  = {0.95f,  0.82f,  0.30f,  1.0f}; // yellow highlight
+static constexpr size_t kChildLimit  = 500;
+
+void JsonViewerApp::DrawJsonNode(const std::string& key,
+                                 const nlohmann::ordered_json& node, int depth) {
+    ImGui::PushID(m_nodeCounter++);
+
+    const bool hasSearch = !m_searchLower.empty();
+
+    // Check whether this key matches the search string
+    const bool km = [&]() -> bool {
+        if (!hasSearch || key.empty()) return false;
+        std::string lk = key;
+        std::transform(lk.begin(), lk.end(), lk.begin(), ::tolower);
+        return lk.find(m_searchLower) != std::string::npos;
+    }();
+
+    if (node.is_object() || node.is_array()) {
+        const bool isObj = node.is_object();
+
+        // Label: "key  {N}" or "{N keys}" at root
+        std::string label;
+        if (!key.empty())
+            label = key + (isObj
+                ? "  {" + std::to_string(node.size()) + "}"
+                : "  [" + std::to_string(node.size()) + "]");
+        else
+            label = isObj
+                ? "{" + std::to_string(node.size()) + " keys}"
+                : "[" + std::to_string(node.size()) + " items]";
+
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth;
+        if (depth == 0) flags |= ImGuiTreeNodeFlags_DefaultOpen;
+
+        // Force open when search matches anything inside, or by toolbar button
+        if (hasSearch && ContainsMatch(node, m_searchLower))
+            ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+        if (m_forceExpandOnce)
+            ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+        if (m_forceCollapseOnce && depth > 0)
+            ImGui::SetNextItemOpen(false, ImGuiCond_Always);
+
+        if (km) ImGui::PushStyleColor(ImGuiCol_Text, kColorMatch);
+        const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
+        if (km) ImGui::PopStyleColor();
+
+        if (open) {
+            if (isObj) {
+                size_t count = 0;
+                for (auto& [k, v] : node.items()) {
+                    if (count++ >= kChildLimit) {
+                        ImGui::TextDisabled("  ... %zu more keys",
+                            node.size() - kChildLimit);
+                        break;
+                    }
+                    DrawJsonNode(k, v, depth + 1);
+                }
+            } else {
+                const size_t limit = std::min(node.size(), kChildLimit);
+                for (size_t i = 0; i < limit; ++i)
+                    DrawJsonNode("[" + std::to_string(i) + "]", node[i], depth + 1);
+                if (node.size() > kChildLimit)
+                    ImGui::TextDisabled("  ... %zu more items",
+                        node.size() - kChildLimit);
+            }
+            ImGui::TreePop();
+        }
+    } else {
+        // Leaf node
+        std::string valueStr;
+        ImVec4 valueColor;
+
+        if (node.is_string()) {
+            valueStr  = "\"" + node.get<std::string>() + "\"";
+            valueColor = kColorString;
+        } else if (node.is_boolean()) {
+            valueStr  = node.get<bool>() ? "true" : "false";
+            valueColor = kColorBool;
+        } else if (node.is_null()) {
+            valueStr  = "null";
+            valueColor = kColorNull;
+        } else {
+            valueStr  = node.dump();
+            valueColor = kColorNumber;
+        }
+
+        // Check value match
+        const bool vm = [&]() -> bool {
+            if (!hasSearch) return false;
+            std::string lv = node.is_string() ? node.get<std::string>() : valueStr;
+            std::transform(lv.begin(), lv.end(), lv.begin(), ::tolower);
+            return lv.find(m_searchLower) != std::string::npos;
+        }();
+
+        // Leaf tree entry — no arrow, no child push
+        const ImGuiTreeNodeFlags leafFlags =
+            ImGuiTreeNodeFlags_Leaf |
+            ImGuiTreeNodeFlags_NoTreePushOnOpen |
+            ImGuiTreeNodeFlags_SpanAvailWidth |
+            ((km || vm) ? ImGuiTreeNodeFlags_Selected : 0);
+
+        if (km || vm)
+            ImGui::PushStyleColor(ImGuiCol_Header,
+                ImVec4{0.149f, 0.475f, 1.0f, 0.18f});
+        ImGui::TreeNodeEx("##leaf", leafFlags);
+        if (km || vm) ImGui::PopStyleColor();
+
+        // Right-click: copy key or value
+        if (ImGui::BeginPopupContextItem("##ctx")) {
+            if (!key.empty() && ImGui::MenuItem("Copy key"))
+                ImGui::SetClipboardText(key.c_str());
+            if (ImGui::MenuItem("Copy value"))
+                ImGui::SetClipboardText(valueStr.c_str());
+            ImGui::EndPopup();
+        }
+
+        // Overlay colored key : value text
+        ImGui::SameLine(0, 4);
+        if (!key.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, km ? kColorMatch : kColorKey);
+            ImGui::TextUnformatted(key.c_str());
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0, 0);
+            ImGui::TextDisabled(" :  ");
+            ImGui::SameLine(0, 0);
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, vm ? kColorMatch : valueColor);
+        ImGui::TextUnformatted(valueStr.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::PopID();
+}
+
+// ---------------------------------------------------------------------------
+// ContainsMatch — lsearch must be pre-lowercased by the caller
+// ---------------------------------------------------------------------------
+bool JsonViewerApp::ContainsMatch(const nlohmann::ordered_json& node,
+                                  const std::string& lsearch) {
+    if (lsearch.empty()) return false;
+
+    if (node.is_object()) {
+        for (auto& [k, v] : node.items()) {
+            std::string lk = k;
+            std::transform(lk.begin(), lk.end(), lk.begin(), ::tolower);
+            if (lk.find(lsearch) != std::string::npos) return true;
+            if (ContainsMatch(v, lsearch)) return true;
+        }
+    } else if (node.is_array()) {
+        for (auto& v : node)
+            if (ContainsMatch(v, lsearch)) return true;
+    } else if (node.is_string()) {
+        std::string lv = node.get<std::string>();
+        std::transform(lv.begin(), lv.end(), lv.begin(), ::tolower);
+        if (lv.find(lsearch) != std::string::npos) return true;
+    } else if (!node.is_null()) {
+        std::string lv = node.dump();
+        std::transform(lv.begin(), lv.end(), lv.begin(), ::tolower);
+        if (lv.find(lsearch) != std::string::npos) return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Raw JSON panel
+// ---------------------------------------------------------------------------
+void JsonViewerApp::DrawRawPanel(float height) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{0.090f, 0.090f, 0.095f, 1.0f});
+    ImGui::BeginChild("##raw", {0.0f, height});
+
+    ImGui::PushStyleColor(ImGuiCol_Text,
+        ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::Text("  RAW JSON");
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+
+    const float inputH = height - ImGui::GetCursorPosY() - 6.0f;
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4{0.090f, 0.090f, 0.095f, 1.0f});
+
+    // Use monospace font if loaded (index 1)
+    const ImGuiIO& io = ImGui::GetIO();
+    ImFont* monoFont = (io.Fonts->Fonts.Size > 1) ? io.Fonts->Fonts[1] : nullptr;
+    if (monoFont) ImGui::PushFont(monoFont);
+
+    ImGui::InputTextMultiline("##rawtext",
+        const_cast<char*>(m_rawJson.c_str()),
+        m_rawJson.size() + 1,
+        {-1.0f, inputH},
+        ImGuiInputTextFlags_ReadOnly);
+
+    if (monoFont) ImGui::PopFont();
+    ImGui::PopStyleColor();
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+// ---------------------------------------------------------------------------
+// Status bar
+// ---------------------------------------------------------------------------
+void JsonViewerApp::DrawStatusBar() {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{0.075f, 0.075f, 0.075f, 1.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{8.0f, 4.0f});
+    ImGui::BeginChild("##status", {0.f, 22.0f}, ImGuiChildFlags_None,
+        ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
+
+    if (!m_filePath.empty()) {
+        std::string fname = WideToUtf8(m_filePath);
+        const auto slash = fname.find_last_of("\\/");
+        if (slash != std::string::npos) fname = fname.substr(slash + 1);
+
+        ImGui::TextDisabled("%s", fname.c_str());
+        ImGui::SameLine(0, 10.0f);
+        ImGui::TextDisabled("|");
+        ImGui::SameLine(0, 10.0f);
+
+        if (m_fileSize >= 1024 * 1024)
+            ImGui::TextDisabled("%.2f MB", m_fileSize / (1024.0 * 1024.0));
+        else if (m_fileSize >= 1024)
+            ImGui::TextDisabled("%.1f KB", m_fileSize / 1024.0);
+        else
+            ImGui::TextDisabled("%zu bytes", m_fileSize);
+
+        if (m_jsonLoaded) {
+            ImGui::SameLine(0, 10.0f);
+            ImGui::TextDisabled("|");
+            ImGui::SameLine(0, 10.0f);
+            ImGui::TextDisabled("%d values", m_nodeCount);
+        }
+    }
+
+    if (!m_statusMsg.empty()) {
+        ImGui::SameLine(0, 20.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, {0.4f, 0.8f, 0.4f, 1.0f});
+        ImGui::Text("%s", m_statusMsg.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+// ---------------------------------------------------------------------------
+// File dialog + drag-and-drop
+// ---------------------------------------------------------------------------
+std::wstring JsonViewerApp::OpenFileDialog() {
+    wchar_t buf[MAX_PATH]{};
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = m_hwnd;
+    ofn.lpstrFilter = L"JSON files\0*.json\0All files\0*.*\0";
+    ofn.lpstrFile   = buf;
+    ofn.nMaxFile    = MAX_PATH;
+    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrTitle  = L"Open JSON File";
+    if (!GetOpenFileNameW(&ofn)) return {};
+    return buf;
+}
+
+void JsonViewerApp::CheckDroppedFile(HDROP hDrop) {
+    wchar_t buf[MAX_PATH]{};
+    if (DragQueryFileW(hDrop, 0, buf, MAX_PATH))
+        OpenFile(buf);
+    DragFinish(hDrop);
+}

@@ -1,9 +1,0 @@
-Windows Registry Editor Version 5.00
-
-[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.json\shell\OpenWithClipboardPlusPlusJsonViewer]
-@="Open with JSON Viewer"
-"Icon"="C:\\Users\\no0bz\\AppData\\Local\\Programs\\Python\\Python314\\pythonw.exe"
-
-[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.json\shell\OpenWithClipboardPlusPlusJsonViewer\command]
-@="\"C:\\Users\\no0bz\\AppData\\Local\\Programs\\Python\\Python314\\pythonw.exe\" \"C:\\Users\\no0bz\\projects\\clipboard-plus-plus\\json-viewer\\json_viewer.py\" \"%1\""
-

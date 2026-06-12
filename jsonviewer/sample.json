@@ -1,0 +1,84 @@
+{
+  "project": {
+    "name": "Clipboard++",
+    "version": "2.0.0-beta",
+    "description": "Windows clipboard manager built with C++17, Win32, Dear ImGui, and DirectX 11",
+    "license": "MIT",
+    "homepage": "https://github.com/james28909/clipboard-plus-plus",
+    "authors": ["james28909"],
+    "active": true,
+    "star_count": null
+  },
+  "build": {
+    "generator": "Visual Studio 17 2022",
+    "arch": "x64",
+    "standard": "C++17",
+    "configs": ["Debug", "Release"],
+    "dependencies": [
+      { "name": "Dear ImGui",      "version": "1.91",  "vendored": true  },
+      { "name": "SQLite",          "version": "3.45.0","vendored": true  },
+      { "name": "nlohmann/json",   "version": "3.11.3","vendored": true  },
+      { "name": "DirectX 11",      "version": null,    "vendored": false },
+      { "name": "WIC",             "version": null,    "vendored": false }
+    ]
+  },
+  "features": {
+    "clipboard_capture": {
+      "text": true,
+      "images": true,
+      "file_paths": true,
+      "auto_dedup": true,
+      "max_history": 8192,
+      "persistence": true
+    },
+    "popup": {
+      "hotkey": "Ctrl+Shift+V",
+      "always_on_top": true,
+      "keyboard_paste_slots": "1-9, a-z",
+      "search_hotkey": "Ctrl+Shift+S",
+      "web_search": true
+    },
+    "content_detection": {
+      "tags": ["URL", "Email", "JSON", "Code", "Command", "Secret", "Color", "Image", "File", "UUID"]
+    },
+    "profiles": {
+      "enabled": true,
+      "max_profiles": 16,
+      "persistent_history": true
+    }
+  },
+  "tools": [
+    {
+      "name": "SQLite Editor",
+      "exe": "sqlite_editor.exe",
+      "description": "Standalone SQLite browser and editor",
+      "features": ["table browsing", "cell editing", "SQL query panel", "BLOB image preview", "recent files"]
+    },
+    {
+      "name": "JSON Viewer",
+      "exe": "json_viewer.exe",
+      "description": "Standalone JSON file viewer with colored tree and search",
+      "features": ["colored tree view", "case-insensitive search", "expand/collapse all", "raw JSON panel", "recent files"]
+    }
+  ],
+  "settings": {
+    "theme": "dark",
+    "font_size": 15,
+    "popup_width": 480,
+    "popup_max_items": 20,
+    "show_source_app": true,
+    "trim_whitespace": false,
+    "hotkeys": {
+      "open_popup": "Ctrl+Shift+V",
+      "open_search": "Ctrl+Shift+S",
+      "web_search": "Ctrl+Shift+G",
+      "settings": "Ctrl+Shift+P"
+    }
+  },
+  "stats": {
+    "total_captures_session": 0,
+    "uptime_seconds": 0,
+    "profiles_active": 1,
+    "last_save": null
+  }
+}
