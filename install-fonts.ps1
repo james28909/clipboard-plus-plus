@@ -26,4 +26,4 @@ Write-Host "Installing fonts to: $dest" -ForegroundColor Cyan
 Expand-Archive -Path $archive -DestinationPath $dest -Force
 
 $count = (Get-ChildItem $dest -File).Count
-Write-Host "Done — $count font file(s) in $dest" -ForegroundColor Green
+Write-Host "Done - $count font file(s) in $dest" -ForegroundColor Green
