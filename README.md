@@ -309,7 +309,7 @@ cmake --build build/.cmake/json_viewer --config Release
 
 ## Fonts
 
-A curated set of fonts is bundled with each release as `fonts.zip`. To install them into the correct location automatically, download `install-fonts.ps1` and `fonts.zip` from the [latest release](https://github.com/james28909/clipboard-plus-plus/releases/latest), place them in the same folder, and run:
+A curated set of fonts is included in the repository as `fonts.zip`. To install them into the correct location automatically, run from the repo root:
 
 ```powershell
 .\install-fonts.ps1
