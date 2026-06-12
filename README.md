@@ -307,13 +307,27 @@ cmake --build build/.cmake/json_viewer --config Release
 
 ---
 
+## Fonts
+
+A curated set of fonts is bundled with each release as `fonts.zip`. To install them into the correct location automatically, download `install-fonts.ps1` and `fonts.zip` from the [latest release](https://github.com/james28909/clipboard-plus-plus/releases/latest), place them in the same folder, and run:
+
+```powershell
+.\install-fonts.ps1
+```
+
+This extracts all fonts to `%APPDATA%\Clipboard++\fonts\` with no dependencies — just Windows built-in ZIP support. Once installed, select any font in Settings → Appearance → Font.
+
+You can also import any `.ttf` or `.otf` font manually from the Appearance settings page.
+
+---
+
 ## Configuration
 
 ```text
 %APPDATA%\Clipboard++\config.json        Main settings
-%APPDATA%\Clipboard++\fonts\             Imported fonts
+%APPDATA%\Clipboard++\fonts\             Imported fonts (populated by install-fonts.ps1)
 %APPDATA%\Clipboard++\history\           Per-profile clipboard history (JSON)
-%APPDATA%\Clipboard++\images\           Captured images
+%APPDATA%\Clipboard++\images\            Captured images
 ```
 
 ---
