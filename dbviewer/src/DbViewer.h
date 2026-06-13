@@ -147,9 +147,11 @@ private:
 
     // UI state -------------------------------------------------------------
     float        m_leftPanelW{200.0f};
+    float        m_fontScale{1.5f};
     char         m_tableFilter[128]{};
     bool         m_openDbConfirm{};
     std::wstring m_pendingOpenPath;
     std::string  m_statusMsg;
     bool         m_needsRefresh{};
+    bool         m_resetTableScroll{};
 };

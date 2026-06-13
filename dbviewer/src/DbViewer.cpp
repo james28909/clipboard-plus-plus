@@ -448,16 +448,17 @@ void DbViewerApp::RefreshTableList() {
 }
 
 void DbViewerApp::SelectTable(const std::string& name) {
-    m_selectedTable  = name;
+    m_selectedTable      = name;
     m_cols.clear();
     m_rows.clear();
     m_blobCols.clear();
-    m_totalRows      = 0;
-    m_dataOffset     = 0;
-    m_sortCol        = -1;
-    m_sortAsc        = true;
-    m_selectedRow    = -1;
-    m_lastPreviewRow = -2;
+    m_totalRows          = 0;
+    m_dataOffset         = 0;
+    m_sortCol            = -1;
+    m_sortAsc            = true;
+    m_selectedRow        = -1;
+    m_lastPreviewRow     = -2;
+    m_resetTableScroll   = true;
     m_edit.reset();
     ReleasePreview();
 
@@ -829,7 +830,8 @@ void DbViewerApp::CheckDroppedFile(HDROP hDrop) {
 // Main render
 // ---------------------------------------------------------------------------
 void DbViewerApp::Render() {
-    const ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
+    io.FontGlobalScale = m_fontScale;
     const float sw = io.DisplaySize.x;
     const float sh = io.DisplaySize.y;
 
@@ -843,6 +845,13 @@ void DbViewerApp::Render() {
     ImGui::PopStyleVar();
 
     DrawMenuBar();
+
+    if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_Equal))
+        m_fontScale = std::min(2.5f, m_fontScale + 0.1f);
+    if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_Minus))
+        m_fontScale = std::max(0.7f, m_fontScale - 0.1f);
+    if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_0))
+        m_fontScale = 1.0f;
 
     if (ImGui::IsKeyPressed(ImGuiKey_F5) && m_db)
         SelectTable(m_selectedTable);
@@ -946,6 +955,13 @@ void DbViewerApp::DrawMenuBar() {
         if (ImGui::MenuItem("Refresh", "F5", false, m_db != nullptr))
             SelectTable(m_selectedTable);
         ImGui::MenuItem("SQL Editor", "Ctrl+`", &m_showSqlPanel);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Larger Text", "Ctrl+="))
+            m_fontScale = std::min(2.5f, m_fontScale + 0.1f);
+        if (ImGui::MenuItem("Smaller Text", "Ctrl+-"))
+            m_fontScale = std::max(0.7f, m_fontScale - 0.1f);
+        if (ImGui::MenuItem("Reset Text Size", "Ctrl+0"))
+            m_fontScale = 1.0f;
         ImGui::EndMenu();
     }
 
@@ -1076,8 +1092,8 @@ void DbViewerApp::DrawMainArea(float /*x*/, float availW, float availH) {
         ImGui::SameLine(0, 10.0f);
         ImGui::TextDisabled("[has BLOB]");
     }
-    ImGui::SameLine(0, 10.0f);
     if (m_sortCol >= 0) {
+        ImGui::SameLine(0, 10.0f);
         ImGui::TextDisabled("sorted by %s %s",
             m_cols[m_sortCol].name.c_str(), m_sortAsc ? "\xe2\x86\x91" : "\xe2\x86\x93");
         ImGui::SameLine(0, 6.0f);
@@ -1281,16 +1297,23 @@ void DbViewerApp::DrawTableGrid(float availH) {
         ImGuiTableFlags_RowBg     | ImGuiTableFlags_SizingFixedFit;
 
     const int ncols = static_cast<int>(m_cols.size()) + 1;
-    if (!ImGui::BeginTable("##grid", ncols, flags, {0.f, availH})) return;
+    const std::string tableId = "##grid_" + m_selectedTable;
+    if (!ImGui::BeginTable(tableId.c_str(), ncols, flags, {0.f, availH})) return;
+
+    if (m_resetTableScroll) {
+        ImGui::SetScrollX(0.0f);
+        ImGui::SetScrollY(0.0f);
+        m_resetTableScroll = false;
+    }
 
     ImGui::TableSetupScrollFreeze(1, 1);
     ImGui::TableSetupColumn("#",
-        ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed, 40.0f);
+        ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed, 0.0f);
     for (int i = 0; i < (int)m_cols.size(); ++i) {
         std::string hdr = m_cols[i].name;
         if (!m_cols[i].type.empty()) hdr += "\n" + m_cols[i].type;
         ImGui::TableSetupColumn(hdr.c_str(),
-            ImGuiTableColumnFlags_WidthFixed, 120.0f);
+            ImGuiTableColumnFlags_WidthFixed, 0.0f);
     }
     ImGui::TableHeadersRow();
 
