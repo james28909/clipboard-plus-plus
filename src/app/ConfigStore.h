@@ -40,10 +40,17 @@ struct DeveloperSettings {
     bool eventLogEnabled{false};
 };
 
+struct UiSettings {
+    bool showHelperText{true};
+    int helperDelayMs{450};
+    int helperDurationMs{3500};
+};
+
 struct AppConfig {
     AppearanceSettings appearance{};
     HotkeySettings hotkeys{HotkeyManager::DefaultSettings()};
     DeveloperSettings developer{};
+    UiSettings ui{};
     ImageSettings images{};
     bool newItemsAtTop{true};
     bool appendNewlineAfterPaste{false};

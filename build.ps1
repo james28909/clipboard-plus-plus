@@ -122,5 +122,5 @@ foreach ($name in $toBuild) {
 }
 
 $elapsed = (Get-Date) - $start
-Write-Host ("`nDone — {0} target(s) built in {1:mm\:ss}" -f @($toBuild).Count, $elapsed) `
+Write-Host ("`nDone - {0} target(s) built in {1:mm\:ss}" -f @($toBuild).Count, $elapsed) `
     -ForegroundColor White

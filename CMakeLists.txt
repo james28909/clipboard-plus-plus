@@ -28,6 +28,7 @@ set(APP_SOURCES
     src/util/Win32Util.cpp
     src/app/Application.cpp
     src/app/ConfigStore.cpp
+    src/app/IconPatcher.cpp
     src/app/TrayIcon.cpp
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp

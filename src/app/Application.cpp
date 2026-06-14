@@ -1,4 +1,5 @@
 #include "Application.h"
+#include "IconPatcher.h"
 #include "TrayIcon.h"
 #include "../ui/MainWindow.h"
 #include "../ui/PopupWindow.h"
@@ -20,7 +21,9 @@
 #include <d3dcompiler.h>
 #include <dwmapi.h>
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
+#include <shlobj.h>
 #include <algorithm>
+#include <vector>
 #include <cmath>
 #include <cstddef>
 #include <ctime>
@@ -236,6 +239,12 @@ void Application::SetDeveloperSettings(const DeveloperSettings& settings) {
     if (!logWasEnabled && settings.eventLogEnabled)
         AddDeveloperEvent("developer event log enabled");
 #endif
+}
+
+void Application::SetUiSettings(const UiSettings& settings) {
+    m_config.ui = settings;
+    SaveConfig();
+    m_appearanceDirty = true;
 }
 
 void Application::SetImageSettings(const ImageSettings& settings) {
@@ -734,6 +743,7 @@ bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
 bool Application::Init() {
     ApplyLoadedConfig(ConfigStore::Load());
 
+
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(WNDCLASSEXW);
     wc.style         = CS_CLASSDC;
@@ -749,8 +759,9 @@ bool Application::Init() {
     wc.lpszClassName = L"ClipboardPlusPlus_Main";
     RegisterClassExW(&wc);
 
-    // WS_POPUP removes native chrome; WS_THICKFRAME keeps resize hit-testing.
-    // WS_EX_APPWINDOW ensures we still appear in the taskbar.
+    // WS_POPUP removes all native chrome so ImGui, the D3D client area, and the
+    // Win32 mouse coordinates share the same origin. WS_THICKFRAME keeps resize
+    // behavior available through WM_NCHITTEST.
     m_hwnd = CreateWindowExW(
         WS_EX_APPWINDOW,
         L"ClipboardPlusPlus_Main",
@@ -877,6 +888,57 @@ void Application::Shutdown() {
     if (m_appIconSrv) { m_appIconSrv->Release(); m_appIconSrv = nullptr; }
     DestroyD3D();
 
+    // Patch the exe icon if needed. PowerShell is skipped when nothing has changed:
+    //   - Custom path set       → always apply it (user explicitly chose it)
+    //   - Custom path empty     → apply the theme-rendered icon, but ONLY if the theme
+    //                             colors changed since the last patch (hash mismatch) or
+    //                             if a custom icon was previously applied (hash is "")
+    {
+        wchar_t exePath[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        DWORD myPid = GetCurrentProcessId();
+
+        std::wstring icoToApply;
+        bool shouldPatch = false;
+
+        if (!m_config.appearance.exeIconPath.empty()) {
+            icoToApply  = std::filesystem::path(m_config.appearance.exeIconPath).wstring();
+            shouldPatch = true;
+            m_config.appearance.exeIconThemeHash = ""; // custom overrides theme tracking
+        } else {
+            std::string currentHash = TrayIcon::ThemeIconHash(m_config.appearance);
+            if (currentHash != m_config.appearance.exeIconThemeHash) {
+                std::wstring themeIco = (ConfigStore::Directory() / "theme_icon.ico").wstring();
+                if (TrayIcon::WriteThemeIco(m_config.appearance, themeIco)) {
+                    icoToApply  = themeIco;
+                    shouldPatch = true;
+                    m_config.appearance.exeIconThemeHash = currentHash;
+                }
+            }
+        }
+
+        if (shouldPatch) {
+            SaveConfig();
+
+            std::wstring cmdLine = L"\"" + std::wstring(exePath) + L"\" --patch-icon \""
+                                 + std::wstring(exePath) + L"\" \""
+                                 + icoToApply + L"\" "
+                                 + std::to_wstring(myPid);
+
+            STARTUPINFOW si{};
+            si.cb = sizeof(si);
+            si.dwFlags = STARTF_USESHOWWINDOW;
+            si.wShowWindow = SW_HIDE;
+            PROCESS_INFORMATION pi{};
+            std::vector<wchar_t> buf(cmdLine.begin(), cmdLine.end());
+            buf.push_back(L'\0');
+            CreateProcessW(nullptr, buf.data(), nullptr, nullptr,
+                           FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+            if (pi.hThread)  CloseHandle(pi.hThread);
+            if (pi.hProcess) CloseHandle(pi.hProcess);
+        }
+    }
+
     if (m_hwnd) {
         DestroyWindow(m_hwnd);
         UnregisterClassW(L"ClipboardPlusPlus_Main", m_hInstance);
@@ -926,6 +988,10 @@ void Application::ApplyAppearanceNow() {
 
     ImGuiContext* prevCtx = ImGui::GetCurrentContext();
     ApplyThemeStyle(m_appearance, false);
+    const float helperDelay =
+        static_cast<float>(std::clamp(m_config.ui.helperDelayMs, 0, 5000)) / 1000.0f;
+    ImGui::GetStyle().HoverDelayShort = helperDelay;
+    ImGui::GetStyle().HoverDelayNormal = helperDelay;
     ImGui_ImplDX11_InvalidateDeviceObjects();
     const bool mainFontOk = RebuildFontAtlas(ImGui::GetIO(), m_appearance);
     ImGui_ImplDX11_CreateDeviceObjects();
@@ -1021,23 +1087,19 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     switch (msg) {
 
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) != WA_INACTIVE) {
+            ClearMainInputState();
+            MainWindow::RequestFocus();
+        }
+        break;
+
     // -- Remove all native non-client area so we own every pixel --------------
     case WM_NCCALCSIZE:
-        if (wParam == TRUE) {
-            // When maximized, Windows inflates the window rect by the border
-            // thickness so it overlaps the taskbar. Compensate by shrinking
-            // the client rect back to the monitor work area.
-            if (IsZoomed(hwnd)) {
-                NCCALCSIZE_PARAMS* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
-                int bx = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
-                int by = GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
-                p->rgrc[0].left   += bx;
-                p->rgrc[0].right  -= bx;
-                p->rgrc[0].top    += by;
-                p->rgrc[0].bottom -= by;
-            }
-            return 0;
-        }
+        // Returning 0 for wParam==TRUE discards the NC area — entire window rect
+        // becomes the client rect.  WM_GETMINMAXINFO already constrains the
+        // maximized rect to the work area, so no thin strip or taskbar overlap.
+        if (wParam == TRUE) return 0;
         break;
 
     // -- Tell Windows which part of our window each pixel belongs to ----------
@@ -1057,7 +1119,7 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         const int  border    = maximized ? 0 : ScaledPx(8.0f, app ? app->m_appearance : AppearanceSettings{});
         const int  titleH    = ScaledPx(static_cast<float>(MainWindow::kTitleBarHeight),
                                         app ? app->m_appearance : AppearanceSettings{});
-        const int  btnZoneX  = rc.right - ScaledPx(static_cast<float>(MainWindow::kTitleBtnWidth) * 3.0f,
+        const int  btnZoneX  = rc.right - ScaledPx(static_cast<float>(MainWindow::kTitleBtnWidth) * 4.0f,
                                                    app ? app->m_appearance : AppearanceSettings{});
 
         if (!maximized) {
@@ -1076,18 +1138,26 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (onB)        return HTBOTTOM;
         }
 
-        // Title bar - drag region excludes the three button slots on the right
+        // Title bar - drag region excludes the four button slots on the right
         if (pt.y >= 0 && pt.y < titleH && pt.x < btnZoneX)
             return HTCAPTION;
 
         return HTCLIENT;
     }
 
-    // -- Enforce a minimum window size ----------------------------------------
+    // -- Minimum size + maximized size capped to work area -------------------
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
         const AppearanceSettings appearance = app ? app->m_appearance : AppearanceSettings{};
         mmi->ptMinTrackSize = {ScaledPx(800.0f, appearance), ScaledPx(500.0f, appearance)};
+        HMONITOR hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(mi) };
+        if (GetMonitorInfo(hMon, &mi)) {
+            mmi->ptMaxPosition.x = mi.rcWork.left;
+            mmi->ptMaxPosition.y = mi.rcWork.top;
+            mmi->ptMaxSize.x     = mi.rcWork.right  - mi.rcWork.left;
+            mmi->ptMaxSize.y     = mi.rcWork.bottom - mi.rcWork.top;
+        }
         return 0;
     }
 
@@ -1134,9 +1204,10 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
 
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_MINIMIZE) {
-            if (app) app->HideMainWindow();
-            return 0;
+        switch (wParam & 0xFFF0) {
+        case SC_MINIMIZE: ShowWindow(hwnd, SW_MINIMIZE); return 0;
+        case SC_MAXIMIZE: ShowWindow(hwnd, SW_MAXIMIZE); return 0;
+        case SC_RESTORE:  ShowWindow(hwnd, SW_RESTORE);  return 0;
         }
         break;
 

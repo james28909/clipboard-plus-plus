@@ -90,12 +90,21 @@ void LoadColorFields(T& s, const json& j) {
     s.closeButton     = ColorFromJson(j.value("closeButton",      json::array()), s.closeButton);
     s.closeButtonHover= ColorFromJson(j.value("closeButtonHover", json::array()), s.closeButtonHover);
     s.closeButtonText = ColorFromJson(j.value("closeButtonText",  json::array()), s.closeButtonText);
+    s.titleBarBg      = ColorFromJson(j.value("titleBarBg",       json::array()), s.titleBarBg);
+    s.titleBarBorder  = ColorFromJson(j.value("titleBarBorder",   json::array()), s.titleBarBorder);
+    s.titleBarText    = ColorFromJson(j.value("titleBarText",     json::array()), s.titleBarText);
     s.titleMinBase    = ColorFromJson(j.value("titleMinBase",     json::array()), s.titleMinBase);
     s.titleMaxBase    = ColorFromJson(j.value("titleMaxBase",     json::array()), s.titleMaxBase);
     s.titleCloseBase  = ColorFromJson(j.value("titleCloseBase",   json::array()), s.titleCloseBase);
     s.titleMinHover   = ColorFromJson(j.value("titleMinHover",    json::array()), s.titleMinHover);
     s.titleMaxHover   = ColorFromJson(j.value("titleMaxHover",    json::array()), s.titleMaxHover);
     s.titleCloseHover = ColorFromJson(j.value("titleCloseHover",  json::array()), s.titleCloseHover);
+    s.titleExitBase   = ColorFromJson(j.value("titleExitBase",   json::array()), s.titleExitBase);
+    s.titleExitHover  = ColorFromJson(j.value("titleExitHover",  json::array()), s.titleExitHover);
+    s.titleMinGlyph   = ColorFromJson(j.value("titleMinGlyph",   json::array()), s.titleMinGlyph);
+    s.titleMaxGlyph   = ColorFromJson(j.value("titleMaxGlyph",   json::array()), s.titleMaxGlyph);
+    s.titleExitGlyph  = ColorFromJson(j.value("titleExitGlyph",  json::array()), s.titleExitGlyph);
+    s.titleCloseGlyph = ColorFromJson(j.value("titleCloseGlyph", json::array()), s.titleCloseGlyph);
     s.iconBoardTop    = ColorFromJson(j.value("iconBoardTop",     json::array()), s.iconBoardTop);
     s.iconBoardBottom = ColorFromJson(j.value("iconBoardBottom",  json::array()), s.iconBoardBottom);
     s.iconPaper       = ColorFromJson(j.value("iconPaper",        json::array()), s.iconPaper);
@@ -130,12 +139,21 @@ json SaveColorFields(const T& s) {
         {"closeButton",       ColorToJson(s.closeButton)},
         {"closeButtonHover",  ColorToJson(s.closeButtonHover)},
         {"closeButtonText",   ColorToJson(s.closeButtonText)},
+        {"titleBarBg",        ColorToJson(s.titleBarBg)},
+        {"titleBarBorder",    ColorToJson(s.titleBarBorder)},
+        {"titleBarText",      ColorToJson(s.titleBarText)},
         {"titleMinBase",      ColorToJson(s.titleMinBase)},
         {"titleMaxBase",      ColorToJson(s.titleMaxBase)},
         {"titleCloseBase",    ColorToJson(s.titleCloseBase)},
         {"titleMinHover",     ColorToJson(s.titleMinHover)},
         {"titleMaxHover",     ColorToJson(s.titleMaxHover)},
         {"titleCloseHover",   ColorToJson(s.titleCloseHover)},
+        {"titleExitBase",     ColorToJson(s.titleExitBase)},
+        {"titleExitHover",    ColorToJson(s.titleExitHover)},
+        {"titleMinGlyph",     ColorToJson(s.titleMinGlyph)},
+        {"titleMaxGlyph",     ColorToJson(s.titleMaxGlyph)},
+        {"titleExitGlyph",    ColorToJson(s.titleExitGlyph)},
+        {"titleCloseGlyph",   ColorToJson(s.titleCloseGlyph)},
         {"iconBoardTop",      ColorToJson(s.iconBoardTop)},
         {"iconBoardBottom",   ColorToJson(s.iconBoardBottom)},
         {"iconPaper",         ColorToJson(s.iconPaper)},
@@ -244,8 +262,10 @@ void LoadAppearance(const json& root, AppConfig& config) {
     config.appearance.popupHeight = std::max(260, a.value("popupHeight", config.appearance.popupHeight));
     config.appearance.mainWindowWidth = std::max(800, a.value("mainWindowWidth", config.appearance.mainWindowWidth));
     config.appearance.mainWindowHeight = std::max(500, a.value("mainWindowHeight", config.appearance.mainWindowHeight));
-    config.appearance.fontPath = a.value("fontPath", config.appearance.fontPath);
-    config.appearance.fontSize = std::clamp(a.value("fontSize", config.appearance.fontSize), 9.0f, 32.0f);
+    config.appearance.fontPath    = a.value("fontPath",    config.appearance.fontPath);
+    config.appearance.fontSize    = std::clamp(a.value("fontSize", config.appearance.fontSize), 9.0f, 32.0f);
+    config.appearance.exeIconPath      = a.value("exeIconPath",      config.appearance.exeIconPath);
+    config.appearance.exeIconThemeHash = a.value("exeIconThemeHash", config.appearance.exeIconThemeHash);
     config.appearance.uiScale = 1.0f;
     config.appearance.customColors = a.value("customColors", config.appearance.customColors);
     config.appearance.customThemeName = a.value("customThemeName", config.appearance.customThemeName);
@@ -267,6 +287,18 @@ void LoadHotkeys(const json& root, AppConfig& config) {
     config.hotkeys.hiddenPasteShift = h.value("hiddenPasteShift", defaults.hiddenPasteShift);
     config.hotkeys.hiddenPasteAlt = h.value("hiddenPasteAlt", defaults.hiddenPasteAlt);
     config.hotkeys.hiddenPasteFunctionKeys = h.value("hiddenPasteFunctionKeys", defaults.hiddenPasteFunctionKeys);
+    config.hotkeys.passthroughHotkeys.clear();
+    if (h.contains("passthroughHotkeys") && h["passthroughHotkeys"].is_array()) {
+        for (const json& item : h["passthroughHotkeys"]) {
+            if (item.is_string()) {
+                std::string value = item.get<std::string>();
+                if (!value.empty())
+                    config.hotkeys.passthroughHotkeys.push_back(std::move(value));
+            }
+        }
+    } else {
+        config.hotkeys.passthroughHotkeys = defaults.passthroughHotkeys;
+    }
 
     if (!h.contains("bindings") || !h["bindings"].is_array())
         return;
@@ -280,6 +312,13 @@ void LoadHotkeys(const json& root, AppConfig& config) {
         else if (action != HotkeyAction::None)
             config.hotkeys.bindings.push_back(BindingFromJson(item, DefaultBindingForAction(action)));
     }
+}
+
+void LoadUi(const json& root, AppConfig& config) {
+    const json& ui = root.value("ui", json::object());
+    config.ui.showHelperText = ui.value("showHelperText", config.ui.showHelperText);
+    config.ui.helperDelayMs = std::clamp(ui.value("helperDelayMs", config.ui.helperDelayMs), 0, 5000);
+    config.ui.helperDurationMs = std::clamp(ui.value("helperDurationMs", config.ui.helperDurationMs), 500, 30000);
 }
 
 void LoadDeveloper(const json& root, AppConfig& config) {
@@ -382,6 +421,7 @@ AppConfig Load() {
         json root = json::parse(in, nullptr, true, true);
         LoadAppearance(root, config);
         LoadHotkeys(root, config);
+        LoadUi(root, config);
         LoadDeveloper(root, config);
         LoadImages(root, config);
         config.newItemsAtTop = root.value("newItemsAtTop", config.newItemsAtTop);
@@ -403,9 +443,12 @@ bool Save(const AppConfig& config) {
     std::filesystem::create_directories(path.parent_path(), ec);
     if (ec) return false;
 
-    json bindings = json::array();
-    for (const KeyBinding& b : config.hotkeys.bindings)
-        bindings.push_back(BindingToJson(b));
+      json bindings = json::array();
+      for (const KeyBinding& b : config.hotkeys.bindings)
+          bindings.push_back(BindingToJson(b));
+      json passthroughHotkeys = json::array();
+      for (const std::string& value : config.hotkeys.passthroughHotkeys)
+          passthroughHotkeys.push_back(value);
 
     json savedThemes = json::array();
     for (const SavedAppearanceTheme& saved : config.appearance.savedThemes)
@@ -439,19 +482,27 @@ bool Save(const AppConfig& config) {
             {"popupHeight", config.appearance.popupHeight},
             {"mainWindowWidth", config.appearance.mainWindowWidth},
             {"mainWindowHeight", config.appearance.mainWindowHeight},
-            {"fontPath", config.appearance.fontPath},
-            {"fontSize", config.appearance.fontSize},
+            {"fontPath",    config.appearance.fontPath},
+            {"fontSize",    config.appearance.fontSize},
+            {"exeIconPath",      config.appearance.exeIconPath},
+            {"exeIconThemeHash", config.appearance.exeIconThemeHash},
             {"uiScale", 1.0f},
             {"customColors", config.appearance.customColors},
             {"customThemeName", config.appearance.customThemeName},
             {"savedThemes", savedThemes},
         }},
-        {"hotkeys", {
-            {"bindings", bindings},
-            {"hiddenPasteCtrl", config.hotkeys.hiddenPasteCtrl},
+         {"hotkeys", {
+             {"bindings", bindings},
+             {"passthroughHotkeys", passthroughHotkeys},
+             {"hiddenPasteCtrl", config.hotkeys.hiddenPasteCtrl},
             {"hiddenPasteShift", config.hotkeys.hiddenPasteShift},
             {"hiddenPasteAlt", config.hotkeys.hiddenPasteAlt},
             {"hiddenPasteFunctionKeys", config.hotkeys.hiddenPasteFunctionKeys},
+         }},
+        {"ui", {
+            {"showHelperText", config.ui.showHelperText},
+            {"helperDelayMs", config.ui.helperDelayMs},
+            {"helperDurationMs", config.ui.helperDurationMs},
         }},
         {"developer", {
             {"enabled", config.developer.enabled},

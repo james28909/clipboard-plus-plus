@@ -18,10 +18,10 @@ class DebugWindow;
 enum class HotkeyAction : WPARAM;
 
 // Message IDs used across the app
-constexpr UINT WM_TRAYICON     = WM_APP + 1;
-constexpr UINT WM_SHOWCPP_MAIN = WM_APP + 2;
-constexpr UINT WM_SHOWPOPUP    = WM_APP + 3;
-constexpr UINT WM_HOTKEYACTION = WM_APP + 4;
+constexpr UINT WM_TRAYICON      = WM_APP + 1;
+constexpr UINT WM_SHOWCPP_MAIN  = WM_APP + 2;
+constexpr UINT WM_SHOWPOPUP     = WM_APP + 3;
+constexpr UINT WM_HOTKEYACTION  = WM_APP + 4;
 constexpr UINT WM_RELOAD_CONFIG = WM_APP + 5;
 constexpr UINT WM_SHOWTRAYPOPUP = WM_APP + 6;
 
@@ -68,6 +68,8 @@ public:
     void RequestHotkeySettings(const HotkeySettings& settings);
     const DeveloperSettings& GetDeveloperSettings() const { return m_config.developer; }
     void SetDeveloperSettings(const DeveloperSettings& settings);
+    const UiSettings& GetUiSettings() const { return m_config.ui; }
+    void SetUiSettings(const UiSettings& settings);
     void AddDeveloperEvent(const std::string& event);
     const std::vector<std::string>& GetDeveloperEvents() const { return m_developerEvents; }
     void ClearDeveloperEvents() { m_developerEvents.clear(); }

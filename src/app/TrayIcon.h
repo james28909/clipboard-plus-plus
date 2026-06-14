@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include "../ui/Appearance.h"
+#include <string>
 
 class TrayIcon {
 public:
@@ -14,6 +15,11 @@ public:
     void SetIncognito(bool on);
     bool IsIncognito() const { return m_incognito; }
     void ApplyTheme(const AppearanceSettings& ap);
+
+    // Renders the themed clipboard icon at 16/32/48 px and writes an .ico file.
+    static bool WriteThemeIco(const AppearanceSettings& ap, const std::wstring& outPath);
+    // Returns a short hash string of the icon-related theme colors for change detection.
+    static std::string ThemeIconHash(const AppearanceSettings& ap);
 
 private:
     void UpdateIcon();

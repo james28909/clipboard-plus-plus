@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <windows.h>
 #include <commdlg.h>
+#include <shellapi.h>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -60,6 +61,18 @@ static constexpr ContentTag kDisplayTagOrder[] = {
     TAG_DATA, TAG_AUDIO, TAG_VIDEO, TAG_MARKDOWN, TAG_CSV, TAG_HTML,
     TAG_HEX, TAG_UUID, TAG_IP, TAG_DATE, TAG_BASE64, TAG_LOG, TAG_PHONE
 };
+
+static bool PickIcoFile(char* path, DWORD pathSize) {
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = Application::Get() ? Application::Get()->GetHwnd() : nullptr;
+    ofn.lpstrFile   = path;
+    ofn.nMaxFile    = pathSize;
+    ofn.lpstrFilter = "Icon Files (*.ico)\0*.ico\0All Files (*.*)\0*.*\0";
+    ofn.lpstrTitle  = "Choose exe icon";
+    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return GetOpenFileNameA(&ofn) != FALSE;
+}
 
 static bool PickFontFile(char* path, DWORD pathSize) {
     OPENFILENAMEA ofn{};
@@ -145,7 +158,117 @@ static float UiScale() {
 }
 
 static float S(float value) {
+    return value;
+}
+
+static float ChromeS(float value) {
     return value * UiScale();
+}
+
+// Width for an InputInt field wide enough to show maxVal at any font scale.
+static float IntInputWidth(int maxVal) {
+    char tmp[32];
+    snprintf(tmp, sizeof(tmp), "%d", maxVal);
+    return std::max(132.0f, ImGui::CalcTextSize(tmp).x
+         + ImGui::GetStyle().FramePadding.x * 2.0f
+         + ImGui::GetFrameHeight() * 2.0f
+         + 22.0f); // +/- arrow buttons plus comfortable value padding
+}
+
+static float ButtonWidthForText(const char* text, float minWidth = 0.0f) {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    return std::max(minWidth, ImGui::CalcTextSize(text).x + style.FramePadding.x * 2.0f);
+}
+
+static ImVec2 ButtonSizeForText(const char* text, float minWidth = 0.0f) {
+    return {ButtonWidthForText(text, minWidth), 0.0f};
+}
+
+static bool PaddedButton(const char* label, float minWidth = 0.0f) {
+    return ImGui::Button(label, ButtonSizeForText(label, minWidth));
+}
+
+static bool DangerButton(const char* label, float minWidth = 0.0f) {
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
+    const bool clicked = PaddedButton(label, minWidth);
+    ImGui::PopStyleColor(3);
+    return clicked;
+}
+
+static bool BlueButton(const char* label, float minWidth = 0.0f) {
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(77, 145, 255, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(106, 166, 255, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(46, 112, 220, 255));
+    const bool clicked = PaddedButton(label, minWidth);
+    ImGui::PopStyleColor(3);
+    return clicked;
+}
+
+static void SectionHeader(const char* label) {
+    ImGui::Spacing();
+    ImGui::SeparatorText(label);
+    ImGui::Spacing();
+}
+
+static float SidebarWidth() {
+    float widest = 0.0f;
+    for (const char* label : kSectionLabels)
+        widest = std::max(widest, ImGui::CalcTextSize(label).x);
+    const float childPaddingX = 12.0f;
+    const float buttonPaddingX = 14.0f;
+    return std::max(168.0f, widest + childPaddingX * 2.0f + buttonPaddingX * 2.0f + 16.0f);
+}
+
+static void PreviewText(ImDrawList* dl, ImVec2 min, ImVec2 max, ImU32 color, const char* text) {
+    const ImVec4 clip(min.x, min.y, max.x, max.y);
+    dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {min.x, min.y},
+                color, text, nullptr, 0.0f, &clip);
+}
+
+static void HelpTooltip(const char* text) {
+    Application* app = Application::Get();
+    if (!app || !app->GetUiSettings().showHelperText)
+        return;
+
+    const UiSettings& ui = app->GetUiSettings();
+    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+        return;
+
+    static ImGuiID activeItem = 0;
+    static double shownAt = 0.0;
+    const ImGuiID item = ImGui::GetItemID();
+    const double now = ImGui::GetTime();
+    if (item != activeItem) {
+        activeItem = item;
+        shownAt = now;
+    }
+    const double maxSeconds = std::max(0.5, static_cast<double>(ui.helperDurationMs) / 1000.0);
+    if (now - shownAt <= maxSeconds)
+        ImGui::SetTooltip("%s", text);
+}
+
+static std::string JoinLines(const std::vector<std::string>& lines) {
+    std::string out;
+    for (const std::string& line : lines) {
+        if (!out.empty())
+            out += "\n";
+        out += line;
+    }
+    return out;
+}
+
+static std::vector<std::string> SplitLines(const char* text) {
+    std::vector<std::string> lines;
+    std::istringstream in(text ? text : "");
+    std::string line;
+    while (std::getline(in, line)) {
+        line = TrimAscii(line);
+        if (!line.empty())
+            lines.push_back(line);
+    }
+    return lines;
 }
 
 using ImGuiWidgets::KeepMouseWheelOnLastItem;
@@ -209,7 +332,8 @@ static void DrawClipboardIcon(float sz, const AppearanceSettings& ap) {
 static bool TitleBtn(const char* id, float x, float w, float h, ImU32 baseCol, ImU32 hoverCol) {
     ImGui::SetCursorPos(ImVec2(x, 0.0f));
     ImGui::InvisibleButton(id, ImVec2(w, h));
-    bool clicked = ImGui::IsItemClicked();
+    bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left) ||
+                   (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left));
     ImVec2 wp = ImGui::GetWindowPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (ImGui::IsItemHovered())
@@ -222,9 +346,9 @@ static bool TitleBtn(const char* id, float x, float w, float h, ImU32 baseCol, I
 // -- Title bar -----------------------------------------------------------------
 
 void MainWindow::DrawTitleBar() {
-    const float W  = ImGui::GetWindowWidth();
-    const float H  = S((float)kTitleBarHeight);
-    const float BW = S((float)kTitleBtnWidth);
+    const float W  = ImGui::GetWindowSize().x;
+    const float H  = ChromeS((float)kTitleBarHeight);
+    const float BW = ChromeS((float)kTitleBtnWidth);
 
     ImVec2      wp  = ImGui::GetWindowPos();
     ImDrawList* dl  = ImGui::GetWindowDrawList();
@@ -235,26 +359,31 @@ void MainWindow::DrawTitleBar() {
     const ImU32 minBaseCol    = ImGui::ColorConvertFloat4ToU32(ap.titleMinBase);
     const ImU32 maxBaseCol    = ImGui::ColorConvertFloat4ToU32(ap.titleMaxBase);
     const ImU32 closeBaseCol  = ImGui::ColorConvertFloat4ToU32(ap.titleCloseBase);
+    const ImU32 exitBaseCol   = ImGui::ColorConvertFloat4ToU32(ap.titleExitBase);
     const ImU32 minHoverCol   = ImGui::ColorConvertFloat4ToU32(ap.titleMinHover);
     const ImU32 maxHoverCol   = ImGui::ColorConvertFloat4ToU32(ap.titleMaxHover);
     const ImU32 closeHoverCol = ImGui::ColorConvertFloat4ToU32(ap.titleCloseHover);
+    const ImU32 exitHoverCol  = ImGui::ColorConvertFloat4ToU32(ap.titleExitHover);
+    const ImU32 titleBg       = ImGui::ColorConvertFloat4ToU32(ap.titleBarBg);
+    const ImU32 titleLine     = ImGui::ColorConvertFloat4ToU32(ap.titleBarBorder);
+    const ImU32 titleText     = ImGui::ColorConvertFloat4ToU32(ap.titleBarText);
+    const ImU32 minGlyph      = ImGui::ColorConvertFloat4ToU32(ap.titleMinGlyph);
+    const ImU32 maxGlyph      = ImGui::ColorConvertFloat4ToU32(ap.titleMaxGlyph);
+    const ImU32 exitGlyph     = ImGui::ColorConvertFloat4ToU32(ap.titleExitGlyph);
+    const ImU32 closeGlyph    = ImGui::ColorConvertFloat4ToU32(ap.titleCloseGlyph);
 
     // -- Background -----------------------------------------------------------
-    const ImU32 titleBg    = ImGui::GetColorU32(ImGuiCol_WindowBg);
-    const ImU32 titleLine  = ImGui::GetColorU32(ImGuiCol_Border);
-    const ImU32 titleMuted = ImGui::GetColorU32(ImGuiCol_TextDisabled);
-    const ImU32 titleText  = ImGui::GetColorU32(ImGuiCol_Text);
     dl->AddRectFilled(wp, {wp.x + W, wp.y + H}, titleBg);
 
     // -- App icon + title text ------------------------------------------------
     float textY   = (H - ImGui::GetTextLineHeight()) * 0.5f;
-    float cursorX = S(10.0f);
+    float cursorX = ChromeS(10.0f);
 
     {
-        float iconSz = H - S(10.0f);
+        float iconSz = H - ChromeS(10.0f);
         ImGui::SetCursorPos({cursorX, (H - iconSz) * 0.5f});
         DrawClipboardIcon(iconSz, ap);
-        cursorX += iconSz + S(6.0f);
+        cursorX += iconSz + ChromeS(6.0f);
     }
 
     ImGui::SetCursorPos({cursorX, textY});
@@ -262,18 +391,16 @@ void MainWindow::DrawTitleBar() {
     ImGui::TextUnformatted("Clipboard++");
     ImGui::PopStyleColor();
 
-    // -- Buttons: minimize | maximize/restore | close --------------------------
+    // -- Buttons: minimize | maximize/restore | exit | close -------------------
     const bool isMax = IsZoomed(wnd) != 0;
-    float bx = W - BW * 3.0f;
+    float bx = std::max(0.0f, W - BW * 4.0f);
 
     // - Minimize -
-    if (TitleBtn("##min", bx, BW, H, minBaseCol, minHoverCol)) {
-        ShowWindow(wnd, SW_MINIMIZE);
-        Application::Get()->HideMainWindow();
-    }
+    if (TitleBtn("##min", bx, BW, H, minBaseCol, minHoverCol))
+        PostMessageW(wnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
     {
         ImVec2 c = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f + 1.0f};
-        dl->AddLine({c.x - S(5.0f), c.y}, {c.x + S(5.0f), c.y}, titleMuted, S(1.5f));
+        dl->AddLine({c.x - ChromeS(5.0f), c.y}, {c.x + ChromeS(5.0f), c.y}, minGlyph, ChromeS(1.5f));
     }
     bx += BW;
 
@@ -283,16 +410,32 @@ void MainWindow::DrawTitleBar() {
     {
         ImVec2 c = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f};
         if (isMax) {
-            dl->AddRect({c.x - S(2.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(2.0f)},
-                        titleMuted, 0, 0, S(1.2f));
-            dl->AddRectFilled({c.x - S(5.0f), c.y - S(2.0f)}, {c.x + S(1.0f), c.y + S(5.0f)},
+            dl->AddRect({c.x - ChromeS(2.0f), c.y - ChromeS(5.0f)}, {c.x + ChromeS(5.0f), c.y + ChromeS(2.0f)},
+                        maxGlyph, 0, 0, ChromeS(1.2f));
+            dl->AddRectFilled({c.x - ChromeS(5.0f), c.y - ChromeS(2.0f)}, {c.x + ChromeS(1.0f), c.y + ChromeS(5.0f)},
                               titleBg);
-            dl->AddRect({c.x - S(5.0f), c.y - S(2.0f)}, {c.x + S(2.0f), c.y + S(5.0f)},
-                        titleMuted, 0, 0, S(1.2f));
+            dl->AddRect({c.x - ChromeS(5.0f), c.y - ChromeS(2.0f)}, {c.x + ChromeS(2.0f), c.y + ChromeS(5.0f)},
+                        maxGlyph, 0, 0, ChromeS(1.2f));
         } else {
-            dl->AddRect({c.x - S(5.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(5.0f)},
-                        titleMuted, 0, 0, S(1.2f));
+            dl->AddRect({c.x - ChromeS(5.0f), c.y - ChromeS(5.0f)}, {c.x + ChromeS(5.0f), c.y + ChromeS(5.0f)},
+                        maxGlyph, 0, 0, ChromeS(1.2f));
         }
+    }
+    bx += BW;
+
+    // - Exit (quit app) -
+    if (TitleBtn("##exit", bx, BW, H, exitBaseCol, exitHoverCol))
+        PostMessageW(wnd, WM_DESTROY, 0, 0);
+    {
+        ImVec2 c   = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f + ChromeS(1.0f)};
+        const float r        = ChromeS(4.5f);
+        const float gapHalf  = 0.52f; // ~30 degree gap at top
+        // Arc from just past top-right of gap, clockwise through bottom, to just past top-left
+        static constexpr float kPi = 3.14159265f;
+        dl->PathArcTo(c, r, -kPi * 0.5f + gapHalf, -kPi * 0.5f + kPi * 2.0f - gapHalf, 32);
+        dl->PathStroke(exitGlyph, false, ChromeS(1.5f));
+        // Vertical stem through the gap up to slightly above the circle
+        dl->AddLine({c.x, c.y}, {c.x, c.y - r - ChromeS(2.0f)}, exitGlyph, ChromeS(1.5f));
     }
     bx += BW;
 
@@ -301,10 +444,8 @@ void MainWindow::DrawTitleBar() {
         PostMessageW(wnd, WM_CLOSE, 0, 0);
     {
         ImVec2 c   = {wp.x + bx + BW * 0.5f, wp.y + H * 0.5f};
-        bool   hov = ImGui::IsMouseHoveringRect({wp.x + bx, wp.y}, {wp.x + bx + BW, wp.y + H});
-        ImU32  xcol = hov ? titleText : titleMuted;
-        dl->AddLine({c.x - S(5.0f), c.y - S(5.0f)}, {c.x + S(5.0f), c.y + S(5.0f)}, xcol, S(1.5f));
-        dl->AddLine({c.x + S(5.0f), c.y - S(5.0f)}, {c.x - S(5.0f), c.y + S(5.0f)}, xcol, S(1.5f));
+        dl->AddLine({c.x - ChromeS(5.0f), c.y - ChromeS(5.0f)}, {c.x + ChromeS(5.0f), c.y + ChromeS(5.0f)}, closeGlyph, ChromeS(1.5f));
+        dl->AddLine({c.x + ChromeS(5.0f), c.y - ChromeS(5.0f)}, {c.x - ChromeS(5.0f), c.y + ChromeS(5.0f)}, closeGlyph, ChromeS(1.5f));
     }
 
     // -- Separator line --------------------------------------------------------
@@ -347,9 +488,9 @@ void MainWindow::Draw(bool& open) {
     DrawTitleBar();
 
     // -- Sidebar + content layout below the title bar --------------------------
-    const float titleH   = S((float)kTitleBarHeight);
+    const float titleH   = ChromeS((float)kTitleBarHeight);
     const float pad      = S(18.0f);
-    const float sidebarW = S(168.0f);
+    const float sidebarW = SidebarWidth();
     const float contentW = ImGui::GetContentRegionAvail().x - sidebarW - pad * 2.0f;
 
     ImGui::SetCursorPos({pad, titleH + pad});
@@ -392,7 +533,8 @@ void MainWindow::Draw(bool& open) {
 // -- Sidebar nav ---------------------------------------------------------------
 
 void MainWindow::DrawSidebarNav(int& selected) {
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, S(2.0f)});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 6.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {14.0f, 8.0f});
     const AppearanceSettings appearance = Application::Get()
         ? Application::Get()->GetAppearance()
         : AppearanceSettings{};
@@ -403,12 +545,12 @@ void MainWindow::DrawSidebarNav(int& selected) {
         bool active = (i == selected);
         if (active)
             ImGui::PushStyleColor(ImGuiCol_Button, selectedColor);
-        if (ImGui::Button(kSectionLabels[i], {-1.0f, S(32.0f)}))
+        if (ImGui::Button(kSectionLabels[i], {-1.0f, 0.0f}))
             selected = i;
         if (active)
             ImGui::PopStyleColor();
     }
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(2);
 }
 
 // -- Section: General ---------------------------------------------------------
@@ -431,17 +573,34 @@ void MainWindow::DrawGeneral() {
         app->SetNewItemsAtTop(newItemsAtTop);
     }
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("When off, new items are added to the bottom.");
+    HelpTooltip("When off, new items are added to the bottom.");
     ImGui::Spacing();
     ImGui::Checkbox("Deduplicate - move existing copy to configured position", &deduplication);
 
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-    ImGui::TextDisabled("Clipboards");
+    SectionHeader("Interface");
+    UiSettings ui = app->GetUiSettings();
+    bool uiChanged = false;
+    uiChanged |= ImGui::Checkbox("Show helper text", &ui.showHelperText);
+    if (ui.showHelperText) {
+        ImGui::SetNextItemWidth(180.0f);
+        uiChanged |= SliderIntWheel("Helper delay (ms)", &ui.helperDelayMs, 0, 5000, "%d", 50);
+        ImGui::SetNextItemWidth(180.0f);
+        uiChanged |= SliderIntWheel("Helper duration (ms)", &ui.helperDurationMs, 500, 30000, "%d", 250);
+    } else {
+        ImGui::TextDisabled("Inline helper popups are hidden.");
+    }
+    if (uiChanged) {
+        ui.helperDelayMs = std::clamp(ui.helperDelayMs, 0, 5000);
+        ui.helperDurationMs = std::clamp(ui.helperDurationMs, 500, 30000);
+        app->SetUiSettings(ui);
+    }
+
+    SectionHeader("Clipboards");
 
     const ClipboardProfileConfig* activeProfile = app->GetActiveClipboardProfile();
     static std::string lastProfileId;
     static char clipboardNameBuf[128]{};
+    static bool clipboardDropdownOpen = false;
     enum class PendingClipboardAction { None, Rename, Create, Delete };
     static PendingClipboardAction pendingAction = PendingClipboardAction::None;
     static std::string pendingName;
@@ -450,15 +609,59 @@ void MainWindow::DrawGeneral() {
         strncpy_s(clipboardNameBuf, activeProfile->name.c_str(), _TRUNCATE);
     }
 
-    ImGui::SetNextItemWidth(300.0f);
-    ImGui::InputText("Clipboard", clipboardNameBuf, sizeof(clipboardNameBuf));
-    ImGui::SameLine(0.0f, 4.0f);
-    if (ImGui::Button("v##clipboard_dropdown", {S(28.0f), 0.0f}))
-        ImGui::OpenPopup("##clipboard_profile_picker");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Select another clipboard");
+    auto clipboardNameExists = [&]() {
+        const std::string name = TrimAscii(clipboardNameBuf);
+        if (name.empty())
+            return true;
+        for (const ClipboardProfileConfig& profile : app->GetClipboardProfiles()) {
+            if (EqualsIgnoreCase(profile.name, name))
+                return true;
+        }
+        return false;
+    };
 
-    if (ImGui::BeginPopup("##clipboard_profile_picker")) {
+    const bool showClipboardSave = !clipboardNameExists();
+    const float saveW = ButtonWidthForText("Save", 72.0f);
+    const float saveReserve = showClipboardSave ? saveW + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+    ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - saveReserve));
+    ImGui::InputText("##clipboard_profile_name", clipboardNameBuf, sizeof(clipboardNameBuf));
+    const bool clipboardInputHovered = ImGui::IsItemHovered();
+    const bool clipboardInputClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const ImVec2 clipboardInputMin = ImGui::GetItemRectMin();
+    const ImVec2 clipboardInputMax = ImGui::GetItemRectMax();
+    if (clipboardInputClicked) {
+        clipboardDropdownOpen = true;
+        ImGui::SetKeyboardFocusHere(-1);
+    }
+    if (clipboardInputHovered && !ImGui::IsItemActive())
+        HelpTooltip("Click to select a clipboard or type a name");
+    if (showClipboardSave) {
+        ImGui::SameLine();
+        if (PaddedButton("Save", saveW)) {
+            std::string name = TrimAscii(clipboardNameBuf);
+            if (!name.empty()) {
+                app->CreateClipboardProfile(name);
+                if (const ClipboardProfileConfig* profile = app->GetActiveClipboardProfile()) {
+                    strncpy_s(clipboardNameBuf, profile->name.c_str(), _TRUNCATE);
+                    lastProfileId = profile->id;
+                }
+                clipboardDropdownOpen = false;
+            }
+        }
+    }
+
+    if (clipboardDropdownOpen) {
+        const float dropW = clipboardInputMax.x - clipboardInputMin.x;
+        ImGui::SetNextWindowPos({clipboardInputMin.x, clipboardInputMax.y}, ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints({dropW, 0.0f}, {dropW, 300.0f});
+        constexpr ImGuiWindowFlags dropFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing;
+        ImGui::Begin("##clipboard_profile_picker", nullptr, dropFlags);
+        const bool dropdownHovered = ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+            ImGuiHoveredFlags_AllowWhenBlockedByPopup);
         for (const ClipboardProfileConfig& profile : app->GetClipboardProfiles()) {
             const bool selected = activeProfile && profile.id == activeProfile->id;
             std::string label = profile.name;
@@ -468,11 +671,14 @@ void MainWindow::DrawGeneral() {
                 app->SetActiveClipboardProfile(profile.id);
                 strncpy_s(clipboardNameBuf, profile.name.c_str(), _TRUNCATE);
                 lastProfileId = profile.id;
+                clipboardDropdownOpen = false;
             }
             if (selected)
                 ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndPopup();
+        ImGui::End();
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !dropdownHovered && !clipboardInputHovered)
+            clipboardDropdownOpen = false;
     }
 
     auto requestConfirmation = [&](PendingClipboardAction action, std::string name) {
@@ -483,13 +689,14 @@ void MainWindow::DrawGeneral() {
     };
 
     std::string typedName = TrimAscii(clipboardNameBuf);
-    if (ImGui::SmallButton("Set name")) {
+    ImGui::Spacing();
+    if (PaddedButton("Set name", 100.0f)) {
         if (typedName.empty() && activeProfile)
             typedName = activeProfile->name;
         requestConfirmation(PendingClipboardAction::Rename, typedName);
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("New clipboard")) {
+    if (PaddedButton("New clipboard", 130.0f)) {
         std::string name = typedName;
         if (name.empty())
             name = "Clipboard " + std::to_string(app->GetClipboardProfiles().size() + 1);
@@ -498,14 +705,10 @@ void MainWindow::DrawGeneral() {
     ImGui::SameLine();
     if (!app->CanDeleteActiveClipboardProfile())
         ImGui::BeginDisabled();
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
-    if (ImGui::SmallButton("Delete active")) {
+    if (DangerButton("Delete active", 130.0f)) {
         requestConfirmation(PendingClipboardAction::Delete,
                             activeProfile ? activeProfile->name : "Clipboard");
     }
-    ImGui::PopStyleColor(3);
     if (!app->CanDeleteActiveClipboardProfile())
         ImGui::EndDisabled();
 
@@ -523,7 +726,7 @@ void MainWindow::DrawGeneral() {
             ImGui::TextDisabled("%s", pendingName.c_str());
         ImGui::Spacing();
 
-        if (ImGui::Button("Confirm", {S(110.0f), 0.0f})) {
+        if (PaddedButton("Confirm", 110.0f)) {
             if (pendingAction == PendingClipboardAction::Rename) {
                 app->RenameActiveClipboardProfile(pendingName);
                 strncpy_s(clipboardNameBuf, pendingName.c_str(), _TRUNCATE);
@@ -540,7 +743,7 @@ void MainWindow::DrawGeneral() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", {S(90.0f), 0.0f}) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (PaddedButton("Cancel", 90.0f) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             pendingAction = PendingClipboardAction::None;
             pendingName.clear();
             ImGui::CloseCurrentPopup();
@@ -575,27 +778,50 @@ void MainWindow::DrawHotkeys() {
     static HotkeySettings draft = app->GetHotkeySettings();
     static bool initialized = false;
     static int captureIndex = -1;
+    static bool passthroughCaptureOpen = false;
+    static bool passthroughCaptureReady = false;
+    static KeyBinding passthroughPending{};
     if (!initialized) {
         draft = app->GetHotkeySettings();
         initialized = true;
     }
 
     KeyBinding captured;
-    if (hotkeys->ConsumeCapturedBinding(captured) && captureIndex >= 0 &&
-        static_cast<size_t>(captureIndex) < draft.bindings.size()) {
-        captured.action = draft.bindings[static_cast<size_t>(captureIndex)].action;
-        captured.data = draft.bindings[static_cast<size_t>(captureIndex)].data;
-        draft.bindings[static_cast<size_t>(captureIndex)] = captured;
-        app->RequestHotkeySettings(draft);
-        captureIndex = -1;
+    if (hotkeys->ConsumeCapturedBinding(captured)) {
+        if (passthroughCaptureOpen) {
+            passthroughPending = captured;
+            passthroughCaptureReady = true;
+        } else if (captureIndex >= 0 &&
+                   static_cast<size_t>(captureIndex) < draft.bindings.size()) {
+            captured.action = draft.bindings[static_cast<size_t>(captureIndex)].action;
+            captured.data = draft.bindings[static_cast<size_t>(captureIndex)].data;
+            draft.bindings[static_cast<size_t>(captureIndex)] = captured;
+            app->RequestHotkeySettings(draft);
+            captureIndex = -1;
+        }
     }
+
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {10.0f, 8.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.0f, 6.0f});
+
+    float widestBindingText = ButtonWidthForText("Press keys...", 180.0f);
+    for (const KeyBinding& binding : draft.bindings) {
+        const std::string text = HotkeyManager::BindingText(binding);
+        widestBindingText = std::max(widestBindingText, ButtonWidthForText(text.c_str(), 180.0f));
+    }
+    const float resetButtonW = ButtonWidthForText("Reset", 84.0f);
+    const float bindingColumnW = widestBindingText + resetButtonW + ImGui::GetStyle().ItemSpacing.x;
 
     if (ImGui::BeginTable("##hotkeys", 2,
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
     {
         ImGui::TableSetupColumn("Function", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Binding",  ImGuiTableColumnFlags_WidthFixed, 240.0f);
-        ImGui::TableHeadersRow();
+        ImGui::TableSetupColumn("Binding",  ImGuiTableColumnFlags_WidthFixed, bindingColumnW);
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("Function");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextDisabled("Binding");
         for (size_t i = 0; i < draft.bindings.size(); ++i) {
             const KeyBinding& binding = draft.bindings[i];
             const bool conflict = BindingHasConflict(draft, i);
@@ -611,13 +837,13 @@ void MainWindow::DrawHotkeys() {
             const std::string label = captureIndex == static_cast<int>(i)
                 ? "Press keys...##capture" + std::to_string(i)
                 : HotkeyManager::BindingText(binding) + "##capture" + std::to_string(i);
-            if (ImGui::Button(label.c_str(), {160.0f, 0.0f})) {
+            if (ImGui::Button(label.c_str(), {widestBindingText, 0.0f})) {
                 captureIndex = static_cast<int>(i);
                 hotkeys->BeginCapture();
             }
             ImGui::SameLine();
             const std::string resetId = "Reset##resetHotkey" + std::to_string(i);
-            if (ImGui::SmallButton(resetId.c_str())) {
+            if (ImGui::Button(resetId.c_str(), {resetButtonW, 0.0f})) {
                 HotkeySettings defaults = HotkeyManager::DefaultSettings();
                 auto it = std::find_if(defaults.bindings.begin(), defaults.bindings.end(),
                     [&](const KeyBinding& b) { return b.action == binding.action; });
@@ -629,6 +855,7 @@ void MainWindow::DrawHotkeys() {
         }
         ImGui::EndTable();
     }
+    ImGui::PopStyleVar(2);
 
     if (captureIndex >= 0) {
         ImGui::TextDisabled("Press Esc to cancel capture.");
@@ -653,6 +880,94 @@ void MainWindow::DrawHotkeys() {
     if (changed)
         app->RequestHotkeySettings(draft);
 
+    SectionHeader("Popup Pass-through Hotkeys");
+    ImGui::TextDisabled("Defined hotkeys are ignored by Clipboard++ and passed to Windows.");
+    if (draft.passthroughHotkeys.empty()) {
+        ImGui::TextDisabled("No pass-through hotkeys defined.");
+    } else {
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {10.0f, 6.0f});
+        if (ImGui::BeginTable("##popup_passthrough_table", 2,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Hotkey", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Remove", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+            for (size_t i = 0; i < draft.passthroughHotkeys.size(); ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(draft.passthroughHotkeys[i].c_str());
+                ImGui::TableSetColumnIndex(1);
+                const std::string removeId = "Remove##passthrough_" + std::to_string(i);
+                if (DangerButton(removeId.c_str(), 84.0f)) {
+                    draft.passthroughHotkeys.erase(draft.passthroughHotkeys.begin() + static_cast<std::ptrdiff_t>(i));
+                    app->RequestHotkeySettings(draft);
+                    break;
+                }
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+    }
+
+    ImGui::Spacing();
+    if (PaddedButton("New pass-through hotkey", 190.0f)) {
+        passthroughCaptureOpen = true;
+        passthroughCaptureReady = false;
+        passthroughPending = {};
+        hotkeys->BeginCapture();
+        ImGui::OpenPopup("New pass-through hotkey");
+    }
+    if (!draft.passthroughHotkeys.empty()) {
+        ImGui::SameLine();
+    }
+    if (!draft.passthroughHotkeys.empty() && PaddedButton("Reset pass-through list", 180.0f)) {
+        HotkeySettings defaults = HotkeyManager::DefaultSettings();
+        draft.passthroughHotkeys = defaults.passthroughHotkeys;
+        app->RequestHotkeySettings(draft);
+    }
+
+    if (ImGui::BeginPopupModal("New pass-through hotkey", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Press the hotkey Clipboard++ should ignore and pass to Windows.");
+        std::string preview = passthroughCaptureReady
+            ? HotkeyManager::BindingText(passthroughPending)
+            : hotkeys->CapturePreviewText();
+        char previewBuf[128]{};
+        strncpy_s(previewBuf, preview.c_str(), _TRUNCATE);
+        ImGui::SetNextItemWidth(280.0f);
+        ImGui::InputText("##passthrough_capture_preview", previewBuf, sizeof(previewBuf),
+                         ImGuiInputTextFlags_ReadOnly);
+
+        if (!passthroughCaptureReady)
+            ImGui::BeginDisabled();
+        if (PaddedButton("Accept", 100.0f)) {
+            const std::string text = HotkeyManager::BindingText(passthroughPending);
+            auto exists = std::find_if(draft.passthroughHotkeys.begin(), draft.passthroughHotkeys.end(),
+                [&](const std::string& existing) { return EqualsIgnoreCase(existing, text); });
+            if (exists == draft.passthroughHotkeys.end()) {
+                draft.passthroughHotkeys.push_back(text);
+                app->RequestHotkeySettings(draft);
+            }
+            passthroughCaptureOpen = false;
+            passthroughCaptureReady = false;
+            passthroughPending = {};
+            ImGui::CloseCurrentPopup();
+        }
+        if (!passthroughCaptureReady)
+            ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        if (PaddedButton("Cancel", 90.0f) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            hotkeys->CancelCapture();
+            passthroughCaptureOpen = false;
+            passthroughCaptureReady = false;
+            passthroughPending = {};
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    } else if (passthroughCaptureOpen && !passthroughCaptureReady) {
+        hotkeys->CancelCapture();
+        passthroughCaptureOpen = false;
+    }
+
     ImGui::Spacing();
     if (PopupWindow* popup = Application::Get()->GetPopup()) {
         bool newline = app->GetAppendNewlineAfterPaste();
@@ -668,7 +983,7 @@ void MainWindow::DrawHotkeys() {
 
         const char* modes[] = { "Keep item in place", "Move pasted item to top", "Move pasted item to bottom" };
         ImGui::Text("After paste");
-        ImGui::SetNextItemWidth(240.0f);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         if (ImGui::Combo("##pasteMove", &moveMode, modes, IM_ARRAYSIZE(modes))) {
             ClipboardHistory::MoveTarget target = ClipboardHistory::MoveTarget::None;
             if (moveMode == 1) target = ClipboardHistory::MoveTarget::Top;
@@ -705,48 +1020,60 @@ static void DrawPopupPreview(const AppearanceSettings& draft) {
     const PopupToggleColors toggles = GetPopupToggleColors(draft);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 start = ImGui::GetCursorScreenPos();
-    ImVec2 size = {std::min(300.0f, ImGui::GetContentRegionAvail().x), 150.0f};
+    ImVec2 size = {std::min(360.0f, ImGui::GetContentRegionAvail().x), 168.0f};
     ImVec2 end = {start.x + size.x, start.y + size.y};
+    const float pad = 10.0f;
+    const ImU32 text = ImGui::GetColorU32(preview.text);
+    const ImU32 muted = ImGui::GetColorU32(preview.mutedText);
 
     dl->AddRectFilled(start, end, ImGui::GetColorU32(preview.windowBg), 6.0f);
-    dl->AddRect(start, end, ImGui::GetColorU32(preview.accent), 6.0f, 0, 1.0f);
+    dl->AddRect(start, end, ImGui::GetColorU32(preview.accent), 6.0f, 0, 1.5f);
 
-    ImVec2 closeA = {start.x + 10.0f, start.y + 10.0f};
-    ImVec2 closeB = {closeA.x + 22.0f, closeA.y + 22.0f};
+    ImVec2 closeA = {start.x + pad, start.y + pad};
+    ImVec2 closeB = {closeA.x + 24.0f, closeA.y + 24.0f};
     dl->AddRectFilled(closeA, closeB, ImGui::GetColorU32(toggles.off), 3.0f);
-    dl->AddText({closeA.x + 8.0f, closeA.y + 3.0f}, ImGui::GetColorU32(preview.text), "x");
+    PreviewText(dl, {closeA.x + 8.0f, closeA.y + 4.0f}, {closeB.x - 4.0f, closeB.y}, text, "x");
 
-    ImVec2 comboA = {closeB.x + 12.0f, closeA.y};
-    ImVec2 comboB = {end.x - 12.0f, closeB.y};
+    ImVec2 comboA = {closeB.x + 10.0f, closeA.y};
+    ImVec2 comboB = {end.x - pad, closeB.y};
     dl->AddRectFilled(comboA, comboB, ImGui::GetColorU32(preview.panelBg), 3.0f);
-    dl->AddText({comboA.x + 8.0f, comboA.y + 4.0f}, ImGui::GetColorU32(preview.text), "Clipboard");
+    PreviewText(dl, {comboA.x + 8.0f, comboA.y + 4.0f}, {comboB.x - 8.0f, comboB.y}, text, "Clipboard profile");
 
-    ImVec2 searchA = {start.x + 10.0f, closeB.y + 12.0f};
-    ImVec2 searchB = {end.x - 10.0f, searchA.y + 24.0f};
+    ImVec2 searchA = {start.x + pad, closeB.y + 10.0f};
+    ImVec2 searchB = {end.x - pad, searchA.y + 24.0f};
     dl->AddRectFilled(searchA, searchB, ImGui::GetColorU32(preview.panelBg), 3.0f);
-    dl->AddText({searchA.x + 8.0f, searchA.y + 4.0f}, ImGui::GetColorU32(preview.mutedText), "Search...");
+    PreviewText(dl, {searchA.x + 8.0f, searchA.y + 4.0f}, {searchB.x - 8.0f, searchB.y}, muted, "Search clipboard...");
 
-    const char* labels[] = {"All", "Text", "Image"};
+    const char* labels[] = {"All", "Text", "Image", "URL"};
     float x = searchA.x;
     float y = searchB.y + 12.0f;
     for (int i = 0; i < IM_ARRAYSIZE(labels); ++i) {
+        const float labelW = std::min(58.0f, std::max(42.0f, ImGui::CalcTextSize(labels[i]).x + 16.0f));
         ImVec2 a = {x, y};
-        ImVec2 b = {x + 50.0f, y + 22.0f};
+        ImVec2 b = {std::min(x + labelW, end.x - pad), y + 22.0f};
+        if (b.x <= a.x + 20.0f)
+            break;
         const ImU32 col = ImGui::GetColorU32(i == 0 ? toggles.on : toggles.off);
         dl->AddRectFilled(a, b, col, 3.0f);
-        dl->AddText({a.x + 8.0f, a.y + 3.0f}, ImGui::GetColorU32(preview.text), labels[i]);
-        x += 56.0f;
+        PreviewText(dl, {a.x + 8.0f, a.y + 3.0f}, {b.x - 6.0f, b.y}, text, labels[i]);
+        x = b.x + 6.0f;
     }
 
-    ImVec2 rowA = {start.x + 10.0f, y + 36.0f};
-    ImVec2 rowB = {end.x - 10.0f, rowA.y + 26.0f};
+    ImVec2 rowA = {start.x + pad, y + 34.0f};
+    ImVec2 rowB = {end.x - pad - 10.0f, rowA.y + 28.0f};
     dl->AddRectFilled(rowA, rowB, ImGui::GetColorU32(preview.panelBg), 3.0f);
-    dl->AddCircleFilled({rowA.x + 10.0f, rowA.y + 13.0f}, 3.0f, IM_COL32(255, 196, 64, 255), 12);
-    dl->AddText({rowA.x + 20.0f, rowA.y + 5.0f}, ImGui::GetColorU32(preview.text), "1  [P] Copied item preview");
-    ImVec2 scrollA = {end.x - 17.0f, searchB.y + 10.0f};
-    ImVec2 scrollB = {end.x - 11.0f, rowB.y};
+    dl->AddCircleFilled({rowA.x + 10.0f, rowA.y + 14.0f}, 3.0f, IM_COL32(255, 196, 64, 255), 12);
+    PreviewText(dl, {rowA.x + 20.0f, rowA.y + 6.0f}, {rowB.x - 8.0f, rowB.y}, text, "1  Pinned item preview");
+
+    ImVec2 row2A = {rowA.x, rowB.y + 6.0f};
+    ImVec2 row2B = {rowB.x, row2A.y + 28.0f};
+    dl->AddRectFilled(row2A, row2B, ImGui::GetColorU32(preview.panelBg), 3.0f);
+    PreviewText(dl, {row2A.x + 20.0f, row2A.y + 6.0f}, {row2B.x - 8.0f, row2B.y}, text, "2  History item preview");
+
+    ImVec2 scrollA = {end.x - pad - 6.0f, searchB.y + 8.0f};
+    ImVec2 scrollB = {end.x - pad, row2B.y};
     dl->AddRectFilled(scrollA, scrollB, ImGui::GetColorU32(preview.scrollbarBg), 3.0f);
-    dl->AddRectFilled({scrollA.x, scrollA.y + 9.0f}, {scrollB.x, scrollA.y + 36.0f},
+    dl->AddRectFilled({scrollA.x, scrollA.y + 10.0f}, {scrollB.x, scrollA.y + 42.0f},
                       ImGui::GetColorU32(preview.scrollbarGrab), 3.0f);
 
     ImGui::Dummy(size);
@@ -757,28 +1084,35 @@ static void DrawSettingsPreview(const AppearanceSettings& draft) {
     const PopupToggleColors toggles = GetPopupToggleColors(draft);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 start = ImGui::GetCursorScreenPos();
-    ImVec2 size = {std::min(300.0f, ImGui::GetContentRegionAvail().x), 130.0f};
+    ImVec2 size = {std::min(360.0f, ImGui::GetContentRegionAvail().x), 148.0f};
     ImVec2 end = {start.x + size.x, start.y + size.y};
+    const ImU32 text = ImGui::GetColorU32(preview.text);
+    const ImU32 muted = ImGui::GetColorU32(preview.mutedText);
 
     dl->AddRectFilled(start, end, ImGui::GetColorU32(preview.windowBg), 0.0f);
-    dl->AddRectFilled(start, {end.x, start.y + 28.0f}, ImGui::GetColorU32(preview.panelBg), 0.0f);
-    dl->AddText({start.x + 12.0f, start.y + 7.0f}, ImGui::GetColorU32(preview.text), "Clipboard++");
+    dl->AddRectFilled(start, {end.x, start.y + 30.0f}, ImGui::GetColorU32(preview.panelBg), 0.0f);
+    PreviewText(dl, {start.x + 12.0f, start.y + 7.0f}, {end.x - 12.0f, start.y + 28.0f}, text, "Clipboard++ Settings");
 
     ImVec2 sideA = {start.x + 10.0f, start.y + 38.0f};
-    ImVec2 sideB = {sideA.x + 96.0f, end.y - 12.0f};
+    ImVec2 sideB = {std::min(sideA.x + 104.0f, end.x - 130.0f), end.y - 12.0f};
     dl->AddRectFilled(sideA, sideB, ImGui::GetColorU32(preview.panelBg), 4.0f);
     dl->AddRectFilled({sideA.x + 8.0f, sideA.y + 10.0f}, {sideB.x - 8.0f, sideA.y + 34.0f},
                       ImGui::GetColorU32(toggles.on), 3.0f);
-    dl->AddText({sideA.x + 16.0f, sideA.y + 14.0f}, ImGui::GetColorU32(preview.text), "Appearance");
-    dl->AddText({sideA.x + 16.0f, sideA.y + 46.0f}, ImGui::GetColorU32(preview.mutedText), "General");
+    PreviewText(dl, {sideA.x + 14.0f, sideA.y + 14.0f}, {sideB.x - 10.0f, sideA.y + 32.0f}, text, "Appearance");
+    PreviewText(dl, {sideA.x + 14.0f, sideA.y + 44.0f}, {sideB.x - 10.0f, sideA.y + 62.0f}, muted, "General");
 
     ImVec2 paneA = {sideB.x + 14.0f, sideA.y};
     ImVec2 paneB = {end.x - 12.0f, sideB.y};
     dl->AddRectFilled(paneA, paneB, ImGui::GetColorU32(preview.panelBg), 4.0f);
-    dl->AddText({paneA.x + 12.0f, paneA.y + 12.0f}, ImGui::GetColorU32(preview.text), "Theme");
-    dl->AddRectFilled({paneA.x + 12.0f, paneA.y + 44.0f}, {paneA.x + 118.0f, paneA.y + 68.0f},
-                      ImGui::GetColorU32(toggles.off), 3.0f);
-    dl->AddText({paneA.x + 24.0f, paneA.y + 48.0f}, ImGui::GetColorU32(preview.text), "Apply");
+    PreviewText(dl, {paneA.x + 12.0f, paneA.y + 12.0f}, {paneB.x - 12.0f, paneA.y + 32.0f}, text, "Theme selector");
+    ImVec2 inputA = {paneA.x + 12.0f, paneA.y + 42.0f};
+    ImVec2 inputB = {paneB.x - 12.0f, inputA.y + 24.0f};
+    dl->AddRectFilled(inputA, inputB, ImGui::GetColorU32(preview.windowBg), 3.0f);
+    PreviewText(dl, {inputA.x + 8.0f, inputA.y + 4.0f}, {inputB.x - 8.0f, inputB.y}, text, "Custom theme");
+    ImVec2 buttonA = {paneA.x + 12.0f, inputB.y + 10.0f};
+    ImVec2 buttonB = {std::min(buttonA.x + 96.0f, paneB.x - 12.0f), buttonA.y + 24.0f};
+    dl->AddRectFilled(buttonA, buttonB, ImGui::GetColorU32(toggles.off), 3.0f);
+    PreviewText(dl, {buttonA.x + 10.0f, buttonA.y + 4.0f}, {buttonB.x - 8.0f, buttonB.y}, text, "Save");
     ImGui::Dummy(size);
 }
 
@@ -792,16 +1126,19 @@ void MainWindow::DrawAppearance() {
 
     static AppearanceSettings draft = app->GetAppearance();
     static char fontPath[512]{};
+    static char iconPathBuf[512]{};
     static char customName[96] = "Custom";
     static bool initialized = false;
+    static bool themeDropdownOpen = false;
     if (!initialized) {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+        std::snprintf(iconPathBuf, sizeof(iconPathBuf), "%s", draft.exeIconPath.c_str());
         std::snprintf(customName, sizeof(customName), "%s",
                       draft.customColors ? draft.customThemeName.c_str() : ThemeName(draft.theme));
         initialized = true;
     }
 
-    ImGui::Text("Theme");
+    SectionHeader("Theme");
     auto syncThemeName = [&]() {
         std::snprintf(customName, sizeof(customName), "%s",
                       draft.customColors ? draft.customThemeName.c_str() : ThemeName(draft.theme));
@@ -831,7 +1168,8 @@ void MainWindow::DrawAppearance() {
         next.scrollbarPadding = current.scrollbarPadding;
         next.popupRounding = current.popupRounding;
         next.controlRounding = current.controlRounding;
-        next.savedThemes = current.savedThemes;
+        next.savedThemes  = current.savedThemes;
+        next.exeIconPath  = current.exeIconPath;
         next.customColors = false;
         next.customThemeName = ThemeName(theme);
         app->RequestAppearance(next);
@@ -913,21 +1251,60 @@ void MainWindow::DrawAppearance() {
         syncThemeName();
     };
 
-    ImGui::SetNextItemWidth(300.0f);
-    ImGui::InputText("##theme_name", customName, sizeof(customName));
-    ImGui::SameLine(0.0f, 4.0f);
-    if (ImGui::Button("v##theme_dropdown", {S(28.0f), 0.0f}))
-        ImGui::OpenPopup("##theme_picker");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Select a theme");
+    const std::string preThemeName = TrimAscii(customName);
+    const std::string preSelectedThemeName = draft.customColors
+        ? draft.customThemeName
+        : ThemeName(draft.theme);
+    const bool showThemeSave = !preThemeName.empty() &&
+        !EqualsIgnoreCase(preThemeName, preSelectedThemeName);
+    const float themeSaveW = ButtonWidthForText("Save", 72.0f);
+    const float themeSaveReserve = showThemeSave ? themeSaveW + ImGui::GetStyle().ItemSpacing.x : 0.0f;
 
-    if (ImGui::BeginPopup("##theme_picker")) {
+    ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - themeSaveReserve));
+    ImGui::InputText("##theme_name", customName, sizeof(customName));
+    const bool themeInputHovered = ImGui::IsItemHovered();
+    const bool themeInputClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const ImVec2 themeInputMin = ImGui::GetItemRectMin();
+    const ImVec2 themeInputMax = ImGui::GetItemRectMax();
+    if (themeInputClicked) {
+        themeDropdownOpen = true;
+        ImGui::SetKeyboardFocusHere(-1);
+    }
+    if (themeInputHovered && !ImGui::IsItemActive())
+        HelpTooltip("Click to select a theme or type a custom theme name");
+    if (showThemeSave) {
+        ImGui::SameLine();
+        if (PaddedButton("Save", themeSaveW)) {
+            const std::string name = TrimAscii(customName);
+            if (IsBuiltInThemeName(name)) {
+                MessageBeep(MB_ICONWARNING);
+                ImGui::OpenPopup("Rename custom theme");
+            } else {
+                saveUserTheme(name);
+            }
+        }
+    }
+
+    if (themeDropdownOpen) {
+        const float dropW = themeInputMax.x - themeInputMin.x;
+        ImGui::SetNextWindowPos({themeInputMin.x, themeInputMax.y}, ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints({dropW, 0.0f}, {dropW, 320.0f});
+        constexpr ImGuiWindowFlags dropFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing;
+        ImGui::Begin("##theme_picker", nullptr, dropFlags);
+        const bool dropdownHovered = ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+            ImGuiHoveredFlags_AllowWhenBlockedByPopup);
         ImGui::TextDisabled("Built-in themes");
         for (int i = 0; i < static_cast<int>(ThemeId::Count); ++i) {
             const ThemeId theme = static_cast<ThemeId>(i);
             const bool selected = !draft.customColors && draft.theme == theme;
-            if (ImGui::Selectable(ThemeName(theme), selected))
+            if (ImGui::Selectable(ThemeName(theme), selected)) {
                 applyBuiltInTheme(theme);
+                themeDropdownOpen = false;
+            }
             if (selected)
                 ImGui::SetItemDefaultFocus();
         }
@@ -939,48 +1316,29 @@ void MainWindow::DrawAppearance() {
         } else {
             for (const SavedAppearanceTheme& saved : draft.savedThemes) {
                 const bool selected = draft.customColors && saved.name == draft.customThemeName;
-                if (ImGui::Selectable(saved.name.c_str(), selected))
+                if (ImGui::Selectable(saved.name.c_str(), selected)) {
                     applyUserTheme(saved);
+                    themeDropdownOpen = false;
+                }
                 if (selected)
                     ImGui::SetItemDefaultFocus();
             }
         }
-        ImGui::EndPopup();
-    }
-
-    const std::string requestedName = TrimAscii(customName);
-    const std::string selectedThemeName = draft.customColors
-        ? draft.customThemeName
-        : ThemeName(draft.theme);
-    const bool themeNameChanged = !requestedName.empty() &&
-        !EqualsIgnoreCase(requestedName, selectedThemeName);
-    if (themeNameChanged) {
-        ImGui::SameLine();
-        if (ImGui::Button("Save theme")) {
-            if (IsBuiltInThemeName(requestedName)) {
-                MessageBeep(MB_ICONWARNING);
-                ImGui::OpenPopup("Rename custom theme");
-            } else {
-                saveUserTheme(requestedName);
-            }
-        }
+        ImGui::End();
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !dropdownHovered && !themeInputHovered)
+            themeDropdownOpen = false;
     }
 
     const std::string themeNameForDelete = TrimAscii(customName);
     const bool canDeleteTheme = !themeNameForDelete.empty() &&
         findUserTheme(themeNameForDelete) != app->GetAppearance().savedThemes.end();
-    if (canDeleteTheme || themeNameChanged)
-        ImGui::SameLine();
+    ImGui::Spacing();
     if (!canDeleteTheme)
         ImGui::BeginDisabled();
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
-    if (ImGui::Button("Delete theme")) {
+    if (DangerButton("Delete theme", 122.0f)) {
         MessageBeep(MB_ICONWARNING);
         ImGui::OpenPopup("Delete custom theme");
     }
-    ImGui::PopStyleColor(3);
     if (!canDeleteTheme)
         ImGui::EndDisabled();
 
@@ -988,16 +1346,12 @@ void MainWindow::DrawAppearance() {
         ImGui::TextWrapped("Delete this user theme?");
         ImGui::TextDisabled("%s", themeNameForDelete.c_str());
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(220, 35, 35, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 65, 65, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(170, 20, 20, 255));
-        if (ImGui::Button("Delete", {S(100.0f), 0.0f})) {
+        if (DangerButton("Delete", 100.0f)) {
             deleteUserTheme(themeNameForDelete);
             ImGui::CloseCurrentPopup();
         }
-        ImGui::PopStyleColor(3);
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", {S(90.0f), 0.0f}) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+        if (PaddedButton("Cancel", 90.0f) || ImGui::IsKeyPressed(ImGuiKey_Escape))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
@@ -1012,13 +1366,16 @@ void MainWindow::DrawAppearance() {
         }
 
         ImGui::TextWrapped("Built-in theme names are reserved. Choose a custom theme name.");
-        ImGui::SetNextItemWidth(260.0f);
+        {
+            const float labelW = ImGui::CalcTextSize("Name").x + ImGui::GetStyle().ItemInnerSpacing.x;
+            ImGui::SetNextItemWidth(-labelW);
+        }
         ImGui::InputText("Name##rename_theme", renameThemeBuf, sizeof(renameThemeBuf));
 
         const std::string renameName = TrimAscii(renameThemeBuf);
         if (renameName.empty() || IsBuiltInThemeName(renameName))
             ImGui::BeginDisabled();
-        if (ImGui::Button("Save custom theme", {S(150.0f), 0.0f})) {
+        if (PaddedButton("Save custom theme", 150.0f)) {
             saveUserTheme(renameName);
             renameThemeBuf[0] = '\0';
             ImGui::CloseCurrentPopup();
@@ -1026,15 +1383,14 @@ void MainWindow::DrawAppearance() {
         if (renameName.empty() || IsBuiltInThemeName(renameName))
             ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", {S(90.0f), 0.0f}) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (PaddedButton("Cancel", 90.0f) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             renameThemeBuf[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
 
-    ImGui::Spacing(); ImGui::SeparatorText("Popup");
-    ImGui::Spacing();
+    SectionHeader("Popup");
     ImGui::Text("Popup opacity");
     ImGui::SetNextItemWidth(240.0f);
     SliderFloatWheel("##opacity", &draft.popupOpacity, 0.1f, 1.0f, "%.2f", 0.05f);
@@ -1081,7 +1437,7 @@ void MainWindow::DrawAppearance() {
             outlineAnimationChanged = true;
         if (outlineAnimationChanged)
             applyOutlineAnimation();
-        if (ImGui::SmallButton("Reset outline animation")) {
+        if (PaddedButton("Reset outline animation", 180.0f)) {
             draft.popupOutlineAnimationSpeed = 1.0f;
             draft.popupOutlineColorSpread = 1.0f;
             draft.popupOutlineColorSharpness = 0.55f;
@@ -1092,13 +1448,12 @@ void MainWindow::DrawAppearance() {
         }
     }
 
-    ImGui::Spacing();
-    ImGui::Text("Default popup size");
+    SectionHeader("Default Popup Size");
     bool sizeChanged = false;
-    ImGui::SetNextItemWidth(100.0f);
+    ImGui::SetNextItemWidth(IntInputWidth(9999));
     sizeChanged |= ImGui::InputInt("W##pw", &draft.popupWidth, 10);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(100.0f);
+    ImGui::SetNextItemWidth(IntInputWidth(9999));
     sizeChanged |= ImGui::InputInt("H##ph", &draft.popupHeight, 10);
     if (sizeChanged) {
         draft.popupWidth = std::max(360, draft.popupWidth);
@@ -1108,14 +1463,14 @@ void MainWindow::DrawAppearance() {
     ImGui::TextDisabled("Current popup: %ldx%ld",
                         static_cast<long>(livePopupSize.cx),
                         static_cast<long>(livePopupSize.cy));
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Use current as default")) {
+    ImGui::Spacing();
+    if (PaddedButton("Use current as default", 180.0f)) {
         app->UseCurrentPopupSizeAsDefault();
         draft = app->GetAppearance();
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Apply popup settings")) {
+    if (PaddedButton("Apply popup settings", 170.0f)) {
         AppearanceSettings next = app->GetAppearance();
         next.popupOpacity = std::clamp(draft.popupOpacity, 0.1f, 1.0f);
         next.popupOutlineStrength = std::clamp(draft.popupOutlineStrength, 0.0f, 1.0f);
@@ -1133,13 +1488,12 @@ void MainWindow::DrawAppearance() {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
 
-    ImGui::Spacing();
-    ImGui::Text("Default settings window size");
+    SectionHeader("Default Settings Window Size");
     bool mainSizeChanged = false;
-    ImGui::SetNextItemWidth(100.0f);
+    ImGui::SetNextItemWidth(IntInputWidth(9999));
     mainSizeChanged |= ImGui::InputInt("W##mw", &draft.mainWindowWidth, 10);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(100.0f);
+    ImGui::SetNextItemWidth(IntInputWidth(9999));
     mainSizeChanged |= ImGui::InputInt("H##mh", &draft.mainWindowHeight, 10);
     if (mainSizeChanged) {
         draft.mainWindowWidth = std::max(800, draft.mainWindowWidth);
@@ -1149,14 +1503,14 @@ void MainWindow::DrawAppearance() {
     ImGui::TextDisabled("Current settings: %ldx%ld",
                         static_cast<long>(liveMainSize.cx),
                         static_cast<long>(liveMainSize.cy));
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Use current as default##main_size")) {
+    ImGui::Spacing();
+    if (PaddedButton("Use current as default##main_size", 180.0f)) {
         app->UseCurrentMainWindowSizeAsDefault();
         draft = app->GetAppearance();
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Apply settings size")) {
+    if (PaddedButton("Apply settings size", 160.0f)) {
         AppearanceSettings next = app->GetAppearance();
         next.mainWindowWidth = std::max(800, draft.mainWindowWidth);
         next.mainWindowHeight = std::max(500, draft.mainWindowHeight);
@@ -1165,8 +1519,7 @@ void MainWindow::DrawAppearance() {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
 
-    ImGui::Spacing(); ImGui::SeparatorText("Font");
-    ImGui::Text("Font");
+    SectionHeader("Font");
     auto applyFont = [&]() {
         AppearanceSettings next = app->GetAppearance();
         next.fontPath = fontPath;
@@ -1184,27 +1537,28 @@ void MainWindow::DrawAppearance() {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     };
 
-    ImGui::SetNextItemWidth(420.0f);
+    ImGui::SetNextItemWidth(-FLT_MIN);
     bool fontPathEdited = ImGui::InputText("##fontPath", fontPath, sizeof(fontPath),
                                            ImGuiInputTextFlags_EnterReturnsTrue);
     bool fontPathDeactivated = ImGui::IsItemDeactivatedAfterEdit();
-    ImGui::SameLine();
-    if (ImGui::Button("Browse")) {
+    ImGui::Spacing();
+    int fontSizeStep = static_cast<int>(std::round(draft.fontSize * 2.0f));
+    if (PaddedButton("Browse", 100.0f)) {
         if (PickFontFile(fontPath, sizeof(fontPath)))
             applyFont();
     }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(240.0f);
+    bool fontSizeChanged = SliderIntWheel("Font size##fontSizeSlider", &fontSizeStep,
+                                          18, 64, "", 1);
+    ImGui::SameLine();
+    ImGui::Text("%.1f", static_cast<float>(fontSizeStep) * 0.5f);
     if (fontPathEdited)
         applyFont();
     else if (fontPathDeactivated) {
         draft.fontPath = fontPath;
     }
 
-    ImGui::SetNextItemWidth(240.0f);
-    int fontSizeStep = static_cast<int>(std::round(draft.fontSize * 2.0f));
-    bool fontSizeChanged = SliderIntWheel("Font size##fontSizeSlider", &fontSizeStep,
-                                          18, 64, "", 1);
-    ImGui::SameLine();
-    ImGui::Text("%.1f", static_cast<float>(fontSizeStep) * 0.5f);
     if (fontSizeChanged) {
         fontSizeStep = std::clamp(fontSizeStep, 18, 64);
         const float snapped = static_cast<float>(fontSizeStep) * 0.5f;
@@ -1214,27 +1568,65 @@ void MainWindow::DrawAppearance() {
         }
     }
 
-    ImGui::Spacing(); ImGui::SeparatorText("Scrollbars");
+    SectionHeader("Exe Icon");
+    ImGui::TextDisabled("Choose a .ico file to use as the Windows Explorer icon for this exe.");
+    ImGui::TextColored({1.0f, 0.36f, 0.32f, 1.0f},
+                       "Restart Clipboard++ after selecting a custom exe icon.");
+    auto applyIconPath = [&]() {
+        AppearanceSettings next = app->GetAppearance();
+        next.exeIconPath = iconPathBuf;
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(iconPathBuf, sizeof(iconPathBuf), "%s", draft.exeIconPath.c_str());
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    };
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    bool iconEdited      = ImGui::InputText("##exeIconPath", iconPathBuf, sizeof(iconPathBuf),
+                                            ImGuiInputTextFlags_EnterReturnsTrue);
+    bool iconDeactivated = ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::Spacing();
+    if (PaddedButton("Browse##icon", 100.0f)) {
+        if (PickIcoFile(iconPathBuf, sizeof(iconPathBuf)))
+            applyIconPath();
+    }
+    ImGui::SameLine();
+    if (PaddedButton("Clear##icon", 90.0f)) {
+        iconPathBuf[0] = '\0';
+        applyIconPath();
+    }
+    if (BlueButton("Restart Clipboard++", 160.0f)) {
+        ShellExecuteA(nullptr, "open", app->ExecutablePath().c_str(), nullptr,
+                      app->WorkingDirectory().c_str(), SW_SHOWNORMAL);
+        DestroyWindow(app->GetHwnd());
+    }
+    if (iconEdited)
+        applyIconPath();
+    else if (iconDeactivated)
+        draft.exeIconPath = iconPathBuf;
+
+    SectionHeader("Scrollbars");
     bool scrollbarChanged = false;
     scrollbarChanged |= ImGui::Checkbox("Show scrollbars", &draft.showScrollbars);
-    ImGui::SetNextItemWidth(240.0f);
-    scrollbarChanged |= SliderFloatWheel("Scrollbar width", &draft.scrollbarSize,
-                                         0.0f, 24.0f, "%.1f", 1.0f);
-    ImGui::SetNextItemWidth(240.0f);
-    scrollbarChanged |= SliderFloatWheel("Scrollbar rounding", &draft.scrollbarRounding,
-                                         0.0f, 16.0f, "%.1f", 1.0f);
-    ImGui::SetNextItemWidth(240.0f);
-    scrollbarChanged |= SliderFloatWheel("Scrollbar padding", &draft.scrollbarPadding,
-                                         0.0f, 8.0f, "%.1f", 0.5f);
-    const AppearanceSettings resetForScrollbars = ThemeDefaults(draft.theme);
-    if (!draft.customColors)
-        ImGui::BeginDisabled();
-    scrollbarChanged |= ColorControlWithReset("Scrollbar background", draft.scrollbarBg, resetForScrollbars.scrollbarBg);
-    scrollbarChanged |= ColorControlWithReset("Scrollbar grab", draft.scrollbarGrab, resetForScrollbars.scrollbarGrab);
-    scrollbarChanged |= ColorControlWithReset("Scrollbar hover", draft.scrollbarGrabHover, resetForScrollbars.scrollbarGrabHover);
-    scrollbarChanged |= ColorControlWithReset("Scrollbar active", draft.scrollbarGrabActive, resetForScrollbars.scrollbarGrabActive);
-    if (!draft.customColors)
-        ImGui::EndDisabled();
+    if (draft.showScrollbars) {
+        ImGui::SetNextItemWidth(240.0f);
+        scrollbarChanged |= SliderFloatWheel("Scrollbar width", &draft.scrollbarSize,
+                                             0.0f, 24.0f, "%.1f", 1.0f);
+        ImGui::SetNextItemWidth(240.0f);
+        scrollbarChanged |= SliderFloatWheel("Scrollbar rounding", &draft.scrollbarRounding,
+                                             0.0f, 16.0f, "%.1f", 1.0f);
+        ImGui::SetNextItemWidth(240.0f);
+        scrollbarChanged |= SliderFloatWheel("Scrollbar padding", &draft.scrollbarPadding,
+                                             0.0f, 8.0f, "%.1f", 0.5f);
+        if (draft.customColors) {
+            const AppearanceSettings resetForScrollbars = ThemeDefaults(draft.theme);
+            scrollbarChanged |= ColorControlWithReset("Scrollbar background", draft.scrollbarBg, resetForScrollbars.scrollbarBg);
+            scrollbarChanged |= ColorControlWithReset("Scrollbar grab", draft.scrollbarGrab, resetForScrollbars.scrollbarGrab);
+            scrollbarChanged |= ColorControlWithReset("Scrollbar hover", draft.scrollbarGrabHover, resetForScrollbars.scrollbarGrabHover);
+            scrollbarChanged |= ColorControlWithReset("Scrollbar active", draft.scrollbarGrabActive, resetForScrollbars.scrollbarGrabActive);
+        }
+    } else {
+        ImGui::TextDisabled("Scrollbar controls are hidden while scrollbars are disabled.");
+    }
     if (scrollbarChanged) {
         draft.scrollbarSize = std::clamp(draft.scrollbarSize, 0.0f, 24.0f);
         draft.scrollbarRounding = std::clamp(draft.scrollbarRounding, 0.0f, 16.0f);
@@ -1256,68 +1648,68 @@ void MainWindow::DrawAppearance() {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
 
-    ImGui::Spacing(); ImGui::SeparatorText("Colors");
+    SectionHeader("Colors");
     const AppearanceSettings reset = ThemeDefaults(draft.theme);
-    if (ImGui::BeginTable("##appearance_color_preview", 2, ImGuiTableFlags_SizingStretchProp)) {
+    bool colorsChanged = ImGui::Checkbox("Enable custom colors", &draft.customColors);
+    if (!draft.customColors) {
+        ImGui::TextDisabled("Color controls are hidden while custom colors are disabled.");
+    } else if (ImGui::BeginTable("##appearance_color_preview", 2, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Colors", ImGuiTableColumnFlags_WidthStretch, 0.55f);
         ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 0.45f);
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
 
-        ImGui::Checkbox("Enable custom colors", &draft.customColors);
-        if (!draft.customColors)
-            ImGui::BeginDisabled();
-        ColorControlWithReset("Window background", draft.windowBg, reset.windowBg);
-        ColorControlWithReset("Panel background", draft.panelBg, reset.panelBg);
-        ColorControlWithReset("Text", draft.text, reset.text);
-        ColorControlWithReset("Muted text", draft.mutedText, reset.mutedText);
-        ColorControlWithReset("Accent", draft.accent, reset.accent);
-        ColorControlWithReset("Hover", draft.hover, reset.hover);
-        ColorControlWithReset("Selected tab", draft.selectedTab, reset.selectedTab);
-        ColorControlWithReset("Button off", draft.buttonOff, reset.buttonOff);
-        ColorControlWithReset("Button on", draft.buttonOn, reset.buttonOn);
-        ColorControlWithReset("Popup close", draft.closeButton, reset.closeButton);
-        ColorControlWithReset("Popup close hover", draft.closeButtonHover, reset.closeButtonHover);
-        ColorControlWithReset("Popup close text", draft.closeButtonText, reset.closeButtonText);
-        ImGui::Spacing();
-        ImGui::TextDisabled("Title bar buttons");
-        ColorControlWithReset("Minimize base",  draft.titleMinBase,   reset.titleMinBase);
-        ColorControlWithReset("Minimize hover", draft.titleMinHover,  reset.titleMinHover);
-        ColorControlWithReset("Restore base",   draft.titleMaxBase,   reset.titleMaxBase);
-        ColorControlWithReset("Restore hover",  draft.titleMaxHover,  reset.titleMaxHover);
-        ColorControlWithReset("Close base",     draft.titleCloseBase, reset.titleCloseBase);
-        ColorControlWithReset("Close hover",    draft.titleCloseHover, reset.titleCloseHover);
-        ImGui::Spacing();
-        ImGui::TextDisabled("Icon");
-        {
-            AppearanceSettings iconPreview = draft.customColors ? draft : ThemeDefaults(draft.theme);
-            float previewSz = 48.0f;
+        const ImGuiTreeNodeFlags groupFlags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+        if (ImGui::TreeNodeEx("Base surfaces and text", groupFlags)) {
+            colorsChanged |= ColorControlWithReset("Window background", draft.windowBg, reset.windowBg);
+            colorsChanged |= ColorControlWithReset("Panel background", draft.panelBg, reset.panelBg);
+            colorsChanged |= ColorControlWithReset("Text", draft.text, reset.text);
+            colorsChanged |= ColorControlWithReset("Muted text", draft.mutedText, reset.mutedText);
+            colorsChanged |= ColorControlWithReset("Accent", draft.accent, reset.accent);
+            colorsChanged |= ColorControlWithReset("Hover", draft.hover, reset.hover);
+            colorsChanged |= ColorControlWithReset("Selected tab", draft.selectedTab, reset.selectedTab);
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNodeEx("Popup controls", groupFlags)) {
+            colorsChanged |= ColorControlWithReset("Button off", draft.buttonOff, reset.buttonOff);
+            colorsChanged |= ColorControlWithReset("Button on", draft.buttonOn, reset.buttonOn);
+            colorsChanged |= ColorControlWithReset("Popup close", draft.closeButton, reset.closeButton);
+            colorsChanged |= ColorControlWithReset("Popup close hover", draft.closeButtonHover, reset.closeButtonHover);
+            colorsChanged |= ColorControlWithReset("Popup close text", draft.closeButtonText, reset.closeButtonText);
+            colorsChanged |= ColorControlWithReset("Opacity knob fill", draft.opacityKnobFill, reset.opacityKnobFill);
+            colorsChanged |= ColorControlWithReset("Opacity knob ring", draft.opacityKnobRing, reset.opacityKnobRing);
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNodeEx("Settings title bar", groupFlags)) {
+            colorsChanged |= ColorControlWithReset("Title bar background", draft.titleBarBg, reset.titleBarBg);
+            colorsChanged |= ColorControlWithReset("Title bar divider", draft.titleBarBorder, reset.titleBarBorder);
+            colorsChanged |= ColorControlWithReset("Title text", draft.titleBarText, reset.titleBarText);
+            colorsChanged |= ColorControlWithReset("Minimize base",  draft.titleMinBase,   reset.titleMinBase);
+            colorsChanged |= ColorControlWithReset("Minimize hover", draft.titleMinHover,  reset.titleMinHover);
+            colorsChanged |= ColorControlWithReset("Minimize glyph", draft.titleMinGlyph,  reset.titleMinGlyph);
+            colorsChanged |= ColorControlWithReset("Restore base",   draft.titleMaxBase,   reset.titleMaxBase);
+            colorsChanged |= ColorControlWithReset("Restore hover",  draft.titleMaxHover,  reset.titleMaxHover);
+            colorsChanged |= ColorControlWithReset("Restore glyph",  draft.titleMaxGlyph,  reset.titleMaxGlyph);
+            colorsChanged |= ColorControlWithReset("Close base",     draft.titleCloseBase,  reset.titleCloseBase);
+            colorsChanged |= ColorControlWithReset("Close hover",    draft.titleCloseHover, reset.titleCloseHover);
+            colorsChanged |= ColorControlWithReset("Close glyph",    draft.titleCloseGlyph, reset.titleCloseGlyph);
+            colorsChanged |= ColorControlWithReset("Exit base",      draft.titleExitBase,   reset.titleExitBase);
+            colorsChanged |= ColorControlWithReset("Exit hover",     draft.titleExitHover,  reset.titleExitHover);
+            colorsChanged |= ColorControlWithReset("Exit glyph",     draft.titleExitGlyph,  reset.titleExitGlyph);
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNodeEx("Clipboard icon", groupFlags)) {
+            const float previewSz = 48.0f;
             ImGui::BeginGroup();
-            ColorControlWithReset("Board top",    draft.iconBoardTop,    reset.iconBoardTop);
-            ColorControlWithReset("Board bottom", draft.iconBoardBottom, reset.iconBoardBottom);
-            ColorControlWithReset("Paper",        draft.iconPaper,       reset.iconPaper);
-            ColorControlWithReset("Margin line",  draft.iconMarginLine,  reset.iconMarginLine);
-            ColorControlWithReset("Ruled lines",  draft.iconRuledLines,  reset.iconRuledLines);
+            colorsChanged |= ColorControlWithReset("Board top",    draft.iconBoardTop,    reset.iconBoardTop);
+            colorsChanged |= ColorControlWithReset("Board bottom", draft.iconBoardBottom, reset.iconBoardBottom);
+            colorsChanged |= ColorControlWithReset("Paper",        draft.iconPaper,       reset.iconPaper);
+            colorsChanged |= ColorControlWithReset("Margin line",  draft.iconMarginLine,  reset.iconMarginLine);
+            colorsChanged |= ColorControlWithReset("Ruled lines",  draft.iconRuledLines,  reset.iconRuledLines);
             ImGui::EndGroup();
             ImGui::SameLine(0, 16.0f);
-            // Live icon preview using draft colors (always reflects current pickers)
-            AppearanceSettings livePreview = draft;
-            DrawClipboardIcon(previewSz, livePreview);
-        }
-        ColorControlWithReset("Opacity knob fill", draft.opacityKnobFill, reset.opacityKnobFill);
-        ColorControlWithReset("Opacity knob ring", draft.opacityKnobRing, reset.opacityKnobRing);
-        if (!draft.customColors)
-            ImGui::EndDisabled();
-        if (ImGui::Button("Apply colors")) {
-            AppearanceSettings next = draft;
-            next.fontPath = app->GetAppearance().fontPath;
-            next.fontSize = app->GetAppearance().fontSize;
-            next.uiScale = 1.0f;
-            next.savedThemes = app->GetAppearance().savedThemes;
-            app->RequestAppearance(next);
-            draft = app->GetAppearance();
-            syncThemeName();
-            std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+            DrawClipboardIcon(previewSz, draft);
+            ImGui::TreePop();
         }
 
         ImGui::TableSetColumnIndex(1);
@@ -1326,6 +1718,17 @@ void MainWindow::DrawAppearance() {
         ImGui::Spacing();
         DrawSettingsPreview(draft);
         ImGui::EndTable();
+    }
+    if (colorsChanged) {
+        AppearanceSettings next = draft;
+        next.fontPath = app->GetAppearance().fontPath;
+        next.fontSize = app->GetAppearance().fontSize;
+        next.uiScale = 1.0f;
+        next.savedThemes = app->GetAppearance().savedThemes;
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        syncThemeName();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
 
     ImGui::Spacing(); ImGui::SeparatorText("Advanced shape");
@@ -1454,8 +1857,7 @@ void MainWindow::DrawImages() {
     // -- Capture toggle --------------------------------------------------------
     changed |= ImGui::Checkbox("Capture images from clipboard", &s.captureImages);
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("When off, images copied to the clipboard are ignored entirely.");
+    HelpTooltip("When off, images copied to the clipboard are ignored entirely.");
     ImGui::Spacing();
 
     if (!s.captureImages)
@@ -1469,10 +1871,9 @@ void MainWindow::DrawImages() {
     fmtChanged |= ImGui::RadioButton("JPEG — convert to JPEG (lossy, smallest file size)", &fmt, 1);
     fmtChanged |= ImGui::RadioButton("Raw — store exact clipboard bytes, no GDI+ conversion", &fmt, 2);
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Raw: DIB clipboard data is stored as-is.\n"
-                          "PNG clipboard data (from browsers, Snipping Tool) is stored as PNG.\n"
-                          "Scale-down is not available in Raw mode.");
+    HelpTooltip("Raw: DIB clipboard data is stored as-is.\n"
+                "PNG clipboard data (from browsers, Snipping Tool) is stored as PNG.\n"
+                "Scale-down is not available in Raw mode.");
     if (fmtChanged) { s.format = static_cast<ImageFormat>(fmt); changed = true; }
 
     if (s.format == ImageFormat::JPEG) {
@@ -1480,8 +1881,7 @@ void MainWindow::DrawImages() {
         if (SliderIntWheel("JPEG quality##jpegq", &s.jpegQuality, 1, 100, "%d%%", 5))
             changed = true;
         ImGui::SameLine(); ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Higher = better quality, larger file.\n85 is a good default.");
+        HelpTooltip("Higher = better quality, larger file.\n85 is a good default.");
     }
 
     // -- Scale-down ------------------------------------------------------------
@@ -1491,10 +1891,9 @@ void MainWindow::DrawImages() {
     if (rawMode) ImGui::BeginDisabled();
     changed |= ImGui::Checkbox("Scale down large images before storing", &s.scaleDown);
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Proportionally resizes so the longest side is at most Max dimension.\n"
-                          "Useful for screenshots or high-DPI images.\n"
-                          "Not available in Raw storage mode.");
+    HelpTooltip("Proportionally resizes so the longest side is at most Max dimension.\n"
+                "Useful for screenshots or high-DPI images.\n"
+                "Not available in Raw storage mode.");
     if (s.scaleDown && !rawMode) {
         ImGui::SetNextItemWidth(140.0f);
         if (ImGui::InputInt("Max dimension (px)##maxdim", &s.maxDimension, 64)) {
@@ -1510,8 +1909,7 @@ void MainWindow::DrawImages() {
     ImGui::SeparatorText("Skip small images");
     changed |= ImGui::Checkbox("Ignore images smaller than minimum size", &s.skipSmallImages);
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Avoids storing tiny icons, favicons, or copy-protection placeholder images.");
+    HelpTooltip("Avoids storing tiny icons, favicons, or copy-protection placeholder images.");
     if (s.skipSmallImages) {
         ImGui::SetNextItemWidth(100.0f);
         if (ImGui::InputInt("Min W##minw", &s.minWidth, 8)) {
@@ -1536,8 +1934,7 @@ void MainWindow::DrawImages() {
         changed = true;
     }
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Oldest images are purged when this limit is exceeded.\nSet to 0 for unlimited.");
+    HelpTooltip("Oldest images are purged when this limit is exceeded.\nSet to 0 for unlimited.");
     if (s.maxImages == 0)
         ImGui::TextDisabled("Unlimited storage — images accumulate until manually cleared.");
     else
@@ -1645,11 +2042,19 @@ void MainWindow::DrawDeveloper() {
     bool changed = false;
 
     changed |= ImGui::Checkbox("Enable Developer Mode", &dev.enabled);
+    if (changed)
+        app->SetDeveloperSettings(dev);
+
+    if (!dev.enabled) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("Developer tools are hidden until Developer Mode is enabled.");
+        return;
+    }
+
     ImGui::Spacing();
     changed |= ImGui::Checkbox("Enable CLI interface", &dev.cliEnabled);
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("When off, runtime CLI commands are blocked. Help, status, config, and --set still work.");
+    HelpTooltip("When off, runtime CLI commands are blocked. Help, status, config, and --set still work.");
     changed |= ImGui::Checkbox("Show source process metadata", &dev.showSourceProcess);
     changed |= ImGui::Checkbox("Enable developer event log", &dev.eventLogEnabled);
 
@@ -1658,8 +2063,6 @@ void MainWindow::DrawDeveloper() {
 
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
     ImGui::TextDisabled("Advanced Clipboard Routing");
-    if (!dev.enabled)
-        ImGui::BeginDisabled();
 
     if (ImGui::SmallButton("Bind active clipboard to focused app"))
         app->BindActiveClipboardToForegroundProcess();
@@ -1671,9 +2074,6 @@ void MainWindow::DrawDeveloper() {
     bool autoCreate = app->GetAutoCreateClipboardByProcess();
     if (ImGui::Checkbox("Auto-create clipboard for focused app", &autoCreate))
         app->SetAutoCreateClipboardByProcess(autoCreate);
-
-    if (!dev.enabled)
-        ImGui::EndDisabled();
 
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
     ImGui::TextDisabled("Runtime Diagnostics");

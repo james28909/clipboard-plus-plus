@@ -542,8 +542,10 @@ void PopupWindow::DrawTitleBar() {
         ActivateKeyboardCapture();
         m_dialogTextCapture = true;
     }
-    if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
-        m_clipboardDropdownOpen = !m_clipboardDropdownOpen;
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        m_clipboardDropdownOpen = true;
+        ImGui::SetKeyboardFocusHere(-1);
+    }
     const bool clipboardInputHovered = ImGui::IsItemHovered();
     if (clipboardInputHovered && !clipboardNameActive)
         ImGui::SetTooltip("Click to select or create a clipboard profile");

@@ -1,6 +1,8 @@
 #include <windows.h>
+#include <shlobj.h>
 
 #include "app/Application.h"
+#include "app/IconPatcher.h"
 #include "cli/CLI.h"
 #include "ipc/IpcClient.h"
 #include "util/Win32Util.h"
@@ -22,6 +24,36 @@ void ConfigureDpiAwareness() {
 int wmain(int argc, wchar_t** argv) {
     ConfigureDpiAwareness();
     HINSTANCE hInstance = GetModuleHandleW(nullptr);
+
+    // Internal: spawned by Shutdown() to patch the exe after parent exits.
+    // Usage: clipboardpp --patch-icon <exePath> <icoPath> <parentPid>
+    if (argc >= 5 && win32util::EqW(argv[1], L"--patch-icon")) {
+        DWORD parentPid = static_cast<DWORD>(_wtoi(argv[4]));
+        if (parentPid) {
+            HANDLE hParent = OpenProcess(SYNCHRONIZE, FALSE, parentPid);
+            if (hParent) {
+                WaitForSingleObject(hParent, 15000);
+                CloseHandle(hParent);
+            } else {
+                Sleep(1000);
+            }
+        }
+        DWORD err = 0;
+        bool ok = IconPatcher::PatchExeIcon(argv[2], argv[3], &err);
+
+        // Write result log so failures are always diagnosable
+        wchar_t logDir[MAX_PATH]{};
+        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, logDir))) {
+            std::wstring logPath = std::wstring(logDir) + L"\\Clipboard++\\iconpatch.log";
+            if (FILE* fp = _wfopen(logPath.c_str(), L"w")) {
+                fwprintf(fp, L"%s\nexe: %s\nico: %s\nerr: %lu\n",
+                         ok ? L"SUCCESS" : L"FAILED",
+                         argv[2], argv[3], err);
+                fclose(fp);
+            }
+        }
+        return ok ? 0 : 1;
+    }
 
     if (argc > 1 && !win32util::EqW(argv[1], L"--clipboardpp-run-gui"))
         return RunCLI(argc, argv);

@@ -34,12 +34,21 @@ struct SavedAppearanceTheme {
     ImVec4 closeButton{0.184f, 0.196f, 0.220f, 1.0f};
     ImVec4 closeButtonHover{0.769f, 0.169f, 0.110f, 1.0f};
     ImVec4 closeButtonText{0.863f, 0.863f, 0.863f, 1.0f};
+    ImVec4 titleBarBg{0.118f, 0.118f, 0.118f, 1.0f};
+    ImVec4 titleBarBorder{0.204f, 0.204f, 0.204f, 1.0f};
+    ImVec4 titleBarText{0.863f, 0.863f, 0.863f, 1.0f};
     ImVec4 titleMinBase{0.0f, 0.0f, 0.0f, 0.0f};
     ImVec4 titleMaxBase{0.0f, 0.0f, 0.0f, 0.0f};
     ImVec4 titleCloseBase{0.0f, 0.0f, 0.0f, 0.0f};
     ImVec4 titleMinHover{0.294f, 0.561f, 1.0f, 1.0f};
     ImVec4 titleMaxHover{0.294f, 0.561f, 1.0f, 1.0f};
     ImVec4 titleCloseHover{0.769f, 0.169f, 0.110f, 1.0f};
+    ImVec4 titleExitBase{0.0f, 0.0f, 0.0f, 0.0f};
+    ImVec4 titleExitHover{0.800f, 0.350f, 0.0f, 1.0f};
+    ImVec4 titleMinGlyph{0.588f, 0.588f, 0.588f, 1.0f};
+    ImVec4 titleMaxGlyph{0.588f, 0.588f, 0.588f, 1.0f};
+    ImVec4 titleExitGlyph{0.863f, 0.863f, 0.863f, 1.0f};
+    ImVec4 titleCloseGlyph{0.863f, 0.863f, 0.863f, 1.0f};
     ImVec4 iconBoardTop{0.302f, 0.659f, 1.0f,   1.0f};
     ImVec4 iconBoardBottom{0.051f, 0.239f, 0.710f, 1.0f};
     ImVec4 iconPaper{1.0f, 1.0f, 1.0f, 1.0f};
@@ -76,6 +85,8 @@ struct AppearanceSettings {
     int mainWindowHeight{750};
     std::string fontPath{"C:\\Windows\\Fonts\\segoeui.ttf"};
     float fontSize{15.0f};
+    std::string exeIconPath{}; // path to .ico; patched into the exe on shutdown
+    std::string exeIconThemeHash{}; // theme color hash of the last theme-icon patch ("" = custom or none)
     float uiScale{1.0f};
     float dpiScale{1.0f};
     bool customColors{false};
@@ -92,12 +103,21 @@ struct AppearanceSettings {
     ImVec4 closeButton{0.184f, 0.196f, 0.220f, 1.0f};
     ImVec4 closeButtonHover{0.769f, 0.169f, 0.110f, 1.0f};
     ImVec4 closeButtonText{0.863f, 0.863f, 0.863f, 1.0f};
+    ImVec4 titleBarBg{0.118f, 0.118f, 0.118f, 1.0f};
+    ImVec4 titleBarBorder{0.204f, 0.204f, 0.204f, 1.0f};
+    ImVec4 titleBarText{0.863f, 0.863f, 0.863f, 1.0f};
     ImVec4 titleMinBase{0.0f, 0.0f, 0.0f, 0.0f};
     ImVec4 titleMaxBase{0.0f, 0.0f, 0.0f, 0.0f};
     ImVec4 titleCloseBase{0.0f, 0.0f, 0.0f, 0.0f};
     ImVec4 titleMinHover{0.294f, 0.561f, 1.0f, 1.0f};
     ImVec4 titleMaxHover{0.294f, 0.561f, 1.0f, 1.0f};
     ImVec4 titleCloseHover{0.769f, 0.169f, 0.110f, 1.0f};
+    ImVec4 titleExitBase{0.0f, 0.0f, 0.0f, 0.0f};
+    ImVec4 titleExitHover{0.800f, 0.350f, 0.0f, 1.0f};
+    ImVec4 titleMinGlyph{0.588f, 0.588f, 0.588f, 1.0f};
+    ImVec4 titleMaxGlyph{0.588f, 0.588f, 0.588f, 1.0f};
+    ImVec4 titleExitGlyph{0.863f, 0.863f, 0.863f, 1.0f};
+    ImVec4 titleCloseGlyph{0.863f, 0.863f, 0.863f, 1.0f};
     ImVec4 iconBoardTop{0.302f, 0.659f, 1.0f,   1.0f};
     ImVec4 iconBoardBottom{0.051f, 0.239f, 0.710f, 1.0f};
     ImVec4 iconPaper{1.0f, 1.0f, 1.0f, 1.0f};

@@ -78,6 +78,7 @@ struct KeyBinding {
 
 struct HotkeySettings {
     std::vector<KeyBinding> bindings;
+    std::vector<std::string> passthroughHotkeys;
     bool hiddenPasteCtrl{true};
     bool hiddenPasteShift{false};
     bool hiddenPasteAlt{true};
@@ -99,8 +100,10 @@ public:
     const HotkeySettings& GetSettings() const { return m_settings; }
 
     void BeginCapture();
+    void CancelCapture();
     bool IsCapturing() const { return m_captureActive; }
     bool ConsumeCapturedBinding(KeyBinding& binding);
+    std::string CapturePreviewText() const;
 
     // Default bindings returned as a starting point for settings UI.
     static std::vector<KeyBinding> DefaultBindings();

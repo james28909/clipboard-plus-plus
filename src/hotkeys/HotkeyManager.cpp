@@ -6,10 +6,105 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <sstream>
 #include <utility>
 
 HotkeyManager* HotkeyManager::s_instance = nullptr;
+
+namespace {
+
+std::string Trim(std::string value) {
+    auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
+    while (!value.empty() && isSpace(static_cast<unsigned char>(value.front())))
+        value.erase(value.begin());
+    while (!value.empty() && isSpace(static_cast<unsigned char>(value.back())))
+        value.pop_back();
+    return value;
+}
+
+std::string Upper(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return value;
+}
+
+bool VKeyFromName(const std::string& token, UINT& vk) {
+    const std::string key = Upper(Trim(token));
+    if (key.size() == 1 && key[0] >= 'A' && key[0] <= 'Z') {
+        vk = static_cast<UINT>(key[0]);
+        return true;
+    }
+    if (key.size() == 1 && key[0] >= '0' && key[0] <= '9') {
+        vk = static_cast<UINT>(key[0]);
+        return true;
+    }
+    if (key.size() >= 2 && key[0] == 'F') {
+        int number = std::atoi(key.c_str() + 1);
+        if (number >= 1 && number <= 24) {
+            vk = VK_F1 + static_cast<UINT>(number - 1);
+            return true;
+        }
+    }
+    if (key == "TAB") vk = VK_TAB;
+    else if (key == "ESC" || key == "ESCAPE") vk = VK_ESCAPE;
+    else if (key == "ENTER" || key == "RETURN") vk = VK_RETURN;
+    else if (key == "SPACE") vk = VK_SPACE;
+    else if (key == "BACKSPACE") vk = VK_BACK;
+    else if (key == "DELETE" || key == "DEL") vk = VK_DELETE;
+    else if (key == "INSERT" || key == "INS") vk = VK_INSERT;
+    else if (key == "HOME") vk = VK_HOME;
+    else if (key == "END") vk = VK_END;
+    else if (key == "PAGEUP") vk = VK_PRIOR;
+    else if (key == "PAGEDOWN") vk = VK_NEXT;
+    else if (key == ",") vk = VK_OEM_COMMA;
+    else if (key == ".") vk = VK_OEM_PERIOD;
+    else if (key == "-") vk = VK_OEM_MINUS;
+    else if (key == "=" || key == "+") vk = VK_OEM_PLUS;
+    else return false;
+    return true;
+}
+
+bool ParseHotkeyText(const std::string& text, KeyBinding& out) {
+    KeyBinding parsed{};
+    std::stringstream ss(text);
+    std::string token;
+    bool hasKey = false;
+    while (std::getline(ss, token, '+')) {
+        const std::string part = Upper(Trim(token));
+        if (part.empty())
+            continue;
+        if (part == "CTRL" || part == "CONTROL")
+            parsed.ctrl = true;
+        else if (part == "SHIFT")
+            parsed.shift = true;
+        else if (part == "ALT" || part == "MENU")
+            parsed.alt = true;
+        else {
+            UINT vk = 0;
+            if (!VKeyFromName(part, vk))
+                return false;
+            parsed.vkey = vk;
+            hasKey = true;
+        }
+    }
+    if (!hasKey)
+        return false;
+    out = parsed;
+    return true;
+}
+
+bool MatchesPassthrough(const HotkeySettings& settings, bool ctrl, bool shift, bool alt, UINT vk) {
+    for (const std::string& text : settings.passthroughHotkeys) {
+        KeyBinding parsed{};
+        if (ParseHotkeyText(text, parsed) && parsed.Matches(ctrl, shift, alt, vk))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
 
 #ifdef _WIN32
 bool HotkeyManager::Install(HWND msgTarget) {
@@ -62,11 +157,28 @@ void HotkeyManager::BeginCapture() {
 #endif
 }
 
+void HotkeyManager::CancelCapture() {
+    m_captureActive = false;
+    m_captureReady = false;
+    m_capturedBinding = {};
+}
+
 bool HotkeyManager::ConsumeCapturedBinding(KeyBinding& binding) {
     if (!m_captureReady) return false;
     binding = m_capturedBinding;
     m_captureReady = false;
+    m_captureActive = false;
     return true;
+}
+
+std::string HotkeyManager::CapturePreviewText() const {
+    if (m_captureReady)
+        return BindingText(m_capturedBinding);
+    if (m_captureActive) {
+        const std::string modifiers = ModifiersText(m_ctrlDown, m_shiftDown, m_altDown);
+        return modifiers == "None" ? "Press keys..." : modifiers + "+";
+    }
+    return "Press New to capture a hotkey";
 }
 
 std::vector<KeyBinding> HotkeyManager::DefaultBindings() {
@@ -87,6 +199,7 @@ HotkeySettings HotkeyManager::DefaultSettings() {
     settings.hiddenPasteShift = false;
     settings.hiddenPasteAlt = true;
     settings.hiddenPasteFunctionKeys = true;
+    settings.passthroughHotkeys = {"Alt+Tab", "Alt+F4"};
     return settings;
 }
 
@@ -272,6 +385,9 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         m_captureActive = false;
         return true;
     }
+
+    if (MatchesPassthrough(m_settings, ctrl, shift, alt, vk))
+        return false;
 
     for (const auto& b : m_bindings) {
         if (b.Matches(ctrl, shift, alt, vk)) {
