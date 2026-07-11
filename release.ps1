@@ -106,13 +106,14 @@ if (-not (Test-Path $androidRoot)) {
 }
 
 $gradleCmd = Get-Command gradle -ErrorAction SilentlyContinue
-if (-not $gradleCmd) {
+$gradleExe = if ($gradleCmd) { $gradleCmd.Source } else { $null }
+if (-not $gradleExe) {
     $localGradle = "C:\Gradle\gradle-8.10\bin\gradle.bat"
     if (Test-Path $localGradle) {
-        $gradleCmd = Get-Item $localGradle
+        $gradleExe = $localGradle
     }
 }
-if (-not $gradleCmd) {
+if (-not $gradleExe) {
     Write-Fail "Gradle not found on PATH and C:\Gradle\gradle-8.10\bin\gradle.bat was not found"
 }
 
@@ -136,7 +137,7 @@ if (-not $env:ANDROID_HOME) {
 
 Push-Location $androidRoot
 try {
-    & $gradleCmd.Source ":app:assembleDebug"
+    & $gradleExe ":app:assembleDebug"
     if ($LASTEXITCODE -ne 0) { Write-Fail "Android Gradle build failed" }
 } finally {
     Pop-Location
