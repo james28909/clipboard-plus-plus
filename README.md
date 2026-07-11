@@ -1,6 +1,6 @@
 # Clipboard++
 
-A lean, modern Windows clipboard manager built with C++17, Dear ImGui (docking branch), DirectX 11, and CMake. Runs as a system tray app with a main settings window, an always-on-top quick paste popup, configurable hotkeys, multiple named clipboard profiles, image capture, and a CLI.
+A lean, modern Windows clipboard manager built with C++17, Dear ImGui (docking branch), DirectX 11, and CMake. Runs as a system tray app with a main settings window, an always-on-top quick paste popup, configurable hotkeys, multiple named clipboard profiles, image capture, Android clipboard sync, and a CLI.
 
 **Current release:** Beta 3  
 **Platform:** Windows 10 / 11 — no installer, no runtime required  
@@ -10,11 +10,13 @@ A lean, modern Windows clipboard manager built with C++17, Dear ImGui (docking b
 
 ## Projects in this repository
 
-This repository contains three standalone Win32 / ImGui tools that share the same icon, theme, and build infrastructure.
+This repository contains multiple Clipboard++ tools and companion projects that share the same build and configuration direction.
 
 | Project | Executable | Description |
 |---|---|---|
 | **Clipboard++** | `clipboardpp.exe` | Main clipboard manager — system tray app, popup, settings |
+| **Clipboard++ Android API** | Android APK | Companion Android app for Android clipboard capture and sync |
+| **Clipboard++ IDE** | `clipboardpp_ide.exe` | Bundled editor target for text/script workflows |
 | **SQLite Editor** | `sqlite_editor.exe` | Standalone SQLite database viewer and query tool |
 | **JSON Viewer** | `json_viewer.exe` | Standalone JSON file viewer with syntax highlighting and tree view |
 
@@ -42,9 +44,26 @@ Appearance settings (page 2):
 System tray popup:
 ![System tray popup](docs/images/systray-popup.png)
 
+Android sync settings:
+![Android sync settings](docs/images/android-settings.png)
+
+Popup Android entry point:
+![Popup Android entry point](docs/images/android-popup-entry.png)
+
 ---
 
 ## Features
+
+### Android Clipboard Bridge
+- Companion Android app under `android/clipboardpp-android-api`
+- Android clipboard capture through the enabled Clipboard++ Capture Keyboard / IME path
+- Floating Android sync button that captures the current Android clipboard and pushes new items to Windows
+- Dedicated Android list in the Clipboard++ popup
+- Persistent Android endpoint setting in Settings -> Android
+- Manual sync and endpoint health-test controls from Clipboard++
+- Send one or many Clipboard++ profile items to Android from the item context menu
+- Send highlighted Windows text to Android with the configurable `Ctrl+Alt+Shift+Z` hotkey
+- Missing-item reconciliation so already captured Android items can be pushed again if Windows does not currently have them
 
 ### Clipboard Capture
 - Monitors the Windows clipboard continuously for text, images, file/folder paths, and structured content
@@ -113,6 +132,7 @@ All configurable from Settings → Hotkeys.
 | Open popup with search focused | `Ctrl+Shift+S` |
 | Open settings | `Ctrl+Shift+,` |
 | Web search current clipboard | `Ctrl+Shift+G` |
+| Send highlighted selection to Android | `Ctrl+Alt+Shift+Z` |
 | Hidden paste — history slot | `Ctrl+Alt+1-9`, `A-Z`, `F1-F12` |
 | Hidden paste — pinned slot | `Ctrl+Shift+1-9`, `A-Z`, `F1-F12` |
 | Select clipboard profile slot | `Alt+Shift+1-9`, `A-Z`, `F1-F12` |
@@ -199,13 +219,17 @@ Drop this in `%APPDATA%\AwesomeMenu\menus\` and right-click any drive — it app
 
 ```text
 src/                  Clipboard++ source
+  android/            Windows-side Android HTTP client and sync server
   app/                Application lifetime, config, tray, main window ownership
   clipboard/          Clipboard items, history, monitor, content detection, persistence
   cli/                Command-line interface
+  filters/            Custom filter matching and routing
   hotkeys/            Global keyboard/mouse hook and configurable bindings
   ipc/                IPC helpers for CLI → GUI communication
   ui/                 All windows (main, popup, tray popup, debug), appearance/theme engine
 
+android/              Android companion app project
+ide/                  Clipboard++ IDE/editor sub-project
 dbviewer/             SQLite Editor sub-project
   src/                C++ source
   res/                Windows resource file and manifest
@@ -219,7 +243,7 @@ jsonviewer/           JSON Viewer sub-project
 resources/            Clipboard++ Windows resources (manifest, icon)
 icons/                SVG sources + ICO build tools (see icons/README.md)
 themes/               Built-in theme JSON presets
-third_party/          Vendored Dear ImGui, nlohmann/json, SQLite3
+third_party/          Vendored Dear ImGui, nlohmann/json, SQLite3, PCRE2, Scintilla
 assets/fonts/         Bundled fonts
 docs/images/          Screenshots
 tools/                Build helpers
@@ -243,10 +267,12 @@ AGENTS.md             Detailed implementation notes for coding agents
 ### Build script (recommended)
 
 ```powershell
-# Build all three projects, Release
+# Build all Windows projects, Release
 .\build.ps1
 
 # Build a specific target
+.\build.ps1 -Target clipboardpp
+.\build.ps1 -Target clipboardpp_ide
 .\build.ps1 -Target sqlite_editor
 .\build.ps1 -Target json_viewer -Config Debug
 
@@ -261,13 +287,26 @@ AGENTS.md             Detailed implementation notes for coding agents
 Output paths:
 ```
 build\Release\clipboardpp\clipboardpp.exe
+build\Release\clipboardpp_ide\clipboardpp_ide.exe
 build\Release\sqlite_editor\sqlite_editor.exe
 build\Release\json_viewer\json_viewer.exe
 
 build\Debug\clipboardpp\clipboardpp.exe
+build\Debug\clipboardpp_ide\clipboardpp_ide.exe
 build\Debug\sqlite_editor\sqlite_editor.exe
 build\Debug\json_viewer\json_viewer.exe
 ```
+
+### Android companion app
+
+The Android companion is a separate Gradle project:
+
+```powershell
+cd android\clipboardpp-android-api
+gradle :app:assembleDebug
+```
+
+If Gradle is not on PATH, use your local Gradle install or open `android/clipboardpp-android-api` in Android Studio. See [android/clipboardpp-android-api/README.md](android/clipboardpp-android-api/README.md) for setup and endpoint details.
 
 ### Manual CMake
 
@@ -330,6 +369,8 @@ You can also import any `.ttf` or `.otf` font manually from the Appearance setti
 %APPDATA%\Clipboard++\images\            Captured images
 ```
 
+The Android device API endpoint is stored in the same config file under the `android.deviceEndpoint` setting.
+
 ---
 
 ## Development Status
@@ -349,6 +390,10 @@ You can also import any `.ttf` or `.otf` font manually from the Appearance setti
 - Privacy: secret detection, auto-discard, process exclusion, clear-on-lock
 - CLI/IPC interface
 - System tray popup menu
+- Android clipboard bridge: Android companion app, Windows sync server, dedicated popup list, endpoint persistence, and send-to-Android actions
+- Global send-selection-to-Android hotkey
+- Custom filters and filter matcher tests
+- Bundled editor/IDE target
 - SQLite Editor — standalone database viewer (sub-project)
 - JSON Viewer — standalone JSON viewer (sub-project)
 
