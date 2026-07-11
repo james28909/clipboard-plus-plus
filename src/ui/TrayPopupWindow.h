@@ -46,5 +46,5 @@ private:
     AppearanceSettings m_appearance{};
     bool m_visible{false};
     int  m_width{230};
-    int  m_height{214};
+    int  m_height{248};
 };

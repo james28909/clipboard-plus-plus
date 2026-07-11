@@ -261,6 +261,8 @@ SavedAppearanceTheme ToSavedTheme(const AppearanceSettings& settings, const std:
     saved.scrollbarRounding = effective.scrollbarRounding;
     saved.scrollbarPadding = effective.scrollbarPadding;
     saved.popupRounding = effective.popupRounding;
+    saved.popupButtonRowPadding = effective.popupButtonRowPadding;
+    saved.popupButtonColumnPadding = effective.popupButtonColumnPadding;
     saved.controlRounding = effective.controlRounding;
     return saved;
 }
@@ -311,6 +313,8 @@ void ApplySavedTheme(AppearanceSettings& settings, const SavedAppearanceTheme& s
     settings.scrollbarRounding = saved.scrollbarRounding;
     settings.scrollbarPadding = saved.scrollbarPadding;
     settings.popupRounding = saved.popupRounding;
+    settings.popupButtonRowPadding = saved.popupButtonRowPadding;
+    settings.popupButtonColumnPadding = saved.popupButtonColumnPadding;
     settings.controlRounding = saved.controlRounding;
 }
 

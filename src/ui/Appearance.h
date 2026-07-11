@@ -65,6 +65,8 @@ struct SavedAppearanceTheme {
     float scrollbarRounding{7.0f};
     float scrollbarPadding{2.0f};
     float popupRounding{6.0f};
+    float popupButtonRowPadding{0.0f};
+    float popupButtonColumnPadding{5.0f};
     float controlRounding{3.0f};
 };
 
@@ -72,6 +74,7 @@ struct AppearanceSettings {
     ThemeId theme{ThemeId::DarkDefault};
     float popupOpacity{0.95f};
     float popupOutlineStrength{0.65f};
+    int popupOutlineEffect{0}; // 0=solid 1=rainbow 2=pulse 3=comet
     bool popupOutlineAnimated{false};
     float popupOutlineAnimationSpeed{1.0f};
     float popupOutlineColorSharpness{0.55f};
@@ -134,6 +137,8 @@ struct AppearanceSettings {
     float scrollbarRounding{7.0f};
     float scrollbarPadding{2.0f};
     float popupRounding{6.0f};
+    float popupButtonRowPadding{0.0f};
+    float popupButtonColumnPadding{5.0f};
     float controlRounding{3.0f};
     std::vector<SavedAppearanceTheme> savedThemes;
 };

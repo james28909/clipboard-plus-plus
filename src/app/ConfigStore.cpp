@@ -121,6 +121,8 @@ void LoadColorFields(T& s, const json& j) {
     s.scrollbarRounding= std::clamp(j.value("scrollbarRounding",s.scrollbarRounding),0.0f, 16.0f);
     s.scrollbarPadding = std::clamp(j.value("scrollbarPadding", s.scrollbarPadding), 0.0f,  8.0f);
     s.popupRounding    = std::clamp(j.value("popupRounding",    s.popupRounding),    0.0f, 18.0f);
+    s.popupButtonRowPadding = std::clamp(j.value("popupButtonRowPadding", s.popupButtonRowPadding), 0.0f, 12.0f);
+    s.popupButtonColumnPadding = std::clamp(j.value("popupButtonColumnPadding", s.popupButtonColumnPadding), 0.0f, 16.0f);
     s.controlRounding  = std::clamp(j.value("controlRounding",  s.controlRounding),  0.0f, 12.0f);
 }
 
@@ -170,6 +172,8 @@ json SaveColorFields(const T& s) {
         {"scrollbarRounding",s.scrollbarRounding},
         {"scrollbarPadding", s.scrollbarPadding},
         {"popupRounding",    s.popupRounding},
+        {"popupButtonRowPadding", s.popupButtonRowPadding},
+        {"popupButtonColumnPadding", s.popupButtonColumnPadding},
         {"controlRounding",  s.controlRounding},
     };
 }
@@ -246,6 +250,11 @@ void LoadAppearance(const json& root, AppConfig& config) {
         std::clamp(a.value("popupOutlineStrength", config.appearance.popupOutlineStrength), 0.0f, 1.0f);
     config.appearance.popupOutlineAnimated =
         a.value("popupOutlineAnimated", config.appearance.popupOutlineAnimated);
+    config.appearance.popupOutlineEffect =
+        std::clamp(a.value("popupOutlineEffect",
+                           config.appearance.popupOutlineAnimated ? 1 : config.appearance.popupOutlineEffect),
+                   0, 3);
+    config.appearance.popupOutlineAnimated = config.appearance.popupOutlineEffect != 0;
     config.appearance.popupOutlineAnimationSpeed =
         std::clamp(a.value("popupOutlineAnimationSpeed", config.appearance.popupOutlineAnimationSpeed), 0.05f, 5.0f);
     config.appearance.popupOutlineColorSharpness =
@@ -321,6 +330,35 @@ void LoadUi(const json& root, AppConfig& config) {
     config.ui.helperDurationMs = std::clamp(ui.value("helperDurationMs", config.ui.helperDurationMs), 500, 30000);
 }
 
+void LoadEditor(const json& root, AppConfig& config) {
+    const json& e = root.value("editor", json::object());
+    EditorSettings& s = config.editor;
+    s.enabled = e.value("enabled", s.enabled);
+    s.provider = std::clamp(e.value("provider", s.provider), 0, 1);
+    s.alwaysOnTop = e.value("alwaysOnTop", s.alwaysOnTop);
+    s.openWithClipboard = e.value("openWithClipboard", s.openWithClipboard);
+    s.copyOnClose = e.value("copyOnClose", s.copyOnClose);
+    s.confirmClose = e.value("confirmClose", s.confirmClose);
+    s.showLineNumbers = e.value("showLineNumbers", s.showLineNumbers);
+    s.showStatusBar = e.value("showStatusBar", s.showStatusBar);
+    s.allowTabInput = e.value("allowTabInput", s.allowTabInput);
+    s.externalWaitForExit = e.value("externalWaitForExit", s.externalWaitForExit);
+    s.externalReadBackToClipboard = e.value("externalReadBackToClipboard", s.externalReadBackToClipboard);
+    s.mode = std::clamp(e.value("mode", s.mode), 0, 4);
+    s.width = std::clamp(e.value("width", s.width), 520, 3840);
+    s.height = std::clamp(e.value("height", s.height), 360, 2160);
+    s.externalPath = e.value("externalPath", s.externalPath);
+    s.externalArguments = e.value("externalArguments", s.externalArguments);
+    if (s.externalArguments.empty())
+        s.externalArguments = EditorSettings{}.externalArguments;
+    s.externalTempExtension = e.value("externalTempExtension", s.externalTempExtension);
+}
+
+void LoadAndroid(const json& root, AppConfig& config) {
+    const json& a = root.value("android", json::object());
+    config.android.deviceEndpoint = a.value("deviceEndpoint", config.android.deviceEndpoint);
+}
+
 void LoadDeveloper(const json& root, AppConfig& config) {
     const json& d = root.value("developer", json::object());
     config.developer.enabled = d.value("enabled", config.developer.enabled);
@@ -343,6 +381,78 @@ void LoadImages(const json& root, AppConfig& config) {
     s.minWidth        = std::clamp(im.value("minWidth",      s.minWidth),      1, 4096);
     s.minHeight       = std::clamp(im.value("minHeight",     s.minHeight),     1, 4096);
     s.maxImages       = std::clamp(im.value("maxImages",     s.maxImages),     0, 100000);
+}
+
+CustomFilterMode CustomFilterModeFromInt(int value) {
+    return static_cast<CustomFilterMode>(std::clamp(value, 0, 3));
+}
+
+CustomFilterTarget CustomFilterTargetFromInt(int value) {
+    return static_cast<CustomFilterTarget>(std::clamp(value, 0, 4));
+}
+
+json CustomFilterToJson(const CustomFilter& filter) {
+    return {
+        {"id", filter.id},
+        {"name", filter.name},
+        {"enabled", filter.enabled},
+        {"mode", static_cast<int>(filter.mode)},
+        {"target", static_cast<int>(filter.target)},
+        {"pattern", filter.pattern},
+        {"caseSensitive", filter.caseSensitive},
+        {"multiline", filter.multiline},
+        {"dotMatchesNewline", filter.dotMatchesNewline},
+        {"routeToProfile", filter.routeToProfile},
+        {"routeMove", filter.routeMove},
+        {"routeProfileId", filter.routeProfileId},
+    };
+}
+
+CustomFilter CustomFilterFromJson(const json& item) {
+    CustomFilter filter;
+    filter.id = item.value("id", "");
+    filter.name = item.value("name", "");
+    filter.enabled = item.value("enabled", filter.enabled);
+    filter.mode = CustomFilterModeFromInt(item.value("mode", 0));
+    filter.target = CustomFilterTargetFromInt(item.value("target", 0));
+    filter.pattern = item.value("pattern", "");
+    filter.caseSensitive = item.value("caseSensitive", filter.caseSensitive);
+    filter.multiline = item.value("multiline", filter.multiline);
+    filter.dotMatchesNewline = item.value("dotMatchesNewline", filter.dotMatchesNewline);
+    filter.routeToProfile = item.value("routeToProfile", filter.routeToProfile);
+    filter.routeMove = item.value("routeMove", filter.routeMove);
+    filter.routeProfileId = item.value("routeProfileId", filter.routeProfileId);
+    if (filter.id.empty())
+        filter.id = NewCustomFilterId();
+    if (filter.name.empty())
+        filter.name = "Custom filter";
+    return filter;
+}
+
+void LoadCustomFilters(const json& root, AppConfig& config) {
+    config.customFilters.clear();
+    if (!root.contains("customFilters") || !root["customFilters"].is_array())
+        return;
+
+    for (const json& item : root["customFilters"]) {
+        CustomFilter filter = CustomFilterFromJson(item);
+        if (!filter.pattern.empty())
+            config.customFilters.push_back(std::move(filter));
+    }
+}
+
+void LoadPopupButtonOrder(const json& root, AppConfig& config) {
+    config.popupButtonOrder.clear();
+    if (!root.contains("popupButtonOrder") || !root["popupButtonOrder"].is_array())
+        return;
+
+    for (const json& item : root["popupButtonOrder"]) {
+        if (!item.is_string())
+            continue;
+        std::string token = item.get<std::string>();
+        if (!token.empty())
+            config.popupButtonOrder.push_back(std::move(token));
+    }
 }
 
 ClipboardProfileConfig DefaultClipboardProfile() {
@@ -422,10 +532,15 @@ AppConfig Load() {
         LoadAppearance(root, config);
         LoadHotkeys(root, config);
         LoadUi(root, config);
+        LoadEditor(root, config);
+        LoadAndroid(root, config);
         LoadDeveloper(root, config);
         LoadImages(root, config);
+        LoadCustomFilters(root, config);
+        LoadPopupButtonOrder(root, config);
         config.newItemsAtTop = root.value("newItemsAtTop", config.newItemsAtTop);
         config.appendNewlineAfterPaste = root.value("appendNewlineAfterPaste", config.appendNewlineAfterPaste);
+        config.hidePopupOnOutsideClick = root.value("hidePopupOnOutsideClick", config.hidePopupOnOutsideClick);
         config.pasteMoveTarget = std::clamp(root.value("pasteMoveTarget", config.pasteMoveTarget), 0, 2);
         LoadClipboards(root, config);
     } catch (...) {
@@ -465,12 +580,20 @@ bool Save(const AppConfig& config) {
         });
     }
 
+    json customFilters = json::array();
+    for (const CustomFilter& filter : config.customFilters)
+        customFilters.push_back(CustomFilterToJson(filter));
+    json popupButtonOrder = json::array();
+    for (const std::string& token : config.popupButtonOrder)
+        popupButtonOrder.push_back(token);
+
     json root = {
         {"version", 1},
         {"appearance", {
             {"theme", ThemeToInt(config.appearance.theme)},
             {"popupOpacity", config.appearance.popupOpacity},
             {"popupOutlineStrength", config.appearance.popupOutlineStrength},
+            {"popupOutlineEffect", config.appearance.popupOutlineEffect},
             {"popupOutlineAnimated", config.appearance.popupOutlineAnimated},
             {"popupOutlineAnimationSpeed", config.appearance.popupOutlineAnimationSpeed},
             {"popupOutlineColorSharpness", config.appearance.popupOutlineColorSharpness},
@@ -504,6 +627,28 @@ bool Save(const AppConfig& config) {
             {"helperDelayMs", config.ui.helperDelayMs},
             {"helperDurationMs", config.ui.helperDurationMs},
         }},
+        {"editor", {
+            {"enabled", config.editor.enabled},
+            {"provider", config.editor.provider},
+            {"alwaysOnTop", config.editor.alwaysOnTop},
+            {"openWithClipboard", config.editor.openWithClipboard},
+            {"copyOnClose", config.editor.copyOnClose},
+            {"confirmClose", config.editor.confirmClose},
+            {"showLineNumbers", config.editor.showLineNumbers},
+            {"showStatusBar", config.editor.showStatusBar},
+            {"allowTabInput", config.editor.allowTabInput},
+            {"externalWaitForExit", config.editor.externalWaitForExit},
+            {"externalReadBackToClipboard", config.editor.externalReadBackToClipboard},
+            {"mode", config.editor.mode},
+            {"width", config.editor.width},
+            {"height", config.editor.height},
+            {"externalPath", config.editor.externalPath},
+            {"externalArguments", config.editor.externalArguments},
+            {"externalTempExtension", config.editor.externalTempExtension},
+        }},
+        {"android", {
+            {"deviceEndpoint", config.android.deviceEndpoint},
+        }},
         {"developer", {
             {"enabled", config.developer.enabled},
             {"cliEnabled", config.developer.cliEnabled},
@@ -523,11 +668,14 @@ bool Save(const AppConfig& config) {
         }},
         {"newItemsAtTop", config.newItemsAtTop},
         {"appendNewlineAfterPaste", config.appendNewlineAfterPaste},
+        {"hidePopupOnOutsideClick", config.hidePopupOnOutsideClick},
         {"pasteMoveTarget", config.pasteMoveTarget},
         {"activeClipboardId", config.activeClipboardId},
         {"autoSwitchClipboardByProcess", config.autoSwitchClipboardByProcess},
         {"autoCreateClipboardByProcess", config.autoCreateClipboardByProcess},
         {"clipboards", clipboards},
+        {"customFilters", customFilters},
+        {"popupButtonOrder", popupButtonOrder},
     };
     root["appearance"].update(SaveColorFields(config.appearance));
 

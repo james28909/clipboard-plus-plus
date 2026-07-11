@@ -6,6 +6,7 @@
 #include "../clipboard/ContentDetector.h"
 #include "../util/Win32Util.h"
 #include "Appearance.h"
+#include "ImGuiWidgets.h"
 
 #include <imgui.h>
 #include <imgui_impl_win32.h>
@@ -19,6 +20,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstring>
+#include <cstdarg>
 #include <cstdio>
 #include <cfloat>
 #include <cmath>
@@ -27,7 +29,12 @@
 #include <utility>
 #include "../hotkeys/HotkeyManager.h"  // kClipboardPasteMagic
 
+using ImGuiWidgets::SmoothScrollCurrentWindow;
+#include "ToastWindow.h"
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
+
+static PopupWindow* g_trackingPopup = nullptr;
 
 static constexpr wchar_t kPopupClass[] = L"CPPPopupWnd";
 static constexpr UINT_PTR kPopupResizeRenderTimerId = 1;
@@ -45,6 +52,9 @@ static constexpr int kPopupTitleHeight = kPopupTitlePad + kPopupTitleButton + 8;
 #endif
 #ifndef DWMWA_COLOR_NONE
 #define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
+#ifndef DWMWA_COLOR_DEFAULT
+#define DWMWA_COLOR_DEFAULT 0xFFFFFFFF
 #endif
 
 static const char* PasteMoveLabel(ClipboardHistory::MoveTarget target) {
@@ -73,6 +83,65 @@ static std::string TrimAscii(std::string value) {
     return value;
 }
 
+static bool BlueButton(const char* label, ImVec2 size = {0.0f, 0.0f}) {
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(77, 145, 255, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(106, 166, 255, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(46, 112, 220, 255));
+    const bool clicked = ImGui::Button(label, size);
+    ImGui::PopStyleColor(3);
+    return clicked;
+}
+
+static HGLOBAL BuildUnicodeTextGlobal(const std::wstring& text) {
+    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!mem)
+        return nullptr;
+
+    void* data = GlobalLock(mem);
+    if (!data) {
+        GlobalFree(mem);
+        return nullptr;
+    }
+
+    std::memcpy(data, text.c_str(), text.size() * sizeof(wchar_t));
+    static_cast<wchar_t*>(data)[text.size()] = L'\0';
+    GlobalUnlock(mem);
+    return mem;
+}
+
+static HGLOBAL BuildFileDropGlobal(const std::vector<std::wstring>& paths) {
+    if (paths.empty())
+        return nullptr;
+
+    size_t chars = 1;
+    for (const std::wstring& path : paths)
+        chars += path.size() + 1;
+
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT,
+                              sizeof(DROPFILES) + chars * sizeof(wchar_t));
+    if (!mem)
+        return nullptr;
+
+    auto* drop = static_cast<DROPFILES*>(GlobalLock(mem));
+    if (!drop) {
+        GlobalFree(mem);
+        return nullptr;
+    }
+
+    drop->pFiles = sizeof(DROPFILES);
+    drop->fWide = TRUE;
+
+    wchar_t* out = reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(drop) + sizeof(DROPFILES));
+    for (const std::wstring& path : paths) {
+        std::memcpy(out, path.c_str(), path.size() * sizeof(wchar_t));
+        out += path.size() + 1;
+    }
+
+    GlobalUnlock(mem);
+    return mem;
+}
+
 static std::wstring UrlEncodeWide(const std::string& value) {
     static constexpr char kHex[] = "0123456789ABCDEF";
     std::wstring out;
@@ -91,6 +160,52 @@ static std::wstring UrlEncodeWide(const std::string& value) {
         }
     }
     return out;
+}
+
+// -- Paste diagnostic log ------------------------------------------------------
+// All paste-path events are written to %APPDATA%\Clipboard++\paste_debug.log
+// and mirrored to OutputDebugStringA (visible in DebugView / VS Output).
+
+static const std::wstring& PLogPath() {
+    static std::wstring s;
+    if (s.empty()) {
+        wchar_t ap[MAX_PATH]{};
+        GetEnvironmentVariableW(L"APPDATA", ap, MAX_PATH);
+        s = std::wstring(ap) + L"\\Clipboard++\\paste_debug.log";
+    }
+    return s;
+}
+
+static void PLog(const char* fmt, ...) {
+    static DWORD s_t0   = GetTickCount();
+    static bool  s_new  = true;
+    char msg[512]; va_list a; va_start(a, fmt); vsnprintf(msg, sizeof(msg), fmt, a); va_end(a);
+    char line[600]; snprintf(line, sizeof(line), "[%6ums] %s\n", GetTickCount() - s_t0, msg);
+    OutputDebugStringA(line);
+    if (FILE* f = _wfopen(PLogPath().c_str(), s_new ? L"w" : L"a")) {
+        if (s_new) { fputs("=== Clipboard++ Paste Debug Log ===\n", f); s_new = false; }
+        fputs(line, f); fclose(f);
+    }
+}
+
+// Returns "0xHWND(\"Window Title\")" for readable log output.
+static std::string WH(HWND h) {
+    if (!h) return "null";
+    char t[64]{}; GetWindowTextA(h, t, sizeof(t));
+    char b[100]; snprintf(b, sizeof(b), "0x%llX(\"%s\")",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(h)), t[0] ? t : "?");
+    return b;
+}
+
+static const char* CtName(ContentType ct) {
+    switch (ct) {
+    case ContentType::Text:      return "Text";
+    case ContentType::Html:      return "Html";
+    case ContentType::RichText:  return "RichText";
+    case ContentType::Image:     return "Image";
+    case ContentType::FilePaths: return "FilePaths";
+    default:                     return "Unknown";
+    }
 }
 
 // -- Create / Destroy ----------------------------------------------------------
@@ -127,6 +242,7 @@ bool PopupWindow::Create(HINSTANCE hInstance,
         static_cast<LPVOID>(this));
 
     if (!m_hwnd) return false;
+    ApplyDwmFrameSettings();
 
     if (!CreateSwapChain()) {
         DestroyWindow(m_hwnd);
@@ -168,6 +284,7 @@ void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
     ImGui_ImplDX11_CreateDeviceObjects();
     m_opacity = settings.popupOpacity;
     m_outlineStrength = settings.popupOutlineStrength;
+    InvalidateWindowRegion();
     const float dpiScale = EffectiveUiScale(m_appearance);
     m_width = static_cast<int>(std::lround(settings.popupWidth * dpiScale));
     m_height = static_cast<int>(std::lround(settings.popupHeight * dpiScale));
@@ -176,13 +293,14 @@ void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
         SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, m_width, m_height,
                      SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         ResizeSwapChainToClient();
-        ApplyWindowCorners();
+        ApplyWindowRegion();
     }
 
     ImGui::SetCurrentContext(prevCtx);
 }
 
 void PopupWindow::Destroy() {
+    StopPasteTargetTracking();
     ClearThumbCache();
     if (m_imguiCtx) {
         ImGuiContext* prevCtx = ImGui::GetCurrentContext();
@@ -206,11 +324,16 @@ void PopupWindow::Destroy() {
 
 void PopupWindow::Show(bool focusSearch) {
     m_prevForeground = GetForegroundWindow();
+    m_activePasteTarget = nullptr;
+    NotePasteTarget(m_prevForeground, "show");
+    PLog("[POPUP-SHOW] prevFg=%s focusSearch=%d focusTest=%d",
+         WH(m_prevForeground).c_str(), focusSearch, m_focusTestMode);
     PositionAtCursor();
     ResizeSwapChainToClient();
-    ApplyWindowCorners();
+    ApplyWindowRegion();
     ApplyOpacity();
-    ShowWindow(m_hwnd, SW_SHOWNA); // NA = no-activate
+
+    ShowWindow(m_hwnd, m_focusTestMode ? SW_SHOW : SW_SHOWNA);
     m_visible           = true;
     m_justOpened        = true;
     m_focusSearchOnOpen = focusSearch;
@@ -220,11 +343,17 @@ void PopupWindow::Show(bool focusSearch) {
     m_maximized         = false;
     m_queueMode         = false;
     m_queue.clear();
+    ClearItemSelection();
+    m_selectedImageIds.clear();
+    m_imgSelectionAnchorId.clear();
     std::memset(m_searchBuf, 0, sizeof(m_searchBuf));
     m_imageListDirty = true;   // refresh image list on next open
+    StartPasteTargetTracking();
 }
 
 void PopupWindow::Hide() {
+    PLog("[POPUP-HIDE]");
+    StopPasteTargetTracking();
     ShowWindow(m_hwnd, SW_HIDE);
     m_visible       = false;
     m_searchActive  = false;
@@ -237,8 +366,13 @@ void PopupWindow::Hide() {
     m_contextMenuProfileId.clear();
     m_keyboardCapture = false;
     m_maximized = false;
+    InvalidateWindowRegion();
+    m_activePasteTarget = nullptr;
     m_queueMode     = false;
     m_queue.clear();
+    ClearItemSelection();
+    m_selectedImageIds.clear();
+    m_imgSelectionAnchorId.clear();
     ClearThumbCache();
 }
 
@@ -310,11 +444,17 @@ void PopupWindow::Render() {
     ImGui::Spacing();
     DrawFilterStrip();
     ImGui::Separator();
-    DrawItemList();
+    if (m_androidPanelOpen)
+        DrawAndroidPanel();
+    else {
+        m_lastAndroidPanelOpen = false;
+        DrawItemList();
+    }
 
     AppearanceSettings effective = m_appearance.customColors
         ? m_appearance
         : ThemeDefaults(m_appearance.theme);
+    effective.popupOutlineEffect = m_appearance.popupOutlineEffect;
     effective.popupOutlineAnimated = m_appearance.popupOutlineAnimated;
     effective.popupOutlineAnimationSpeed = m_appearance.popupOutlineAnimationSpeed;
     effective.popupOutlineColorSharpness = m_appearance.popupOutlineColorSharpness;
@@ -329,8 +469,10 @@ void PopupWindow::Render() {
     const float rounding = ImGui::GetStyle().WindowRounding;
     const float strength = std::clamp(m_outlineStrength, 0.0f, 1.0f);
     if (strength > 0.001f) {
+        const int outlineEffect = std::clamp(effective.popupOutlineEffect, 0, 3);
+        const bool dynamicOutline = outlineEffect != 0 || effective.popupOutlineAnimated;
         auto outlineColor = [&](float offset, float alpha) {
-            if (!effective.popupOutlineAnimated) {
+            if (!dynamicOutline || outlineEffect == 2) {
                 ImVec4 color = effective.accent;
                 color.w = alpha;
                 return color;
@@ -351,27 +493,111 @@ void PopupWindow::Render() {
             ImGui::ColorConvertHSVtoRGB(hue, saturation, brightness, r, g, b);
             return ImVec4(r, g, b, alpha);
         };
-        ImVec4 glow = outlineColor(0.0f, strength * 0.26f);
-        glow.w = strength * 0.26f;
-        ImVec4 soft = outlineColor(0.08f, strength * 0.38f);
+        const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) *
+                                                    std::clamp(effective.popupOutlineAnimationSpeed, 0.05f, 5.0f) *
+                                                    4.0f);
+        const float glowAlpha = outlineEffect == 2
+            ? strength * (0.18f + 0.28f * pulse)
+            : strength * 0.26f;
+        const float softAlpha = outlineEffect == 2
+            ? strength * (0.26f + 0.36f * pulse)
+            : strength * 0.38f;
+        ImVec4 glow = outlineColor(0.0f, glowAlpha);
+        glow.w = glowAlpha;
+        ImVec4 soft = outlineColor(0.08f, softAlpha);
         dl->AddRect({pos.x + 1.0f, pos.y + 1.0f}, {max.x - 1.0f, max.y - 1.0f},
-                    ImGui::GetColorU32(glow), rounding, 0, 1.0f + strength * 4.5f);
+                    ImGui::GetColorU32(glow), rounding, 0,
+                    1.0f + strength * (outlineEffect == 2 ? 5.8f + 2.0f * pulse : 4.5f));
         dl->AddRect({pos.x + 2.0f, pos.y + 2.0f}, {max.x - 2.0f, max.y - 2.0f},
-                    ImGui::GetColorU32(soft), rounding, 0, 0.75f + strength * 2.5f);
-        if (effective.popupOutlineAnimated) {
+                    ImGui::GetColorU32(soft), rounding, 0,
+                    0.75f + strength * (outlineEffect == 2 ? 3.0f + 1.2f * pulse : 2.5f));
+        if (dynamicOutline && outlineEffect != 2) {
             const float thick = 0.75f + strength * 1.35f;
-            dl->AddLine({pos.x + rounding, pos.y + 0.5f}, {max.x - rounding, pos.y + 0.5f},
-                        ImGui::GetColorU32(outlineColor(0.00f, strength * 0.95f)), thick);
-            dl->AddLine({max.x - 0.5f, pos.y + rounding}, {max.x - 0.5f, max.y - rounding},
-                        ImGui::GetColorU32(outlineColor(0.25f, strength * 0.95f)), thick);
-            dl->AddLine({max.x - rounding, max.y - 0.5f}, {pos.x + rounding, max.y - 0.5f},
-                        ImGui::GetColorU32(outlineColor(0.50f, strength * 0.95f)), thick);
-            dl->AddLine({pos.x + 0.5f, max.y - rounding}, {pos.x + 0.5f, pos.y + rounding},
-                        ImGui::GetColorU32(outlineColor(0.75f, strength * 0.95f)), thick);
+            const ImVec2 a{pos.x + 0.5f, pos.y + 0.5f};
+            const ImVec2 b{max.x - 0.5f, max.y - 0.5f};
+            const float w = std::max(1.0f, b.x - a.x);
+            const float h = std::max(1.0f, b.y - a.y);
+            const float r = std::clamp(rounding, 0.0f, std::min(w, h) * 0.5f);
+            const float pi = 3.14159265358979323846f;
+            const float targetStep = 10.0f;
+
+            std::vector<ImVec2> ring;
+            ring.reserve(96);
+
+            auto addPoint = [&](ImVec2 p) {
+                if (ring.empty() ||
+                    std::fabs(ring.back().x - p.x) > 0.01f ||
+                    std::fabs(ring.back().y - p.y) > 0.01f) {
+                    ring.push_back(p);
+                }
+            };
+            auto addLineSamples = [&](ImVec2 p0, ImVec2 p1) {
+                const float dx = p1.x - p0.x;
+                const float dy = p1.y - p0.y;
+                const int steps = std::max(1, static_cast<int>(std::ceil(std::hypot(dx, dy) / targetStep)));
+                for (int i = 0; i <= steps; ++i) {
+                    const float t = static_cast<float>(i) / static_cast<float>(steps);
+                    addPoint({p0.x + dx * t, p0.y + dy * t});
+                }
+            };
+            auto addArcSamples = [&](ImVec2 center, float from, float to) {
+                const int steps = std::max(3, static_cast<int>(std::ceil((std::abs(to - from) * r) / targetStep)));
+                for (int i = 1; i <= steps; ++i) {
+                    const float t = static_cast<float>(i) / static_cast<float>(steps);
+                    const float angle = from + (to - from) * t;
+                    addPoint({center.x + std::cos(angle) * r,
+                              center.y + std::sin(angle) * r});
+                }
+            };
+
+            addLineSamples({a.x + r, a.y}, {b.x - r, a.y});
+            addArcSamples({b.x - r, a.y + r}, -pi * 0.5f, 0.0f);
+            addLineSamples({b.x, a.y + r}, {b.x, b.y - r});
+            addArcSamples({b.x - r, b.y - r}, 0.0f, pi * 0.5f);
+            addLineSamples({b.x - r, b.y}, {a.x + r, b.y});
+            addArcSamples({a.x + r, b.y - r}, pi * 0.5f, pi);
+            addLineSamples({a.x, b.y - r}, {a.x, a.y + r});
+            addArcSamples({a.x + r, a.y + r}, pi, pi * 1.5f);
+
+            if (ring.size() >= 2) {
+                float perimeter = 0.0f;
+                std::vector<float> distance(ring.size() + 1, 0.0f);
+                for (size_t i = 0; i < ring.size(); ++i) {
+                    const ImVec2 p0 = ring[i];
+                    const ImVec2 p1 = ring[(i + 1) % ring.size()];
+                    perimeter += std::hypot(p1.x - p0.x, p1.y - p0.y);
+                    distance[i + 1] = perimeter;
+                }
+
+                if (perimeter > 0.001f) {
+                    const float direction = effective.popupOutlineReverse ? -1.0f : 1.0f;
+                    const float speed = std::clamp(effective.popupOutlineAnimationSpeed, 0.05f, 5.0f);
+                    const float chaseHead = std::fmod(static_cast<float>(ImGui::GetTime()) *
+                                                      0.16f * speed * direction, 1.0f);
+                    const float chaseTail = std::max(0.04f,
+                        0.08f + std::clamp(effective.popupOutlineColorSpread, 0.0f, 2.0f) * 0.18f);
+                    const float chasePower = 1.0f + std::clamp(effective.popupOutlineColorSharpness, 0.0f, 1.0f) * 5.0f;
+                    for (size_t i = 0; i < ring.size(); ++i) {
+                        const float t = (distance[i] + (distance[i + 1] - distance[i]) * 0.5f) / perimeter;
+                        float alpha = strength * 0.95f;
+                        if (outlineEffect == 3) {
+                            float d = std::fabs(t - chaseHead);
+                            d = std::min(d, 1.0f - d);
+                            alpha *= std::pow(std::max(0.0f, 1.0f - d / chaseTail), chasePower);
+                            alpha += strength * 0.10f;
+                        }
+                        dl->AddLine(ring[i], ring[(i + 1) % ring.size()],
+                                    ImGui::GetColorU32(outlineColor(t, std::clamp(alpha, 0.0f, 1.0f))),
+                                    outlineEffect == 3 ? thick + strength * 0.9f : thick);
+                    }
+                }
+            }
         } else {
             dl->AddRect({pos.x + 0.5f, pos.y + 0.5f}, {max.x - 0.5f, max.y - 0.5f},
-                        ImGui::GetColorU32(outlineColor(0.0f, strength * 0.92f)),
-                        rounding, 0, 0.75f + strength * 1.0f);
+                        ImGui::GetColorU32(outlineColor(0.0f,
+                            outlineEffect == 2 ? strength * (0.55f + 0.40f * pulse) : strength * 0.92f)),
+                        rounding, 0,
+                        0.75f + strength * (outlineEffect == 2 ? 1.4f + 0.9f * pulse : 1.0f));
         }
     }
 
@@ -672,7 +898,7 @@ void PopupWindow::DrawTitleBar() {
 
     if (showSave) {
         ImGui::SameLine(0.0f, gap);
-        if (ImGui::Button("Save", {saveW, 0.0f}) && app) {
+        if (BlueButton("Save", {saveW, 0.0f}) && app) {
             app->CreateClipboardProfile(m_clipboardName);
             if (const ClipboardProfileConfig* created = app->GetActiveClipboardProfile()) {
                 std::snprintf(m_clipboardName, sizeof(m_clipboardName), "%s", created->name.c_str());
@@ -701,62 +927,532 @@ static bool PopupToggleButton(const char* label, bool active, const PopupToggleC
 
 void PopupWindow::DrawFilterStrip() {
     const PopupToggleColors toggleColors = GetPopupToggleColors(m_appearance);
-    struct Btn { const char* label; int mode; };
-    static constexpr Btn kFilters[] = {
-        {"All",0},{"Text",1},{"Image",2},{"URL",3},{"File",4},
-        {"Code",5},{"Secret",6},{"JSON",7},{"Email",8},{"Color",9},{"CMD",10}
+    Application* app = Application::Get();
+
+    struct BuiltInFilter { const char* token; const char* label; int mode; };
+    static constexpr BuiltInFilter kBuiltIns[] = {
+        {"filter:all", "All", 0},       {"filter:text", "Text", 1},
+        {"filter:url", "URL", 3},       {"filter:file", "File", 4},
+        {"filter:code", "Code", 5},     {"filter:secret", "Secret", 6},
+        {"filter:json", "JSON", 7},     {"filter:email", "Email", 8},
+        {"filter:color", "Color", 9},   {"filter:cmd", "CMD", 10},
+        {"filter:image", "Image", 2},
     };
-    for (const auto& f : kFilters) {
-        bool active = (m_filterMode == f.mode);
-        if (PopupToggleButton(f.label, active, toggleColors)) {
-            ActivateKeyboardCapture();
-            m_filterMode = f.mode;
+    static constexpr const char* kDefaultOrder[] = {
+        "filter:all", "filter:text", "filter:url", "filter:file", "filter:code",
+        "filter:secret", "filter:json", "filter:email", "filter:color", "filter:cmd",
+        "break",
+        "filter:image", "action:android", "action:queue", "action:pasteall",
+        "action:newline", "action:move", "action:settings",
+    };
+    const float buttonColumnGap = std::clamp(m_appearance.popupButtonColumnPadding, 0.0f, 16.0f);
+    const float buttonRowGap = std::clamp(m_appearance.popupButtonRowPadding, 0.0f, 12.0f);
+
+    auto isBuiltIn = [&](const std::string& token) {
+        return std::find_if(std::begin(kBuiltIns), std::end(kBuiltIns),
+            [&](const BuiltInFilter& item) { return token == item.token; }) != std::end(kBuiltIns);
+    };
+    auto customForToken = [&](const std::string& token) -> const CustomFilter* {
+        if (!app || token.rfind("custom:", 0) != 0)
+            return nullptr;
+        const std::string id = token.substr(7);
+        const auto& filters = app->GetCustomFilters();
+        auto it = std::find_if(filters.begin(), filters.end(),
+            [&](const CustomFilter& filter) {
+                return filter.id == id && filter.enabled && !filter.pattern.empty();
+            });
+        return it == filters.end() ? nullptr : &*it;
+    };
+    auto isAction = [&](const std::string& token) {
+        return token == "action:queue" || token == "action:pasteall" ||
+               token == "action:newline" || token == "action:move" ||
+               token == "action:android" || token == "action:settings";
+    };
+    auto cleanupBreaks = [](std::vector<std::string>& order) {
+        order.erase(std::remove_if(order.begin(), order.end(), [](const std::string& token) {
+            return token.empty();
+        }), order.end());
+        std::vector<std::string> cleaned;
+        bool lastBreak = true;
+        for (const std::string& token : order) {
+            if (token == "break") {
+                if (!lastBreak)
+                    cleaned.push_back(token);
+                lastBreak = true;
+            } else {
+                cleaned.push_back(token);
+                lastBreak = false;
+            }
         }
-        ImGui::SameLine();
-    }
-    ImGui::NewLine();
+        while (!cleaned.empty() && cleaned.back() == "break")
+            cleaned.pop_back();
+        order = std::move(cleaned);
+    };
 
-    bool qActive = m_queueMode;
-    if (PopupToggleButton("Queue", qActive, toggleColors)) {
-        ActivateKeyboardCapture();
-        m_queueMode = !m_queueMode;
-        m_queue.clear();
-    }
-    ImGui::SameLine();
+    std::vector<std::string> order = app ? app->GetPopupButtonOrder() : std::vector<std::string>{};
+    if (order.empty())
+        order.assign(std::begin(kDefaultOrder), std::end(kDefaultOrder));
 
-    if (m_queueMode && !m_queue.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.f));
-        if (ImGui::SmallButton("Paste All")) {
-            ActivateKeyboardCapture();
-            PasteQueue();
+    std::vector<std::string> normalized;
+    auto addUnique = [&](const std::string& token) {
+        if (token == "break") {
+            normalized.push_back(token);
+            return;
         }
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
+        if (std::find(normalized.begin(), normalized.end(), token) == normalized.end())
+            normalized.push_back(token);
+    };
+    for (const std::string& token : order) {
+        if (token == "break" || isBuiltIn(token) || isAction(token) || customForToken(token))
+            addUnique(token);
+    }
+    for (const BuiltInFilter& item : kBuiltIns)
+        addUnique(item.token);
+    static constexpr const char* kActionTokens[] = {
+        "action:android", "action:queue", "action:pasteall", "action:newline", "action:move", "action:settings"
+    };
+    for (const char* token : kActionTokens)
+        addUnique(token);
+    if (app) {
+        for (const CustomFilter& filter : app->GetCustomFilters())
+            if (filter.enabled && !filter.pattern.empty())
+                addUnique("custom:" + filter.id);
+    }
+    cleanupBreaks(normalized);
+    if (app && normalized != app->GetPopupButtonOrder())
+        app->SetPopupButtonOrder(normalized);
+    order = normalized;
+
+    struct PendingPopupButtonMove {
+        std::string dragged;
+        std::string target;
+        bool below{false};
+        bool after{false};
+        bool requested{false};
+    } pendingMove;
+
+    auto moveToken = [&](const std::string& dragged, const std::string& target, bool below, bool after) {
+        if (!app || dragged.empty() || target.empty() || dragged == "break")
+            return;
+
+        std::vector<std::string> next = order;
+        next.erase(std::remove(next.begin(), next.end(), dragged), next.end());
+        cleanupBreaks(next);
+
+        auto targetIt = std::find(next.begin(), next.end(), target);
+        size_t insertAt = targetIt == next.end()
+            ? next.size()
+            : static_cast<size_t>(std::distance(next.begin(), targetIt)) + (after ? 1u : 0u);
+
+        if (below) {
+            if (targetIt != next.end())
+                insertAt = static_cast<size_t>(std::distance(next.begin(), targetIt)) + 1u;
+            if (insertAt > next.size())
+                insertAt = next.size();
+            if (insertAt == next.size() || next[insertAt] != "break")
+                next.insert(next.begin() + static_cast<std::ptrdiff_t>(insertAt), "break");
+            ++insertAt;
+        }
+
+        if (insertAt > next.size())
+            insertAt = next.size();
+        next.insert(next.begin() + static_cast<std::ptrdiff_t>(insertAt), dragged);
+        cleanupBreaks(next);
+        app->SetPopupButtonOrder(next);
+        order = std::move(next);
+    };
+
+    auto requestMove = [&](std::string dragged, std::string target, bool below, bool after) {
+        if (dragged.empty() || target.empty())
+            return;
+        if (dragged == target && !below)
+            return;
+        pendingMove.dragged = std::move(dragged);
+        pendingMove.target = std::move(target);
+        pendingMove.below = below;
+        pendingMove.after = after;
+        pendingMove.requested = true;
+    };
+
+    auto attachDragSource = [&](const std::string& token, const char* label) {
+        if (token == "break")
+            return;
+        if (ImGui::BeginDragDropSource()) {
+            char payload[128]{};
+            strncpy_s(payload, token.c_str(), _TRUNCATE);
+            ImGui::SetDragDropPayload("CPP_POPUP_BUTTON", payload, sizeof(payload));
+            ImGui::TextUnformatted(label);
+            ImGui::EndDragDropSource();
+        }
+    };
+
+    auto acceptPopupButtonPayload = [&](std::string& dragged) -> const ImGuiPayload* {
+        const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+            "CPP_POPUP_BUTTON",
+            ImGuiDragDropFlags_AcceptBeforeDelivery |
+            ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+        if (!payload)
+            return nullptr;
+        const char* data = static_cast<const char*>(payload->Data);
+        dragged = data ? data : "";
+        return payload;
+    };
+
+    auto drawBetweenDropZone = [&](const char* id, const std::string& target, bool after) {
+        if (target.empty())
+            return;
+        ImGui::PushID(id);
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::InvisibleButton("##popup_between_drop", {buttonColumnGap + 4.0f, ImGui::GetFrameHeight()});
+        if (ImGui::BeginDragDropTarget()) {
+            std::string dragged;
+            if (const ImGuiPayload* payload = acceptPopupButtonPayload(dragged)) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 a = ImGui::GetItemRectMin();
+                const ImVec2 b = ImGui::GetItemRectMax();
+                dl->AddRectFilled({(a.x + b.x) * 0.5f - 1.0f, a.y + 2.0f},
+                                  {(a.x + b.x) * 0.5f + 1.0f, b.y - 2.0f},
+                                  IM_COL32(77, 145, 255, 150), 2.0f);
+                if (payload->IsDelivery())
+                    requestMove(dragged, target, false, after);
+            }
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::PopID();
+    };
+
+    auto drawRowDropZone = [&](const char* id, const std::string& target) {
+        if (target.empty())
+            return;
+        static std::string armedTarget;
+        static double armedAt = 0.0;
+        static constexpr double kRowDropDwellSeconds = 0.25;
+
+        ImGui::PushID(id);
+        const float width = ImGui::GetContentRegionAvail().x;
+        ImGui::InvisibleButton("##popup_row_drop", {std::max(24.0f, width), buttonRowGap + 8.0f});
+        if (ImGui::BeginDragDropTarget()) {
+            std::string dragged;
+            if (const ImGuiPayload* payload = acceptPopupButtonPayload(dragged)) {
+                const std::string armKey = dragged + "->" + target;
+                if (armedTarget != armKey) {
+                    armedTarget = armKey;
+                    armedAt = ImGui::GetTime();
+                }
+
+                const bool armed = (ImGui::GetTime() - armedAt) >= kRowDropDwellSeconds;
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 a = ImGui::GetItemRectMin();
+                const ImVec2 b = ImGui::GetItemRectMax();
+                const ImU32 color = armed
+                    ? IM_COL32(77, 145, 255, 150)
+                    : IM_COL32(77, 145, 255, 60);
+                dl->AddRectFilled({a.x, (a.y + b.y) * 0.5f - 1.0f},
+                                  {b.x, (a.y + b.y) * 0.5f + 1.0f},
+                                  color, 2.0f);
+
+                if (payload->IsDelivery() && armed)
+                    requestMove(dragged, target, true, true);
+            }
+            ImGui::EndDragDropTarget();
+        } else if (armedTarget.rfind("->" + target) != std::string::npos) {
+            armedTarget.clear();
+            armedAt = 0.0;
+        }
+        ImGui::PopID();
+    };
+
+    struct PopupButtonRect {
+        std::string token;
+        std::string label;
+        ImVec2 min;
+        ImVec2 max;
+        int row{};
+    };
+    std::vector<PopupButtonRect> buttonRects;
+    int drawingRow = 0;
+
+    auto recordButtonRect = [&](const std::string& token, const char* label) {
+        PopupButtonRect rect;
+        rect.token = token;
+        rect.label = label ? label : "";
+        rect.min = ImGui::GetItemRectMin();
+        rect.max = ImGui::GetItemRectMax();
+        rect.row = drawingRow;
+        buttonRects.push_back(std::move(rect));
+    };
+
+    auto drawToken = [&](const std::string& token) -> bool {
+        if (token == "break") {
+            ImGui::NewLine();
+            return true;
+        }
+
+        for (const BuiltInFilter& item : kBuiltIns) {
+            if (token != item.token)
+                continue;
+            const bool active = m_activeCustomFilterId.empty() && m_filterMode == item.mode;
+            ImGui::PushID(token.c_str());
+            if (PopupToggleButton(item.label, active, toggleColors)) {
+                ActivateKeyboardCapture();
+                m_androidPanelOpen = false;
+                m_filterMode = item.mode;
+                m_activeCustomFilterId.clear();
+            }
+            recordButtonRect(token, item.label);
+            attachDragSource(token, item.label);
+            ImGui::PopID();
+            return true;
+        }
+
+        if (const CustomFilter* filter = customForToken(token)) {
+            ImGui::PushID(token.c_str());
+            const bool active = m_activeCustomFilterId == filter->id;
+            if (PopupToggleButton(filter->name.c_str(), active, toggleColors)) {
+                ActivateKeyboardCapture();
+                m_androidPanelOpen = false;
+                m_filterMode = 0;
+                m_activeCustomFilterId = filter->id;
+            }
+            recordButtonRect(token, filter->name.c_str());
+            attachDragSource(token, filter->name.c_str());
+            ImGui::PopID();
+            return true;
+        }
+
+        ImGui::PushID(token.c_str());
+        if (token == "action:queue") {
+            if (PopupToggleButton("Queue", m_queueMode, toggleColors)) {
+                ActivateKeyboardCapture();
+                m_androidPanelOpen = false;
+                m_queueMode = !m_queueMode;
+                m_queue.clear();
+            }
+            recordButtonRect(token, "Queue");
+            attachDragSource(token, "Queue");
+            ImGui::PopID();
+            return true;
+        }
+        if (token == "action:pasteall") {
+            if (m_queueMode && !m_queue.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.f));
+                if (ImGui::SmallButton("Paste All")) {
+                    ActivateKeyboardCapture();
+                    PasteQueue();
+                }
+                ImGui::PopStyleColor();
+                recordButtonRect(token, "Paste All");
+                attachDragSource(token, "Paste All");
+                ImGui::PopID();
+                return true;
+            }
+            ImGui::PopID();
+            return false;
+        }
+        if (token == "action:newline") {
+            if (PopupToggleButton("Newline", m_appendNewlineAfterPaste, toggleColors)) {
+                ActivateKeyboardCapture();
+                m_appendNewlineAfterPaste = !m_appendNewlineAfterPaste;
+            }
+            recordButtonRect(token, "Newline");
+            attachDragSource(token, "Newline");
+            ImGui::PopID();
+            return true;
+        }
+        if (token == "action:android") {
+            if (PopupToggleButton("Android", m_androidPanelOpen, toggleColors)) {
+                ActivateKeyboardCapture();
+                m_androidPanelOpen = !m_androidPanelOpen;
+            }
+            recordButtonRect(token, "Android");
+            attachDragSource(token, "Android");
+            ImGui::PopID();
+            return true;
+        }
+        if (token == "action:move") {
+            const bool moveActive = m_pasteMoveTarget != ClipboardHistory::MoveTarget::None;
+            if (PopupToggleButton(PasteMoveLabel(m_pasteMoveTarget), moveActive, toggleColors)) {
+                ActivateKeyboardCapture();
+                m_pasteMoveTarget = NextPasteMoveTarget(m_pasteMoveTarget);
+            }
+            recordButtonRect(token, PasteMoveLabel(m_pasteMoveTarget));
+            attachDragSource(token, PasteMoveLabel(m_pasteMoveTarget));
+            ImGui::PopID();
+            return true;
+        }
+        if (token == "action:settings") {
+            if (ImGui::SmallButton(" @ "))
+                OpenSettingsWindow();
+            recordButtonRect(token, "Settings");
+            attachDragSource(token, "Settings");
+            ImGui::PopID();
+            return true;
+        }
+        ImGui::PopID();
+        return false;
+    };
+
+    bool rowHasVisibleItem = false;
+    std::string lastVisibleToken;
+    std::string firstVisibleToken;
+    int rowIndex = 0;
+    for (const std::string& token : order) {
+        if (token == "break") {
+            if (rowHasVisibleItem) {
+                ImGui::NewLine();
+                ImGui::Dummy({1.0f, buttonRowGap});
+                ++rowIndex;
+                drawingRow = rowIndex;
+            }
+            rowHasVisibleItem = false;
+            lastVisibleToken.clear();
+            firstVisibleToken.clear();
+            continue;
+        }
+        drawingRow = rowIndex;
+        const bool drawn = drawToken(token);
+        if (drawn) {
+            if (!rowHasVisibleItem)
+                firstVisibleToken = token;
+            rowHasVisibleItem = true;
+            lastVisibleToken = token;
+            ImGui::SameLine(0.0f, buttonColumnGap);
+        }
+    }
+    if (rowHasVisibleItem) {
+        ImGui::NewLine();
+        ImGui::Dummy({1.0f, buttonRowGap});
+    }
+    const bool popupButtonDragActive = ImGui::GetDragDropPayload() != nullptr;
+
+    const ImVec2 afterStripCursor = ImGui::GetCursorScreenPos();
+    ImVec2 finalStripCursor = afterStripCursor;
+    if (!buttonRects.empty() && popupButtonDragActive) {
+        ImVec2 stripMin = buttonRects.front().min;
+        ImVec2 stripMax = buttonRects.front().max;
+        for (const PopupButtonRect& rect : buttonRects) {
+            stripMin.x = std::min(stripMin.x, rect.min.x);
+            stripMin.y = std::min(stripMin.y, rect.min.y);
+            stripMax.x = std::max(stripMax.x, rect.max.x);
+            stripMax.y = std::max(stripMax.y, rect.max.y);
+        }
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const bool nearBottomRowDrop = mouse.y >= stripMax.y - 4.0f &&
+                                       mouse.y <= stripMax.y + ImGui::GetFrameHeight() + 18.0f;
+        if (nearBottomRowDrop) {
+            ImGui::SetCursorScreenPos(afterStripCursor);
+            ImGui::Dummy({1.0f, ImGui::GetFrameHeight() + 14.0f});
+            finalStripCursor = ImGui::GetCursorScreenPos();
+        }
+
+        ImGui::SetCursorScreenPos(stripMin);
+        ImGui::InvisibleButton("##popup_button_drag_overlay",
+                               {std::max(24.0f, stripMax.x - stripMin.x),
+                                std::max(24.0f, stripMax.y - stripMin.y + 42.0f)});
+        if (ImGui::BeginDragDropTarget()) {
+            std::string dragged;
+            if (const ImGuiPayload* payload = acceptPopupButtonPayload(dragged)) {
+                static std::string bottomArmKey;
+                static double bottomArmAt = 0.0;
+                static constexpr double kBottomRowDwellSeconds = 0.25;
+
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                const float bottomThreshold = stripMax.y - 4.0f;
+                const bool wantsBottomRow = mouse.y >= bottomThreshold;
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                if (wantsBottomRow) {
+                    const std::string armKey = dragged + "->bottom";
+                    if (bottomArmKey != armKey) {
+                        bottomArmKey = armKey;
+                        bottomArmAt = ImGui::GetTime();
+                    }
+                    const bool armed = (ImGui::GetTime() - bottomArmAt) >= kBottomRowDwellSeconds;
+
+                    const auto draggedIt = std::find_if(buttonRects.begin(), buttonRects.end(),
+                        [&](const PopupButtonRect& rect) { return rect.token == dragged; });
+                    const char* ghostLabel = draggedIt != buttonRects.end()
+                        ? draggedIt->label.c_str()
+                        : "Button";
+                    const ImVec2 ghostPos{stripMin.x, stripMax.y + 10.0f};
+                    const ImVec2 ghostText = ImGui::CalcTextSize(ghostLabel);
+                    const ImVec2 ghostSize{
+                        ghostText.x + ImGui::GetStyle().FramePadding.x * 2.0f,
+                        ghostText.y + ImGui::GetStyle().FramePadding.y * 2.0f
+                    };
+                    const ImU32 fill = armed ? IM_COL32(77, 145, 255, 82) : IM_COL32(77, 145, 255, 42);
+                    const ImU32 border = armed ? IM_COL32(77, 145, 255, 190) : IM_COL32(77, 145, 255, 110);
+                    dl->AddRectFilled(ghostPos, {ghostPos.x + ghostSize.x, ghostPos.y + ghostSize.y},
+                                      fill, ImGui::GetStyle().FrameRounding);
+                    dl->AddRect(ghostPos, {ghostPos.x + ghostSize.x, ghostPos.y + ghostSize.y},
+                                border, ImGui::GetStyle().FrameRounding, 0, 1.5f);
+                    dl->AddText({ghostPos.x + ImGui::GetStyle().FramePadding.x,
+                                 ghostPos.y + ImGui::GetStyle().FramePadding.y},
+                                IM_COL32(230, 240, 255, armed ? 220 : 150), ghostLabel);
+
+                    if (payload->IsDelivery() && armed)
+                        requestMove(dragged, lastVisibleToken, true, true);
+                } else {
+                    bottomArmKey.clear();
+                    bottomArmAt = 0.0;
+
+                    struct SlotPreview {
+                        std::string target;
+                        bool after{false};
+                        float x{};
+                        float top{};
+                        float bottom{};
+                        float distance{FLT_MAX};
+                    } best;
+
+                    for (const PopupButtonRect& rect : buttonRects) {
+                        const bool rowHit = mouse.y >= rect.min.y - 8.0f && mouse.y <= rect.max.y + 8.0f;
+                        if (!rowHit)
+                            continue;
+                        const float beforeDistance = std::fabs(mouse.x - rect.min.x);
+                        if (beforeDistance < best.distance) {
+                            best = {rect.token, false, rect.min.x, rect.min.y, rect.max.y, beforeDistance};
+                        }
+                        const float afterDistance = std::fabs(mouse.x - rect.max.x);
+                        if (afterDistance < best.distance) {
+                            best = {rect.token, true, rect.max.x, rect.min.y, rect.max.y, afterDistance};
+                        }
+                    }
+
+                    if (!best.target.empty()) {
+                        dl->AddRectFilled({best.x - 1.5f, best.top - 2.0f},
+                                          {best.x + 1.5f, best.bottom + 2.0f},
+                                          IM_COL32(77, 145, 255, 180), 2.0f);
+                        if (payload->IsDelivery())
+                            requestMove(dragged, best.target, false, best.after);
+                    }
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::SetCursorScreenPos(finalStripCursor);
     }
 
-    bool newlineActive = m_appendNewlineAfterPaste;
-    if (PopupToggleButton("Newline", newlineActive, toggleColors)) {
-        ActivateKeyboardCapture();
-        m_appendNewlineAfterPaste = !m_appendNewlineAfterPaste;
-    }
-    ImGui::SameLine();
-
-    bool moveActive = m_pasteMoveTarget != ClipboardHistory::MoveTarget::None;
-    if (PopupToggleButton(PasteMoveLabel(m_pasteMoveTarget), moveActive, toggleColors)) {
-        ActivateKeyboardCapture();
-        m_pasteMoveTarget = NextPasteMoveTarget(m_pasteMoveTarget);
-    }
-    ImGui::SameLine();
-
-    if (ImGui::SmallButton(" @ ")) {       // gear placeholder
-        OpenSettingsWindow();
-    }
+    if (pendingMove.requested)
+        moveToken(pendingMove.dragged, pendingMove.target, pendingMove.below, pendingMove.after);
     ImGui::Spacing();
 }
 
 // -- Item list -----------------------------------------------------------------
 
 bool PopupWindow::ItemPassesFilter(const ClipboardItem& item) const {
+    if (!m_activeCustomFilterId.empty()) {
+        if (Application* app = Application::Get()) {
+            const auto& filters = app->GetCustomFilters();
+            auto it = std::find_if(filters.begin(), filters.end(),
+                [&](const CustomFilter& filter) { return filter.id == m_activeCustomFilterId; });
+            if (it != filters.end())
+                return CustomFilterMatches(*it, item);
+        }
+        return true;
+    }
+
     switch (m_filterMode) {
     case 1: return item.IsText();
     case 2: return item.IsImage();
@@ -800,6 +1496,75 @@ std::vector<size_t> PopupWindow::BuildVisibleHistoryIndices(bool pinnedOnly) con
     return indices;
 }
 
+std::vector<uint64_t> PopupWindow::BuildVisibleItemIds() const {
+    std::vector<uint64_t> ids;
+    ClipboardHistory* hist = Application::Get()->GetHistory();
+    if (!hist)
+        return ids;
+
+    auto append = [&](bool pinnedOnly) {
+        for (size_t index : BuildVisibleHistoryIndices(pinnedOnly)) {
+            if (const ClipboardItem* item = hist->Get(index))
+                ids.push_back(item->id);
+        }
+    };
+    append(true);
+    append(false);
+    return ids;
+}
+
+bool PopupWindow::IsItemSelected(uint64_t itemId) const {
+    return std::find(m_selectedItemIds.begin(), m_selectedItemIds.end(), itemId) !=
+           m_selectedItemIds.end();
+}
+
+std::vector<uint64_t> PopupWindow::ContextSelectionFor(uint64_t itemId) const {
+    if (IsItemSelected(itemId) && !m_selectedItemIds.empty())
+        return m_selectedItemIds;
+    return {itemId};
+}
+
+void PopupWindow::ClearItemSelection() {
+    m_selectedItemIds.clear();
+    m_selectionAnchorId = 0;
+}
+
+void PopupWindow::SelectOnlyItem(uint64_t itemId) {
+    m_selectedItemIds = {itemId};
+    m_selectionAnchorId = itemId;
+}
+
+void PopupWindow::ToggleItemSelection(uint64_t itemId) {
+    auto it = std::find(m_selectedItemIds.begin(), m_selectedItemIds.end(), itemId);
+    if (it == m_selectedItemIds.end())
+        m_selectedItemIds.push_back(itemId);
+    else
+        m_selectedItemIds.erase(it);
+    m_selectionAnchorId = itemId;
+}
+
+void PopupWindow::SelectRangeTo(uint64_t itemId) {
+    if (m_selectionAnchorId == 0) {
+        SelectOnlyItem(itemId);
+        return;
+    }
+
+    const std::vector<uint64_t> visible = BuildVisibleItemIds();
+    auto a = std::find(visible.begin(), visible.end(), m_selectionAnchorId);
+    auto b = std::find(visible.begin(), visible.end(), itemId);
+    if (a == visible.end() || b == visible.end()) {
+        SelectOnlyItem(itemId);
+        return;
+    }
+
+    const size_t first = static_cast<size_t>(std::distance(visible.begin(), a < b ? a : b));
+    const size_t last = static_cast<size_t>(std::distance(visible.begin(), a < b ? b : a));
+    for (size_t i = first; i <= last; ++i) {
+        if (!IsItemSelected(visible[i]))
+            m_selectedItemIds.push_back(visible[i]);
+    }
+}
+
 void PopupWindow::DrawItemList() {
     // Image filter mode gets its own dedicated browser UI
     if (m_filterMode == 2) {
@@ -814,6 +1579,7 @@ void PopupWindow::DrawItemList() {
     ImGuiWindowFlags itemFlags = m_appearance.showScrollbars
         ? ImGuiWindowFlags_None
         : ImGuiWindowFlags_NoScrollbar;
+    itemFlags |= ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::BeginChild("##items", {0.f, 0.f}, ImGuiChildFlags_None, itemFlags);
 
     const std::vector<size_t> pinned = BuildVisibleHistoryIndices(true);
@@ -865,19 +1631,24 @@ void PopupWindow::DrawItemList() {
                 std::snprintf(label, sizeof(label), " %s   %s%s##r%zu",
                               key.c_str(), pin, preview.c_str(), i);
 
-            if (ImGui::Selectable(label, qpos >= 0,
-                                   ImGuiSelectableFlags_SpanAllColumns)) {
+            const bool selected = IsItemSelected(item->id);
+            if (ImGui::Selectable(label, qpos >= 0 || selected,
+                                   ImGuiSelectableFlags_SpanAllColumns |
+                                   ImGuiSelectableFlags_AllowDoubleClick)) {
                 ActivateKeyboardCapture();
                 ReleaseSearchCapture();
 
-                const bool ctrlHeld = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                HotkeyManager* hotkeys = Application::Get() ? Application::Get()->GetHotkeys() : nullptr;
+                const bool ctrlHeld = hotkeys ? hotkeys->IsCtrlDown()
+                                              : ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+                const bool shiftHeld = hotkeys ? hotkeys->IsShiftDown()
+                                               : ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+                const bool doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 
-                if (ctrlHeld) {
-                    if (isSecret) ImGui::PopStyleColor();
-                    const uint64_t itemId = item->id;
-                    PasteItemKeepOpen(*item);
-                    hist->MoveItemById(itemId, m_pasteMoveTarget);
-                    return true;
+                if (shiftHeld) {
+                    SelectRangeTo(item->id);
+                } else if (ctrlHeld) {
+                    ToggleItemSelection(item->id);
                 } else if (m_queueMode) {
                     if (qpos >= 0)
                         m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), item->id),
@@ -885,11 +1656,14 @@ void PopupWindow::DrawItemList() {
                     else
                         m_queue.push_back(item->id);
                 } else {
-                    if (isSecret) ImGui::PopStyleColor();
-                    const uint64_t itemId = item->id;
-                    PasteItemKeepOpen(*item);
-                    hist->MoveItemById(itemId, m_pasteMoveTarget);
-                    return true;
+                    SelectOnlyItem(item->id);
+                    if (doubleClick) {
+                        if (isSecret) ImGui::PopStyleColor();
+                        const uint64_t itemId = item->id;
+                        PasteItemKeepOpen(*item);
+                        hist->MoveItemById(itemId, m_pasteMoveTarget);
+                        return true;
+                    }
                 }
             }
 
@@ -915,6 +1689,7 @@ void PopupWindow::DrawItemList() {
 
     if (drawSection("Pinned entries", pinned, true) ||
         drawSection("History", regular, false)) {
+        SmoothScrollCurrentWindow("popup_items", 112.0f, 0.22f);
         ImGui::EndChild();
         ImGui::PopStyleColor();
         return;
@@ -940,66 +1715,249 @@ void PopupWindow::DrawItemList() {
         ReleaseSearchCapture();
     }
 
+    SmoothScrollCurrentWindow("popup_items", 112.0f, 0.22f);
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+void PopupWindow::DrawAndroidPanel() {
+    Application* app = Application::Get();
+    if (!app) return;
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
+    ImGuiWindowFlags childFlags = m_appearance.showScrollbars
+        ? ImGuiWindowFlags_None
+        : ImGuiWindowFlags_NoScrollbar;
+    childFlags |= ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::BeginChild("##android_clipboard_panel", {0.f, 0.f}, ImGuiChildFlags_None, childFlags);
+
+    const bool running = app->IsAndroidSyncServerRunning();
+    const unsigned short port = app->AndroidSyncServerPort();
+    const std::string endpoint = "http://192.168.137.1:" + std::to_string(port);
+    if (m_androidEndpointBuf[0] == '\0' && !app->GetAndroidDeviceEndpoint().empty())
+        std::snprintf(m_androidEndpointBuf, sizeof(m_androidEndpointBuf), "%s",
+                      app->GetAndroidDeviceEndpoint().c_str());
+    const std::vector<AndroidClipboardEntry> entries = app->GetAndroidClipboardEntries();
+    const bool justOpened = m_androidPanelOpen && !m_lastAndroidPanelOpen;
+    m_lastAndroidPanelOpen = m_androidPanelOpen;
+    if (justOpened) {
+        const std::string savedEndpoint = app->GetAndroidDeviceEndpoint();
+        if (!savedEndpoint.empty()) {
+            std::snprintf(m_androidEndpointBuf, sizeof(m_androidEndpointBuf), "%s",
+                          savedEndpoint.c_str());
+            m_androidEndpointEditing = false;
+            m_dialogTextCapture = false;
+        }
+    }
+
+    auto requestSync = [&]() {
+        std::string error;
+        if (app->RequestAndroidSyncToWindows(&error))
+            m_androidSyncStatus = "Sync requested";
+        else
+            m_androidSyncStatus = error.empty() ? "Sync failed" : error;
+    };
+
+    if (justOpened && !app->GetAndroidDeviceEndpoint().empty())
+        requestSync();
+
+    ImGui::TextDisabled("Android Clipboard");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Text("Receiver: %s   Items: %zu", running ? "listening" : "not running", entries.size());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Sync"))
+        requestSync();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Test Android")) {
+        std::string error;
+        if (app->CheckAndroidDeviceHealth(&error))
+            m_androidSyncStatus = "Android endpoint reachable";
+        else
+            m_androidSyncStatus = error.empty() ? "Android endpoint test failed" : error;
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Copy endpoint")) {
+        ImGui::SetClipboardText(endpoint.c_str());
+    }
+    if (!m_androidSyncStatus.empty())
+        ImGui::TextDisabled("%s", m_androidSyncStatus.c_str());
+
+    ImGui::Spacing();
+    const std::string savedEndpoint = app->GetAndroidDeviceEndpoint();
+    const bool hasSavedEndpoint = !savedEndpoint.empty();
+    if (hasSavedEndpoint && !m_androidEndpointEditing) {
+        std::string displayEndpoint = savedEndpoint;
+        if (displayEndpoint.rfind("http://", 0) == 0)
+            displayEndpoint.erase(0, 7);
+        if (displayEndpoint.rfind("https://", 0) == 0)
+            displayEndpoint.erase(0, 8);
+        const size_t slash = displayEndpoint.find('/');
+        if (slash != std::string::npos)
+            displayEndpoint.erase(slash);
+        ImGui::Text("Android API: %s", displayEndpoint.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Change")) {
+            std::snprintf(m_androidEndpointBuf, sizeof(m_androidEndpointBuf), "%s", savedEndpoint.c_str());
+            m_androidEndpointEditing = true;
+            m_dialogTextCapture = true;
+        }
+    } else {
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##android_device_endpoint",
+                                 "Android app API endpoint, e.g. http://192.168.137.42:8765",
+                                 m_androidEndpointBuf, sizeof(m_androidEndpointBuf));
+        const bool endpointActive = ImGui::IsItemActive();
+        if (endpointActive || ImGui::IsItemClicked()) {
+            ActivateKeyboardCapture();
+            m_dialogTextCapture = true;
+        }
+        if (ImGui::SmallButton("Save Android API endpoint")) {
+            app->SetAndroidDeviceEndpoint(m_androidEndpointBuf);
+            std::snprintf(m_androidEndpointBuf, sizeof(m_androidEndpointBuf), "%s",
+                          app->GetAndroidDeviceEndpoint().c_str());
+            m_androidEndpointEditing = false;
+            m_dialogTextCapture = false;
+        }
+        if (hasSavedEndpoint) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Cancel")) {
+                std::snprintf(m_androidEndpointBuf, sizeof(m_androidEndpointBuf), "%s", savedEndpoint.c_str());
+                m_androidEndpointEditing = false;
+                m_dialogTextCapture = false;
+            }
+        }
+        if (m_dialogTextCapture && !endpointActive)
+            m_dialogTextCapture = false;
+    }
+
+    ImGui::Spacing();
+    if (entries.empty()) {
+        ImGui::TextDisabled("No Android pushed items yet.");
+        ImGui::TextWrapped("Set the Android app's Windows Endpoint to %s and keep auto push enabled.", endpoint.c_str());
+    } else {
+        for (const AndroidClipboardEntry& entry : entries) {
+            const std::string preview = entry.text.substr(0, 140);
+            std::string label = (entry.pinned ? "[P] " : "") + preview + "##android_" + std::to_string(entry.id);
+            if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
+                ImGui::SetClipboardText(entry.text.c_str());
+            }
+
+            if (ImGui::BeginPopupContextItem()) {
+                ImGui::TextDisabled("Android item %llu", static_cast<unsigned long long>(entry.id));
+                ImGui::Separator();
+                if (ImGui::MenuItem("Copy to Windows clipboard")) {
+                    ImGui::SetClipboardText(entry.text.c_str());
+                }
+                if (ImGui::MenuItem("Copy to Clipboard++ history")) {
+                    app->InsertExternalClipboardText(entry.text, entry.source.empty() ? "android" : entry.source);
+                }
+                if (ImGui::MenuItem(entry.pinned ? "Unpin" : "Pin")) {
+                    app->SetAndroidClipboardEntryPinned(entry.id, !entry.pinned);
+                }
+                if (ImGui::MenuItem("Remove")) {
+                    app->RemoveAndroidClipboardEntry(entry.id);
+                }
+                ImGui::EndPopup();
+            }
+        }
+    }
+
+    SmoothScrollCurrentWindow("popup_android", 112.0f, 0.22f);
     ImGui::EndChild();
     ImGui::PopStyleColor();
 }
 
 bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item, int qpos) {
-    ClipboardHistory* hist = Application::Get()->GetHistory();
+    Application* app = Application::Get();
+    ClipboardHistory* hist = app ? app->GetHistory() : nullptr;
     if (!hist)
         return false;
 
     bool changed = false;
     const uint64_t itemId = item.id;
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !IsItemSelected(itemId))
+        SelectOnlyItem(itemId);
 
     if (ImGui::BeginPopupContextItem()) {
         ActivateKeyboardCapture();
         ReleaseSearchCapture();
 
-        ImGui::TextDisabled("Item %llu", static_cast<unsigned long long>(itemId));
+        const std::vector<uint64_t> ids = ContextSelectionFor(itemId);
+        const bool multi = ids.size() > 1;
+        if (multi)
+            ImGui::TextDisabled("%zu selected items", ids.size());
+        else
+            ImGui::TextDisabled("Item %llu", static_cast<unsigned long long>(itemId));
         ImGui::Separator();
 
-        if (ImGui::MenuItem("Paste")) {
+        if (!multi && ImGui::MenuItem("Paste")) {
             PasteItemKeepOpen(item);
             hist->MoveItemById(itemId, m_pasteMoveTarget);
             changed = true;
         }
-        if (ImGui::MenuItem("Copy to clipboard")) {
+        if (!multi && ImGui::MenuItem("Copy to clipboard")) {
             WriteToClipboard(item);
+        }
+        if (ImGui::MenuItem(multi ? "Send selected to Android clipboard" : "Send to Android clipboard")) {
+            std::vector<std::string> texts;
+            for (uint64_t id : ids) {
+                ClipboardItem selected;
+                if (hist->GetByIdCopy(id, selected) && selected.IsText() && !selected.text.empty())
+                    texts.push_back(selected.text);
+            }
+            std::string error;
+            if (!app || !app->SendTextItemsToAndroid(texts, &error)) {
+                // Keep this lightweight for the POC; the Android panel shows where to set the endpoint.
+            }
         }
 
         ImGui::Separator();
         if (qpos >= 0) {
-            if (ImGui::MenuItem("Remove from queue")) {
-                m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), itemId),
-                              m_queue.end());
+            if (ImGui::MenuItem(multi ? "Remove selected from queue" : "Remove from queue")) {
+                for (uint64_t id : ids)
+                    m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), id), m_queue.end());
                 changed = true;
             }
         } else {
-            if (ImGui::MenuItem("Add to queue")) {
-                m_queue.push_back(itemId);
+            if (ImGui::MenuItem(multi ? "Add selected to queue" : "Add to queue")) {
+                for (uint64_t id : ids) {
+                    if (std::find(m_queue.begin(), m_queue.end(), id) == m_queue.end())
+                        m_queue.push_back(id);
+                }
                 changed = true;
             }
         }
 
-        if (ImGui::MenuItem("Move to top")) {
-            hist->MoveItemById(itemId, ClipboardHistory::MoveTarget::Top);
+        if (ImGui::MenuItem(multi ? "Move selected to top" : "Move to top")) {
+            for (auto it = ids.rbegin(); it != ids.rend(); ++it)
+                hist->MoveItemById(*it, ClipboardHistory::MoveTarget::Top);
             changed = true;
         }
-        if (ImGui::MenuItem("Move to bottom")) {
-            hist->MoveItemById(itemId, ClipboardHistory::MoveTarget::Bottom);
+        if (ImGui::MenuItem(multi ? "Move selected to bottom" : "Move to bottom")) {
+            for (uint64_t id : ids)
+                hist->MoveItemById(id, ClipboardHistory::MoveTarget::Bottom);
             changed = true;
         }
-        if (ImGui::MenuItem(item.pinned ? "Unpin" : "Pin")) {
-            hist->SetPinnedById(itemId, !item.pinned);
+        if (ImGui::MenuItem(multi ? "Pin selected" : (item.pinned ? "Unpin" : "Pin"))) {
+            for (uint64_t id : ids)
+                hist->SetPinnedById(id, multi ? true : !item.pinned);
+            changed = true;
+        }
+        if (multi && ImGui::MenuItem("Unpin selected")) {
+            for (uint64_t id : ids)
+                hist->SetPinnedById(id, false);
             changed = true;
         }
 
         ImGui::Separator();
-        if (ImGui::MenuItem("Delete")) {
-            m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), itemId),
-                          m_queue.end());
-            hist->RemoveItemById(itemId);
+        if (ImGui::MenuItem(multi ? "Delete selected" : "Delete")) {
+            for (uint64_t id : ids) {
+                m_queue.erase(std::remove(m_queue.begin(), m_queue.end(), id), m_queue.end());
+                hist->RemoveItemById(id);
+            }
+            ClearItemSelection();
             changed = true;
         }
 
@@ -1018,27 +1976,108 @@ void PopupWindow::ReleaseSearchCapture() {
 }
 
 void PopupWindow::ActivateKeyboardCapture() {
+    if (!m_keyboardCapture)
+        PLog("[KB-CAPTURE] enabled (was false)");
     m_keyboardCapture = true;
+}
+
+bool PopupWindow::IsValidPasteTarget(HWND hwnd) const {
+    if (!hwnd || !IsWindow(hwnd))
+        return false;
+
+    HWND root = GetAncestor(hwnd, GA_ROOT);
+    if (!root || !IsWindow(root))
+        return false;
+
+    if (root == m_hwnd)
+        return false;
+
+    if (Application* app = Application::Get()) {
+        if (root == app->GetHwnd())
+            return false;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(root, &pid);
+    if (pid == GetCurrentProcessId())
+        return false;
+
+    return IsWindowVisible(root) != FALSE;
+}
+
+void PopupWindow::NotePasteTarget(HWND hwnd, const char* reason) {
+    HWND root = hwnd ? GetAncestor(hwnd, GA_ROOT) : nullptr;
+    if (!IsValidPasteTarget(root)) {
+        PLog("[TARGET] ignored reason=%s hwnd=%s", reason ? reason : "unknown", WH(hwnd).c_str());
+        return;
+    }
+
+    if (root != m_activePasteTarget)
+        PLog("[TARGET] active reason=%s %s -> %s",
+             reason ? reason : "unknown",
+             WH(m_activePasteTarget).c_str(),
+             WH(root).c_str());
+
+    m_activePasteTarget = root;
+    m_prevForeground = root;
+
+    if (Application* app = Application::Get())
+        app->SyncClipboardForWindow(root);
+}
+
+void PopupWindow::StartPasteTargetTracking() {
+    if (m_foregroundHook)
+        return;
+
+    g_trackingPopup = this;
+    m_foregroundHook = SetWinEventHook(
+        EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+        nullptr, ForegroundWinEventProc,
+        0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    PLog("[TARGET] foreground hook %s", m_foregroundHook ? "started" : "FAILED");
+}
+
+void PopupWindow::StopPasteTargetTracking() {
+    if (m_foregroundHook) {
+        UnhookWinEvent(m_foregroundHook);
+        m_foregroundHook = nullptr;
+        PLog("[TARGET] foreground hook stopped");
+    }
+    if (g_trackingPopup == this)
+        g_trackingPopup = nullptr;
+}
+
+void CALLBACK PopupWindow::ForegroundWinEventProc(HWINEVENTHOOK, DWORD event,
+                                                  HWND hwnd, LONG objectId,
+                                                  LONG childId, DWORD, DWORD) {
+    if (event != EVENT_SYSTEM_FOREGROUND || objectId != OBJID_WINDOW || childId != CHILDID_SELF)
+        return;
+    if (g_trackingPopup && g_trackingPopup->m_visible)
+        g_trackingPopup->NotePasteTarget(hwnd, "foreground");
 }
 
 void PopupWindow::NoteExternalMouseDown(POINT screenPoint) {
     RECT popupRect{};
     if (GetWindowRect(m_hwnd, &popupRect) &&
         PtInRect(&popupRect, screenPoint)) {
+        PLog("[MOUSE-EXT] click=(%ld,%ld) INSIDE popup -> no change (kbCapture=%d)",
+             screenPoint.x, screenPoint.y, m_keyboardCapture);
         return;
     }
 
+    PLog("[MOUSE-EXT] click=(%ld,%ld) OUTSIDE popup rect=(%ld,%ld,%ld,%ld) -> kbCapture=false",
+         screenPoint.x, screenPoint.y,
+         popupRect.left, popupRect.top, popupRect.right, popupRect.bottom);
     ReleaseSearchCapture();
     m_keyboardCapture = false;
 
     HWND clicked = WindowFromPoint(screenPoint);
-    HWND main = Application::Get() ? Application::Get()->GetHwnd() : nullptr;
     if (clicked) clicked = GetAncestor(clicked, GA_ROOT);
-    if (clicked && clicked != m_hwnd && clicked != main) {
-        m_prevForeground = clicked;
-        if (Application* app = Application::Get())
-            app->SyncClipboardForWindow(clicked);
-    }
+    NotePasteTarget(clicked, "mouse");
+
+    Application* app = Application::Get();
+    if (app && app->GetHidePopupOnOutsideClick())
+        Hide();
 }
 
 // -- Image browser -------------------------------------------------------------
@@ -1076,6 +2115,8 @@ void PopupWindow::DrawImageBrowser() {
     ImGui::SameLine(0, 6.0f);
     if (ImGui::SmallButton("Refresh")) {
         m_imageListDirty = true;
+        m_selectedImageIds.clear();
+        m_imgSelectionAnchorId.clear();
         ClearThumbCache();
     }
     ImGui::Separator();
@@ -1084,6 +2125,18 @@ void PopupWindow::DrawImageBrowser() {
     if (m_imageListDirty) {
         m_cachedImageList = store->ListAll();
         m_imageListDirty = false;
+        m_selectedImageIds.erase(
+            std::remove_if(m_selectedImageIds.begin(), m_selectedImageIds.end(),
+                [&](const std::string& id) {
+                    return std::none_of(m_cachedImageList.begin(), m_cachedImageList.end(),
+                        [&](const ImageRecord& record) { return record.id == id; });
+                }),
+            m_selectedImageIds.end());
+        if (!m_imgSelectionAnchorId.empty() &&
+            std::none_of(m_cachedImageList.begin(), m_cachedImageList.end(),
+                [&](const ImageRecord& record) { return record.id == m_imgSelectionAnchorId; })) {
+            m_imgSelectionAnchorId.clear();
+        }
     }
 
     // -- Filter + sort --------------------------------------------------------
@@ -1136,6 +2189,7 @@ void PopupWindow::DrawImageBrowser() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
     ImGuiWindowFlags listFlags = m_appearance.showScrollbars
         ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoScrollbar;
+    listFlags |= ImGuiWindowFlags_NoScrollWithMouse;
 
     if (ImGui::BeginChild("##imglist", {0.f, 0.f}, ImGuiChildFlags_None, listFlags)) {
         if (rows.empty()) {
@@ -1144,6 +2198,56 @@ void PopupWindow::DrawImageBrowser() {
         }
 
         bool openCtxMenu = false;
+        auto releaseImageThumb = [&](const std::string& id) {
+            auto thumbIt = m_thumbCache.find(id);
+            if (thumbIt == m_thumbCache.end())
+                return;
+            if (thumbIt->second.srv)
+                thumbIt->second.srv->Release();
+            m_thumbCache.erase(thumbIt);
+        };
+        auto isImgSelected = [&](const std::string& id) {
+            return std::find(m_selectedImageIds.begin(), m_selectedImageIds.end(), id) !=
+                   m_selectedImageIds.end();
+        };
+        auto selectOnlyImage = [&](const std::string& id) {
+            m_selectedImageIds = {id};
+            m_imgSelectionAnchorId = id;
+        };
+        auto toggleImage = [&](const std::string& id) {
+            auto it = std::find(m_selectedImageIds.begin(), m_selectedImageIds.end(), id);
+            if (it == m_selectedImageIds.end())
+                m_selectedImageIds.push_back(id);
+            else
+                m_selectedImageIds.erase(it);
+            m_imgSelectionAnchorId = id;
+        };
+        auto selectImageRange = [&](const std::string& id) {
+            if (m_imgSelectionAnchorId.empty()) {
+                selectOnlyImage(id);
+                return;
+            }
+            size_t a = rows.size(), b = rows.size();
+            for (size_t idx = 0; idx < rows.size(); ++idx) {
+                if (rows[idx]->id == m_imgSelectionAnchorId) a = idx;
+                if (rows[idx]->id == id) b = idx;
+            }
+            if (a == rows.size() || b == rows.size()) {
+                selectOnlyImage(id);
+                return;
+            }
+            const size_t first = std::min(a, b);
+            const size_t last = std::max(a, b);
+            for (size_t idx = first; idx <= last; ++idx) {
+                if (!isImgSelected(rows[idx]->id))
+                    m_selectedImageIds.push_back(rows[idx]->id);
+            }
+        };
+        auto contextImageIds = [&]() {
+            if (!m_imgCtxMenuId.empty() && isImgSelected(m_imgCtxMenuId) && !m_selectedImageIds.empty())
+                return m_selectedImageIds;
+            return std::vector<std::string>{m_imgCtxMenuId};
+        };
 
         for (const ImageRecord* r : rows) {
             ImGui::PushID(r->id.c_str());
@@ -1245,22 +2349,42 @@ void PopupWindow::DrawImageBrowser() {
             const bool hovered = ImGui::IsMouseHoveringRect(
                 rowTL, {rowBR.x, rowBR.y > rowTL.y ? rowBR.y : rowTL.y + kThumbH + rowPadY * 2});
 
-            if (hovered) {
+            const bool selected = isImgSelected(r->id);
+            if (selected || hovered) {
                 ImGui::GetWindowDrawList()->AddRectFilled(
                     rowTL, {rowBR.x, ImGui::GetCursorScreenPos().y},
-                    ImGui::GetColorU32(ImGuiCol_ButtonHovered, 0.4f));
+                    ImGui::GetColorU32(selected ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered,
+                                       selected ? 0.55f : 0.4f));
             }
 
             if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                ClipboardItem fake;
-                fake.type         = ContentType::Image;
-                fake.imageStoreId = r->id;
-                fake.imageW       = r->width;
-                fake.imageH       = r->height;
-                PasteItemKeepOpen(fake);
+                ActivateKeyboardCapture();
+                ReleaseSearchCapture();
+                HotkeyManager* hotkeys = app ? app->GetHotkeys() : nullptr;
+                const bool ctrlHeld = hotkeys ? hotkeys->IsCtrlDown()
+                                              : ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+                const bool shiftHeld = hotkeys ? hotkeys->IsShiftDown()
+                                               : ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+                if (shiftHeld) {
+                    selectImageRange(r->id);
+                } else if (ctrlHeld) {
+                    toggleImage(r->id);
+                } else {
+                    selectOnlyImage(r->id);
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                        ClipboardItem fake;
+                        fake.type         = ContentType::Image;
+                        fake.imageStoreId = r->id;
+                        fake.imageW       = r->width;
+                        fake.imageH       = r->height;
+                        PasteItemKeepOpen(fake);
+                    }
+                }
             }
 
             if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                if (!isImgSelected(r->id))
+                    selectOnlyImage(r->id);
                 m_imgCtxMenuId = r->id;
                 openCtxMenu = true;
             }
@@ -1273,15 +2397,20 @@ void PopupWindow::DrawImageBrowser() {
             ImGui::OpenPopup("##img_ctx");
 
         if (ImGui::BeginPopup("##img_ctx")) {
-            ImGui::TextDisabled("%s", m_imgCtxMenuId.substr(0, 8).c_str());
+            std::vector<std::string> ids = contextImageIds();
+            const bool multi = ids.size() > 1;
+            if (multi)
+                ImGui::TextDisabled("%zu selected images", ids.size());
+            else
+                ImGui::TextDisabled("%s", m_imgCtxMenuId.substr(0, 8).c_str());
             ImGui::Separator();
-            if (ImGui::MenuItem("Paste image")) {
+            if (!multi && ImGui::MenuItem("Paste image")) {
                 ClipboardItem fake;
                 fake.type         = ContentType::Image;
                 fake.imageStoreId = m_imgCtxMenuId;
                 PasteItemKeepOpen(fake);
             }
-            if (ImGui::MenuItem("Copy to clipboard")) {
+            if (!multi && ImGui::MenuItem("Copy to clipboard")) {
                 ClipboardItem fake;
                 fake.type         = ContentType::Image;
                 fake.imageStoreId = m_imgCtxMenuId;
@@ -1289,14 +2418,44 @@ void PopupWindow::DrawImageBrowser() {
             }
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.35f, 0.35f, 1.f));
-            if (ImGui::MenuItem("Delete from database")) {
-                store->Delete(m_imgCtxMenuId);
-                m_thumbCache.erase(m_imgCtxMenuId);
-                m_imageListDirty = true;
+            if (ImGui::MenuItem(multi ? "Delete selected from database" : "Delete from database")) {
+                int deleted = 0;
+                std::vector<std::string> failedIds;
+                for (const std::string& id : ids) {
+                    if (id.empty())
+                        continue;
+                    if (store->Delete(id)) {
+                        ++deleted;
+                        releaseImageThumb(id);
+                    } else {
+                        failedIds.push_back(id);
+                    }
+                }
+                if (deleted > 0) {
+                    m_cachedImageList.erase(
+                        std::remove_if(m_cachedImageList.begin(), m_cachedImageList.end(),
+                            [&](const ImageRecord& record) {
+                                return std::find(ids.begin(), ids.end(), record.id) != ids.end();
+                            }),
+                        m_cachedImageList.end());
+                    m_imageListDirty = true;
+                }
+                if (Application* app = Application::Get()) {
+                    std::ostringstream out;
+                    out << "image delete requested=" << ids.size()
+                        << " deleted=" << deleted
+                        << " failed=" << failedIds.size();
+                    if (!failedIds.empty())
+                        out << " firstFailed=" << failedIds.front();
+                    app->AddDeveloperEvent(out.str());
+                }
+                m_selectedImageIds.clear();
+                m_imgSelectionAnchorId.clear();
             }
             ImGui::PopStyleColor();
             ImGui::EndPopup();
         }
+        SmoothScrollCurrentWindow("popup_images", 112.0f, 0.22f);
     }
     ImGui::EndChild();
     ImGui::PopStyleColor();
@@ -1336,8 +2495,11 @@ void PopupWindow::PasteHistorySlot(int slot, HWND targetWindow) {
     ClipboardItem item;
     if (!hist->GetRegularCopy(static_cast<size_t>(slot), item)) return;
 
+    PLog("[PASTE-HISTORY] slot=%d type=%s target=%s text=%.50s",
+         slot, CtName(item.type), WH(targetWindow).c_str(), item.text.c_str());
     m_prevForeground = targetWindow;
-    WriteToClipboard(item);
+    NotePasteTarget(targetWindow, "hidden-history");
+    WriteToClipboard(item, targetWindow);
     RestoreFocusAndPaste(targetWindow);
     hist->MoveItemById(item.id, m_pasteMoveTarget);
 }
@@ -1352,27 +2514,40 @@ void PopupWindow::PastePinnedSlot(int slot, HWND targetWindow) {
     if (!hist->GetPinnedCopy(static_cast<size_t>(slot), item)) return;
 
     m_prevForeground = targetWindow;
-    WriteToClipboard(item);
+    NotePasteTarget(targetWindow, "hidden-pinned");
+    WriteToClipboard(item, targetWindow);
     RestoreFocusAndPaste(targetWindow);
     hist->MoveItemById(item.id, ClipboardHistory::MoveTarget::None);
 }
 
 void PopupWindow::PasteVisibleSlot(int slot) {
     const std::vector<size_t> regular = BuildVisibleHistoryIndices(false);
-    if (slot < 0 || static_cast<size_t>(slot) >= regular.size()) return;
+    if (slot < 0 || static_cast<size_t>(slot) >= regular.size()) {
+        PLog("[PASTE-SLOT] slot=%d INVALID (visible count=%zu)", slot, regular.size());
+        return;
+    }
     ClipboardHistory* hist = Application::Get()->GetHistory();
     if (!hist) return;
 
     ClipboardItem item;
-    if (!hist->GetCopy(regular[static_cast<size_t>(slot)], item)) return;
+    if (!hist->GetCopy(regular[static_cast<size_t>(slot)], item)) {
+        PLog("[PASTE-SLOT] slot=%d GetCopy FAILED", slot);
+        return;
+    }
 
+    PLog("[PASTE-SLOT] slot=%d type=%s kbCapture=%d txtEntry=%d text=%.50s",
+         slot, CtName(item.type), m_keyboardCapture, IsTextEntryActive(), item.text.c_str());
     PasteItemKeepOpen(item);
     hist->MoveItemById(item.id, m_pasteMoveTarget);
 }
 
 void PopupWindow::PasteItemKeepOpen(const ClipboardItem& item) {
-    WriteToClipboard(item);
-    RestoreFocusAndPaste();
+    PLog("[PASTE-ITEM] type=%s fg=%s text=%.50s",
+         CtName(item.type), WH(GetForegroundWindow()).c_str(), item.text.c_str());
+    HWND target = ResolvePasteTarget();
+    WriteToClipboard(item, target);
+    RestoreFocusAndPaste(target);
+    ActivateKeyboardCapture(); // re-arm so slot keys keep working after paste
 }
 
 void PopupWindow::PasteQueue() {
@@ -1380,13 +2555,15 @@ void PopupWindow::PasteQueue() {
     if (!hist) return;
 
     std::vector<uint64_t> ids = m_queue;
+    HWND queueTarget = ResolvePasteTarget();
+    PLog("[PASTE-QUEUE] count=%zu lockedTarget=%s", ids.size(), WH(queueTarget).c_str());
     Hide();
 
     for (size_t qi = 0; qi < ids.size(); ++qi) {
         ClipboardItem item;
         if (!hist->GetByIdCopy(ids[qi], item)) continue;
-        WriteToClipboard(item);
-        RestoreFocusAndPaste();
+        WriteToClipboard(item, queueTarget);
+        RestoreFocusAndPaste(queueTarget);
         hist->MoveItemById(item.id, m_pasteMoveTarget);
         if (qi + 1 < ids.size() && m_queueDelayMs > 0)
             Sleep(static_cast<DWORD>(m_queueDelayMs));
@@ -1417,7 +2594,10 @@ bool PopupWindow::LaunchWebSearchForText(const std::string& text, bool hideOnSuc
     return false;
 }
 
-void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
+void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow) const {
+    PLog("[WRITE-CB] type=%s len=%zu text=%.60s",
+         CtName(item.type), item.text.size(), item.text.c_str());
+
     if (Application::Get() && Application::Get()->GetMonitor())
         Application::Get()->GetMonitor()->SuppressNextUpdate();
 
@@ -1425,14 +2605,73 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
     const bool isFileDrop = item.type == ContentType::FilePaths || (item.tags & TAG_PATH) != 0;
     if (isFileDrop) {
         std::vector<std::wstring> filePaths = win32util::ExistingPathListUtf8(text);
-        if (!filePaths.empty() && win32util::SetClipboardFileDrop(nullptr, filePaths))
+        if (!filePaths.empty() && win32util::SetClipboardFileDrop(nullptr, filePaths)) {
+            PLog("[WRITE-CB] FileDrop set OK (%zu paths)", filePaths.size());
             return;
+        }
+        PLog("[WRITE-CB] FileDrop FAILED (paths=%zu), falling through to text", filePaths.size());
+    }
+
+    if (item.type == ContentType::Image && !item.sourceFilePath.empty()) {
+        if (!OpenClipboard(nullptr)) {
+            PLog("[WRITE-CB] OpenClipboard FAILED for image+path (GLE=%lu)", GetLastError());
+            ToastWindow::Show(L"Paste failed: clipboard busy");
+            return;
+        }
+        EmptyClipboard();
+
+        bool wroteAny = false;
+        const std::wstring path = win32util::Utf8ToWide(item.sourceFilePath);
+        if (!path.empty()) {
+            if (HGLOBAL hm = BuildUnicodeTextGlobal(path)) {
+                if (SetClipboardData(CF_UNICODETEXT, hm)) {
+                    wroteAny = true;
+                    PLog("[WRITE-CB] CF_UNICODETEXT path set OK");
+                } else {
+                    GlobalFree(hm);
+                    PLog("[WRITE-CB] CF_UNICODETEXT path set FAILED");
+                }
+            }
+            if (HGLOBAL drop = BuildFileDropGlobal({path})) {
+                if (SetClipboardData(CF_HDROP, drop)) {
+                    wroteAny = true;
+                    PLog("[WRITE-CB] CF_HDROP set OK path=%s", item.sourceFilePath.c_str());
+                } else {
+                    GlobalFree(drop);
+                    PLog("[WRITE-CB] CF_HDROP set FAILED path=%s", item.sourceFilePath.c_str());
+                }
+            }
+        }
+
+        if (!item.imageStoreId.empty()) {
+            Application* app = Application::Get();
+            ImageStore* store = app ? app->GetImageStore() : nullptr;
+            if (store) {
+                HGLOBAL hDib = store->GetDibForPaste(item.imageStoreId);
+                if (hDib && SetClipboardData(CF_DIB, hDib)) {
+                    wroteAny = true;
+                    PLog("[WRITE-CB] CF_DIB set OK id=%s", item.imageStoreId.c_str());
+                } else if (hDib) {
+                    GlobalFree(hDib);
+                    PLog("[WRITE-CB] CF_DIB set FAILED id=%s", item.imageStoreId.c_str());
+                }
+            }
+        }
+
+        CloseClipboard();
+        if (!wroteAny)
+            ToastWindow::Show(L"Paste failed: image data unavailable");
+        return;
     }
 
     if (m_appendNewlineAfterPaste && !isFileDrop)
         text += "\r\n";
 
-    if (!OpenClipboard(nullptr)) return;
+    if (!OpenClipboard(nullptr)) {
+        PLog("[WRITE-CB] OpenClipboard FAILED (GLE=%lu)", GetLastError());
+        ToastWindow::Show(L"Paste failed: clipboard busy");
+        return;
+    }
     EmptyClipboard();
 
     if (item.type == ContentType::Image && !item.imageStoreId.empty()) {
@@ -1440,8 +2679,13 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
         ImageStore* store = app ? app->GetImageStore() : nullptr;
         if (store) {
             HGLOBAL hDib = store->GetDibForPaste(item.imageStoreId);
-            if (hDib)
+            if (hDib) {
                 SetClipboardData(CF_DIB, hDib);
+                PLog("[WRITE-CB] CF_DIB set OK id=%s", item.imageStoreId.c_str());
+            } else {
+                PLog("[WRITE-CB] GetDibForPaste FAILED id=%s", item.imageStoreId.c_str());
+                ToastWindow::Show(L"Paste failed: image data unavailable");
+            }
         }
     } else {
         int wlen = MultiByteToWideChar(CP_UTF8, 0,
@@ -1453,21 +2697,44 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item) const {
                 MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1,
                                     static_cast<wchar_t*>(GlobalLock(hm)), wlen);
                 GlobalUnlock(hm);
-                SetClipboardData(CF_UNICODETEXT, hm);
+                HANDLE res = SetClipboardData(CF_UNICODETEXT, hm);
+                PLog("[WRITE-CB] CF_UNICODETEXT set %s (wlen=%d)", res ? "OK" : "FAILED", wlen);
+                if (!res) ToastWindow::Show(L"Paste failed: could not write to clipboard");
+            } else {
+                PLog("[WRITE-CB] GlobalAlloc FAILED");
+                ToastWindow::Show(L"Paste failed: out of memory");
             }
+        } else {
+            PLog("[WRITE-CB] MultiByteToWideChar returned 0 (empty?)");
         }
     }
     CloseClipboard();
 }
 
 HWND PopupWindow::ResolvePasteTarget() const {
-    HWND fg = GetForegroundWindow();
-    HWND main = Application::Get() ? Application::Get()->GetHwnd() : nullptr;
+    HWND fg   = GetForegroundWindow();
 
-    if (fg && fg != m_hwnd && fg != main)
-        return fg;
-    if (m_prevForeground && IsWindow(m_prevForeground))
-        return m_prevForeground;
+    if (IsValidPasteTarget(m_activePasteTarget)) {
+        PLog("[RESOLVE-TARGET] active=%s fg=%s -> use active",
+             WH(m_activePasteTarget).c_str(), WH(fg).c_str());
+        return m_activePasteTarget;
+    }
+
+    if (IsValidPasteTarget(fg)) {
+        PLog("[RESOLVE-TARGET] fg=%s active=%s -> use fg",
+             WH(fg).c_str(), WH(m_activePasteTarget).c_str());
+        return GetAncestor(fg, GA_ROOT);
+    }
+
+    if (IsValidPasteTarget(m_prevForeground)) {
+        PLog("[RESOLVE-TARGET] fg=%s active=%s prevFg=%s -> use prevFg",
+             WH(fg).c_str(), WH(m_activePasteTarget).c_str(), WH(m_prevForeground).c_str());
+        return GetAncestor(m_prevForeground, GA_ROOT);
+    }
+
+    PLog("[RESOLVE-TARGET] fg=%s active=%s prevFg=%s -> NO TARGET",
+         WH(fg).c_str(), WH(m_activePasteTarget).c_str(), WH(m_prevForeground).c_str());
+    ToastWindow::Show(L"No paste target selected");
     return nullptr;
 }
 
@@ -1475,21 +2742,40 @@ bool PopupWindow::WaitForForeground(HWND target, DWORD timeoutMs) const {
     if (!target) return false;
 
     const DWORD started = GetTickCount();
-    while (GetForegroundWindow() != target) {
-        if (GetTickCount() - started >= timeoutMs)
+    while (GetAncestor(GetForegroundWindow(), GA_ROOT) != target) {
+        if (GetTickCount() - started >= timeoutMs) {
+            PLog("[WAIT-FG] TIMEOUT after %ums target=%s actual_fg=%s",
+                 timeoutMs, WH(target).c_str(), WH(GetForegroundWindow()).c_str());
             return false;
+        }
         MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT);
     }
+    PLog("[WAIT-FG] OK (%ums) target=%s", GetTickCount() - started, WH(target).c_str());
     return true;
 }
 
 void PopupWindow::RestoreFocusAndPaste(HWND preferredTarget) {
-    HWND target = preferredTarget ? preferredTarget : ResolvePasteTarget();
+    HWND target = preferredTarget ? GetAncestor(preferredTarget, GA_ROOT) : ResolvePasteTarget();
+    HWND curFg  = GetForegroundWindow();
+
+    PLog("[RESTORE] target=%s curFg=%s preferredTarget=%s",
+         WH(target).c_str(), WH(curFg).c_str(),
+         preferredTarget ? WH(preferredTarget).c_str() : "(none)");
+
     if (target && IsWindow(target)) {
-        if (GetForegroundWindow() != target) {
-            SetForegroundWindow(target);
-            WaitForForeground(target, 100);
+        if (GetAncestor(curFg, GA_ROOT) != target) {
+            PLog("[RESTORE] SetForegroundWindow(%s)", WH(target).c_str());
+            BOOL sfwOk = SetForegroundWindow(target);
+            PLog("[RESTORE] SetForegroundWindow returned %d", sfwOk);
+            WaitForForeground(target, 150);
+        } else {
+            PLog("[RESTORE] already foreground — skip SetForegroundWindow");
         }
+    } else {
+        PLog("[RESTORE] ABORT: target=%s IsWindow=%d",
+             WH(target).c_str(), target ? IsWindow(target) : 0);
+        ToastWindow::Show(L"No paste target selected");
+        return;
     }
 
     // All injected events carry kClipboardPasteMagic so our LL hook ignores them.
@@ -1539,7 +2825,10 @@ void PopupWindow::RestoreFocusAndPaste(HWND preferredTarget) {
         ++n;
     }
 
-    SendInput(static_cast<UINT>(n), in, sizeof(INPUT));
+    PLog("[RESTORE] SendInput n=%d ctrl=%d shift=%d alt=%d fg_at_send=%s",
+         n, ctrlDown, shiftDown, altDown, WH(GetForegroundWindow()).c_str());
+    UINT sent = SendInput(static_cast<UINT>(n), in, sizeof(INPUT));
+    PLog("[RESTORE] SendInput sent=%u/%d", sent, n);
 }
 
 // -- D3D11 swap chain ----------------------------------------------------------
@@ -1646,19 +2935,32 @@ void PopupWindow::ApplyOpacity() {
     SetLayeredWindowAttributes(m_hwnd, 0, alpha, LWA_ALPHA);
 }
 
-void PopupWindow::ApplyWindowCorners() {
-    // ImGui rounds only its own drawing. DWM owns the native HWND corners.
-    // Windows chooses the exact radius; custom pixel radii require region/per-pixel masks.
-    const int pref = 2; // DWMWCP_ROUND
+void PopupWindow::ApplyDwmFrameSettings() {
+    // ImGui draws the popup chrome; SetWindowRgn below owns the real HWND shape.
+    const int pref = 1; // DWMWCP_DONOTROUND
     DwmSetWindowAttribute(m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
                           &pref, sizeof(pref));
 
     const COLORREF noBorder = DWMWA_COLOR_NONE;
     DwmSetWindowAttribute(m_hwnd, DWMWA_BORDER_COLOR,
                           &noBorder, sizeof(noBorder));
+}
 
+void PopupWindow::InvalidateWindowRegion() {
+    m_regionCacheValid = false;
+}
+
+void PopupWindow::ApplyWindowRegion() {
     if (m_maximized) {
+        if (m_regionCacheValid && m_lastRegionMaximized)
+            return;
+
         SetWindowRgn(m_hwnd, nullptr, TRUE);
+        m_regionCacheValid = true;
+        m_lastRegionWidth = 0;
+        m_lastRegionHeight = 0;
+        m_lastRegionRadius = 0;
+        m_lastRegionMaximized = true;
         return;
     }
 
@@ -1672,14 +2974,38 @@ void PopupWindow::ApplyWindowCorners() {
     const int radius = static_cast<int>(std::lround(
         std::clamp(m_appearance.popupRounding, 0.0f, 48.0f) * scale * 2.0f));
 
+    if (m_regionCacheValid &&
+        m_lastRegionWidth == width &&
+        m_lastRegionHeight == height &&
+        m_lastRegionRadius == radius &&
+        !m_lastRegionMaximized) {
+        return;
+    }
+
     if (radius <= 1) {
         SetWindowRgn(m_hwnd, nullptr, TRUE);
+        m_regionCacheValid = true;
+        m_lastRegionWidth = width;
+        m_lastRegionHeight = height;
+        m_lastRegionRadius = radius;
+        m_lastRegionMaximized = false;
         return;
     }
 
     HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
-    if (region && SetWindowRgn(m_hwnd, region, TRUE) == 0)
+    if (!region)
+        return;
+
+    if (SetWindowRgn(m_hwnd, region, TRUE) == 0) {
         DeleteObject(region);
+        return;
+    }
+
+    m_regionCacheValid = true;
+    m_lastRegionWidth = width;
+    m_lastRegionHeight = height;
+    m_lastRegionRadius = radius;
+    m_lastRegionMaximized = false;
 }
 
 // -- Win32 message handler -----------------------------------------------------
@@ -1693,7 +3019,7 @@ void PopupWindow::ToggleMaximized() {
                      SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         m_maximized = false;
         ResizeSwapChainToClient();
-        ApplyWindowCorners();
+        ApplyWindowRegion();
         return;
     }
 
@@ -1713,7 +3039,7 @@ void PopupWindow::ToggleMaximized() {
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
     m_maximized = true;
     ResizeSwapChainToClient();
-    ApplyWindowCorners();
+    ApplyWindowRegion();
 }
 
 LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
@@ -1777,7 +3103,23 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
     }
 
     case WM_MOUSEACTIVATE:
+        // Always suppress activation on click — fixes close button in focus test mode.
+        // ShowWindow(SW_SHOW) still triggers WM_ACTIVATE directly when focus test mode is on.
         return MA_NOACTIVATE;
+
+    case WM_ACTIVATE: {
+        const char* act = (LOWORD(wParam) == WA_INACTIVE)    ? "INACTIVE"    :
+                          (LOWORD(wParam) == WA_CLICKACTIVE)  ? "CLICKACTIVE" : "ACTIVE";
+        PLog("[WM-ACTIVATE] %s focusTest=%d",
+             act, pw ? pw->m_focusTestMode : 0);
+        if (pw && pw->m_focusTestMode && LOWORD(wParam) != WA_INACTIVE) {
+            PLog("[WM-ACTIVATE] restoring prevFg=%s",
+                 pw ? WH(pw->m_prevForeground).c_str() : "null");
+            if (pw->m_prevForeground && IsWindow(pw->m_prevForeground))
+                SetForegroundWindow(pw->m_prevForeground);
+        }
+        break;
+    }
 
     case WM_ERASEBKGND:
         return TRUE;
@@ -1797,7 +3139,7 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
             pw->m_width = LOWORD(lParam);
             pw->m_height = HIWORD(lParam);
             pw->ResizeSwapChainToClient();
-            pw->ApplyWindowCorners();
+            pw->ApplyWindowRegion();
         }
         return 0;
 
@@ -1814,7 +3156,7 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
                              SWP_NOACTIVATE | SWP_NOOWNERZORDER);
             }
             pw->ResizeSwapChainToClient();
-            pw->ApplyWindowCorners();
+            pw->ApplyWindowRegion();
         }
         return 0;
 
@@ -1834,6 +3176,7 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
         return 0;
 
     case WM_KILLFOCUS:
+        PLog("[WM-KILLFOCUS] popup lost keyboard focus");
         return 0;
     }
 

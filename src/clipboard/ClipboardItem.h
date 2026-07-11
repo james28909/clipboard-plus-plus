@@ -58,6 +58,9 @@ struct ClipboardItem {
 
     std::string text;               // UTF-8; "[Image WxH]" for images
     std::string imageStoreId;       // UUID in ImageStore DB (images only)
+    std::string sourceFilePath;      // optional original/screenshot file path
+    std::string sourceKind;          // optional hint, e.g. "screenshot"
+    uint64_t sourcePixelHash{};      // transient normalized image hash for late screenshot file matching
     int imageW{};
     int imageH{};
 

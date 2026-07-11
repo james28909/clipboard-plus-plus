@@ -143,6 +143,10 @@ json ItemToJson(const ClipboardItem& item) {
         out["tags"] = item.tags;
     if (!item.sourceProcess.empty())
         out["sourceProcess"] = item.sourceProcess;
+    if (!item.sourceFilePath.empty())
+        out["sourceFilePath"] = item.sourceFilePath;
+    if (!item.sourceKind.empty())
+        out["sourceKind"] = item.sourceKind;
 
     json timestamps = TimestampsToJson(item);
     if (!timestamps.empty())
@@ -181,6 +185,8 @@ ClipboardItem ItemFromJson(const json& j, bool pinnedSection) {
     item.type = j.contains("type") ? TypeFromJson(j["type"]) : ContentType::Unknown;
     item.tags = j.value("tags", uint32_t{TAG_NONE});
     item.sourceProcess = j.value("sourceProcess", std::string{});
+    item.sourceFilePath = j.value("sourceFilePath", std::string{});
+    item.sourceKind = j.value("sourceKind", std::string{});
     LoadTimestamps(j, item);
 
     switch (item.type) {

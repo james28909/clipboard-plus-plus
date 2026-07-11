@@ -2,14 +2,30 @@
 
 #ifdef _WIN32
 #include "../app/Application.h"
+#include "../clipboard/ScreenshotTracker.h"
 #include "../ui/PopupWindow.h"
 #endif
 
 #include <algorithm>
 #include <cctype>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <sstream>
 #include <utility>
+#include <windows.h>
+
+// Appends to the same log file PopupWindow uses so all events are in one place.
+static void HkLog(const char* fmt, ...) {
+    static DWORD s_t0  = GetTickCount();
+    static bool  s_new = false; // PopupWindow writes the header; we just append
+    char msg[512]; va_list a; va_start(a, fmt); vsnprintf(msg, sizeof(msg), fmt, a); va_end(a);
+    char line[600]; snprintf(line, sizeof(line), "[%6ums] %s\n", GetTickCount() - s_t0, msg);
+    OutputDebugStringA(line);
+    wchar_t ap[MAX_PATH]{}; GetEnvironmentVariableW(L"APPDATA", ap, MAX_PATH);
+    std::wstring path = std::wstring(ap) + L"\\Clipboard++\\paste_debug.log";
+    if (FILE* f = _wfopen(path.c_str(), L"a")) { fputs(line, f); fclose(f); }
+}
 
 HotkeyManager* HotkeyManager::s_instance = nullptr;
 
@@ -187,7 +203,9 @@ std::vector<KeyBinding> HotkeyManager::DefaultBindings() {
         {true, true, false, 'S',          HotkeyAction::ShowPopupSearch, 0}, // Ctrl+Shift+S
         {true, true, false, 'I',          HotkeyAction::Incognito,       0}, // Ctrl+Shift+I
         {true, true, false, VK_OEM_COMMA, HotkeyAction::OpenSettings,    0}, // Ctrl+Shift+,
+        {true, true, false, 'E',          HotkeyAction::ToggleEditorWindow, 0}, // Ctrl+Shift+E
         {true, true, false, 'G',          HotkeyAction::LaunchClipboardWebSearch, 0}, // Ctrl+Shift+G
+        {true, true, true,  'Z',          HotkeyAction::SendSelectionToAndroid, 0}, // Ctrl+Alt+Shift+Z
         {false, true, true, 'D',          HotkeyAction::ToggleDebugWindow, 0}, // Alt+Shift+D
     };
 }
@@ -235,6 +253,8 @@ const char* HotkeyManager::ActionName(HotkeyAction action) {
     case HotkeyAction::LaunchWebSearch: return "Search web";
     case HotkeyAction::LaunchClipboardWebSearch: return "Search clipboard web";
     case HotkeyAction::ToggleDebugWindow: return "Toggle debug output";
+    case HotkeyAction::ToggleEditorWindow: return "Open text/script editor";
+    case HotkeyAction::SendSelectionToAndroid: return "Send selection to Android";
     default:                            return "Unassigned";
     }
 }
@@ -308,6 +328,14 @@ LRESULT CALLBACK HotkeyManager::LLProc(int nCode, WPARAM wParam, LPARAM lParam) 
             bool ctrl  = s_instance->m_ctrlDown;
             bool shift = s_instance->m_shiftDown;
             bool alt   = s_instance->m_altDown;
+            const bool win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
+                             (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+            if (kb->vkCode == VK_SNAPSHOT) {
+                ScreenshotTracker::Instance().NoteHotkey(
+                    win ? "Win+Print Screen" : (alt ? "Alt+Print Screen" : "Print Screen"));
+            } else if (win && shift && kb->vkCode == 'S') {
+                ScreenshotTracker::Instance().NoteHotkey("Win+Shift+S");
+            }
             if (s_instance->HandleKeyDown(kb->vkCode, ctrl, shift, alt))
                 return 1;
         }
@@ -420,10 +448,42 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         return true;
     }
 
+    // Hidden paste fires regardless of popup state so Ctrl+Alt+N always works.
+    {
+        const bool hiddenPasteEnabled = m_settings.hiddenPasteCtrl ||
+                                        m_settings.hiddenPasteShift ||
+                                        m_settings.hiddenPasteAlt;
+        const int historySlot = hiddenPasteEnabled
+            ? SlotFromVKey(vk, m_settings.hiddenPasteFunctionKeys)
+            : -1;
+        if (ctrl == m_settings.hiddenPasteCtrl &&
+            shift == m_settings.hiddenPasteShift &&
+            alt == m_settings.hiddenPasteAlt &&
+            historySlot >= 0) {
+            if (!ConsumeActionPress(vk)) {
+                HkLog("[HK-HISTORY] vk=0x%02X slot=%d DEBOUNCE (held key, skip)", vk, historySlot);
+                return true;
+            }
+            HkLog("[HK-HISTORY] popup=%s vk=0x%02X slot=%d ctrl=%d shift=%d alt=%d -> PasteHistorySlot",
+                  popupOpen ? "OPEN" : "CLOSED", vk, historySlot, ctrl, shift, alt);
+            PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                         static_cast<WPARAM>(HotkeyAction::PasteHistorySlot),
+                         static_cast<LPARAM>(historySlot));
+            return true;
+        }
+    }
+
     if (popupOpen) {
+        HkLog("[HK-KEY-DOWN] popup=OPEN vk=0x%02X ctrl=%d shift=%d alt=%d kbCapture=%d txtEntry=%d search=%d",
+              vk, ctrl, shift, alt,
+              popup->IsKeyboardCaptureActive(),
+              popup->IsTextEntryActive(),
+              popup->IsSearchActive());
+
         if (vk == VK_ESCAPE) {
             if (!ConsumeActionPress(vk))
                 return true;
+            HkLog("[HK-ESCAPE] closing popup");
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(HotkeyAction::TogglePopup), 0);
             return true;
@@ -431,48 +491,52 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
 
         const bool win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0
                       || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
-        if (win) return false;
-
-        if (!popup->IsKeyboardCaptureActive())
+        if (win) {
+            HkLog("[HK-WIN-KEY] win modifier active, passing through");
             return false;
+        }
+
+        // Slot paste is checked BEFORE keyboard capture so that clicking on the
+        // target window between pastes (which clears m_keyboardCapture) does not
+        // prevent slot keys from working — the popup being visible is sufficient.
+        const int visibleSlot = SlotFromVKey(vk, false);
+        HkLog("[HK-SLOT-CHECK] visibleSlot=%d noMods=%d txtEntry=%d",
+              visibleSlot, (!ctrl && !shift && !alt), popup->IsTextEntryActive());
+        if (!ctrl && !shift && !alt && visibleSlot >= 0) {
+            if (!popup->IsTextEntryActive()) {
+                if (!ConsumeActionPress(vk)) {
+                    HkLog("[HK-SLOT] vk=0x%02X slot=%d DEBOUNCE (held key, skip)", vk, visibleSlot);
+                    return true;
+                }
+                HkLog("[HK-SLOT] vk=0x%02X slot=%d -> PasteVisibleSlot", vk, visibleSlot);
+                PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                             static_cast<WPARAM>(HotkeyAction::PasteVisibleSlot),
+                             static_cast<LPARAM>(visibleSlot));
+                return true;
+            }
+            // Text entry is active — fall through so the key reaches the search bar
+            HkLog("[HK-SLOT] vk=0x%02X slot=%d text-entry active, falling through to forward", vk, visibleSlot);
+        }
+
+        // Remaining keys (text forwarding, Shift+Enter search) only engage when
+        // keyboard capture is active, so we don't intercept normal typing in the
+        // foreground app after the user has clicked away from the popup.
+        if (!popup->IsKeyboardCaptureActive()) {
+            HkLog("[HK-NO-CAPTURE] kbCapture=false, passing vk=0x%02X through to foreground", vk);
+            return false;
+        }
 
         if (!ctrl && shift && !alt && vk == VK_RETURN && popup->IsSearchActive()) {
             if (!ConsumeActionPress(vk))
                 return true;
+            HkLog("[HK-WEB-SEARCH] Shift+Enter with search active -> LaunchWebSearch");
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(HotkeyAction::LaunchWebSearch), 0);
             return true;
         }
 
-        const int visibleSlot = SlotFromVKey(vk, false);
-        if (!ctrl && !shift && !alt && visibleSlot >= 0 && !popup->IsTextEntryActive()) {
-            if (!ConsumeActionPress(vk))
-                return true;
-            PostMessageW(m_msgTarget, WM_HOTKEYACTION,
-                         static_cast<WPARAM>(HotkeyAction::PasteVisibleSlot),
-                         static_cast<LPARAM>(visibleSlot));
-            return true;
-        }
-
+        HkLog("[HK-FORWARD] vk=0x%02X shift=%d -> ForwardKeyToPopup", vk, shift);
         ForwardKeyToPopup(vk, shift);
-        return true;
-    }
-
-    const bool hiddenPasteEnabled = m_settings.hiddenPasteCtrl ||
-                                    m_settings.hiddenPasteShift ||
-                                    m_settings.hiddenPasteAlt;
-    const int historySlot = hiddenPasteEnabled
-        ? SlotFromVKey(vk, m_settings.hiddenPasteFunctionKeys)
-        : -1;
-    if (ctrl == m_settings.hiddenPasteCtrl &&
-        shift == m_settings.hiddenPasteShift &&
-        alt == m_settings.hiddenPasteAlt &&
-        historySlot >= 0) {
-        if (!ConsumeActionPress(vk))
-            return true;
-        PostMessageW(m_msgTarget, WM_HOTKEYACTION,
-                     static_cast<WPARAM>(HotkeyAction::PasteHistorySlot),
-                     static_cast<LPARAM>(historySlot));
         return true;
     }
 

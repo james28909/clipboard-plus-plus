@@ -55,6 +55,7 @@ public:
     int   m_width{440};
     int   m_height{540};
     int   m_queueDelayMs{50};
+    bool  m_focusTestMode{false}; // test: let popup activate then restore focus to prev foreground
 
 private:
     // -- D3D / window setup ----------------------------------------------------
@@ -65,18 +66,36 @@ private:
     void DestroyRenderTarget();
     void PositionAtCursor();
     void ApplyOpacity();
-    void ApplyWindowCorners();
+    void ApplyDwmFrameSettings();
+    void ApplyWindowRegion();
+    void InvalidateWindowRegion();
     void ToggleMaximized();
+    void StartPasteTargetTracking();
+    void StopPasteTargetTracking();
+    bool IsValidPasteTarget(HWND hwnd) const;
+    void NotePasteTarget(HWND hwnd, const char* reason);
 
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+    static void CALLBACK ForegroundWinEventProc(HWINEVENTHOOK hook, DWORD event,
+                                                HWND hwnd, LONG objectId,
+                                                LONG childId, DWORD eventThread,
+                                                DWORD eventTime);
 
     // -- ImGui UI --------------------------------------------------------------
     void DrawFilterStrip();
     void DrawSearchBar();
     void DrawItemList();
+    void DrawAndroidPanel();
     void DrawImageBrowser();
     bool ItemPassesFilter(const ClipboardItem& item) const;
     std::vector<size_t> BuildVisibleHistoryIndices(bool pinnedOnly) const;
+    std::vector<uint64_t> BuildVisibleItemIds() const;
+    bool IsItemSelected(uint64_t itemId) const;
+    std::vector<uint64_t> ContextSelectionFor(uint64_t itemId) const;
+    void ClearItemSelection();
+    void SelectOnlyItem(uint64_t itemId);
+    void ToggleItemSelection(uint64_t itemId);
+    void SelectRangeTo(uint64_t itemId);
     void DrawItemDragDrop(uint64_t itemId, int qpos);
     bool DrawItemContextMenu(const ClipboardItem& item, int qpos);
     void DrawTitleBar();
@@ -85,7 +104,7 @@ private:
     // -- Paste -----------------------------------------------------------------
     void PasteItemKeepOpen(const ClipboardItem& item);
     void PasteQueue();
-    void WriteToClipboard(const ClipboardItem& item) const;
+    void WriteToClipboard(const ClipboardItem& item, HWND targetWindow = nullptr) const;
     HWND ResolvePasteTarget() const;
     bool WaitForForeground(HWND target, DWORD timeoutMs) const;
     void RestoreFocusAndPaste(HWND preferredTarget = nullptr);
@@ -121,11 +140,18 @@ private:
     bool  m_keyboardCapture{false};
     bool  m_maximized{false};
     RECT  m_restoreRect{};
+    bool  m_regionCacheValid{false};
+    int   m_lastRegionWidth{-1};
+    int   m_lastRegionHeight{-1};
+    int   m_lastRegionRadius{-1};
+    bool  m_lastRegionMaximized{false};
     bool  m_queueMode{false};
+    bool  m_androidPanelOpen{false};
     bool  m_appendNewlineAfterPaste{false};
     ClipboardHistory::MoveTarget m_pasteMoveTarget{ClipboardHistory::MoveTarget::None};
     AppearanceSettings m_appearance{};
     int   m_filterMode{0};      // 0=All 1=Text 2=Image 3=URL
+    std::string m_activeCustomFilterId;
     char  m_searchBuf[256]{};
     char  m_clipboardName[128]{};
     char  m_searchDebug[256]{};
@@ -135,9 +161,17 @@ private:
     bool  m_lastWantTextInput{false};
     size_t m_lastSearchLen{};
     HWND  m_prevForeground{};
+    HWND  m_activePasteTarget{};
+    HWINEVENTHOOK m_foregroundHook{};
     std::string m_lastClipboardId;
     std::vector<uint64_t> m_queue;
     std::vector<uint64_t> m_dragIds;
+    std::vector<uint64_t> m_selectedItemIds;
+    uint64_t m_selectionAnchorId{};
+    char m_androidEndpointBuf[256]{};
+    bool m_androidEndpointEditing{false};
+    bool m_lastAndroidPanelOpen{false};
+    std::string m_androidSyncStatus;
 
     // -- Image browser ---------------------------------------------------------
     struct ThumbEntry {
@@ -152,4 +186,6 @@ private:
     int  m_imgDateFilter{0};   // 0=all  1=today  2=week  3=month
     int  m_imgSizeFilter{0};   // 0=any  1=>100KB  2=>500KB  3=>1MB
     std::string m_imgCtxMenuId;
+    std::string m_imgSelectionAnchorId;
+    std::vector<std::string> m_selectedImageIds;
 };

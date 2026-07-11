@@ -17,7 +17,7 @@ namespace {
 
 constexpr wchar_t kTrayPopupClass[] = L"ClipboardPlusPlus_TrayPopup";
 constexpr int kTrayPopupBaseWidth = 230;
-constexpr int kTrayPopupBaseHeight = 214;
+constexpr int kTrayPopupBaseHeight = 248;
 
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
 #define DWMWA_WINDOW_CORNER_PREFERENCE 33
@@ -346,6 +346,12 @@ void TrayPopupWindow::DrawMenu() {
     DrawActionButton("Show Popup", buttonSize, [this, app]() {
         if (app)
             app->ShowPopup();
+        Hide();
+    });
+
+    DrawActionButton("Open Editor", buttonSize, [this, app]() {
+        if (app)
+            app->ShowEditorPopup();
         Hide();
     });
 

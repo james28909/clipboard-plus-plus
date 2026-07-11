@@ -3,7 +3,7 @@
     Build one or all Clipboard++ executables.
 
 .PARAMETER Target
-    Which target to build: all | clipboardpp | sqlite_editor | json_viewer
+    Which target to build: all | clipboardpp | clipboardpp_ide | sqlite_editor | json_viewer
     Defaults to "all".
 
 .PARAMETER Config
@@ -21,7 +21,7 @@
 #>
 
 param(
-    [ValidateSet("all", "clipboardpp", "sqlite_editor", "json_viewer")]
+    [ValidateSet("all", "clipboardpp", "clipboardpp_ide", "sqlite_editor", "json_viewer")]
     [string]$Target = "all",
 
     [ValidateSet("Release", "Debug", "Both")]
@@ -105,6 +105,7 @@ function Build-Project {
 
 $Projects = @{
     clipboardpp    = @{ Source = $Root;                Build = "$Root\build\.cmake\clipboardpp"   }
+    clipboardpp_ide = @{ Source = "$Root\ide";         Build = "$Root\build\.cmake\clipboardpp_ide" }
     sqlite_editor  = @{ Source = "$Root\dbviewer";     Build = "$Root\build\.cmake\sqlite_editor" }
     json_viewer    = @{ Source = "$Root\jsonviewer";   Build = "$Root\build\.cmake\json_viewer"   }
 }

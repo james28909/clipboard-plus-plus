@@ -47,6 +47,7 @@ private:
     ULONGLONG    m_ignoreUntilTick{};
     DWORD        m_lastSeq{};   // suppress duplicate WM_CLIPBOARDUPDATE
     // Image-capture debounce: Win11 fires WM_CLIPBOARDUPDATE twice per screenshot
+    uint64_t     m_lastImgHash{};
     int          m_lastImgW{};
     int          m_lastImgH{};
     ULONGLONG    m_lastImgTickMs{};

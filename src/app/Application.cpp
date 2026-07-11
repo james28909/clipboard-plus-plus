@@ -1,15 +1,19 @@
 #include "Application.h"
 #include "IconPatcher.h"
 #include "TrayIcon.h"
+#include "../android/AndroidDeviceClient.h"
+#include "../android/AndroidSyncServer.h"
 #include "../ui/MainWindow.h"
 #include "../ui/PopupWindow.h"
 #include "../ui/TrayPopupWindow.h"
+#include "../ui/TextEditorWindow.h"
 #include "../ui/DebugWindow.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardHistoryStore.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
 #include "../clipboard/ImageStore.h"
+#include "../clipboard/ScreenshotTracker.h"
 #include "../hotkeys/HotkeyManager.h"
 #include "../util/Win32Util.h"
 
@@ -25,12 +29,15 @@
 #include <algorithm>
 #include <vector>
 #include <cmath>
+#include <cctype>
 #include <cstddef>
 #include <ctime>
 #include <cstring>
+#include <fstream>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -75,8 +82,139 @@ std::string Hex32(uint32_t value) {
     return out.str();
 }
 
+std::string ScreenshotDescription(const std::filesystem::path& path, int width, int height) {
+    return "[Screenshot] " + path.filename().u8string() + " " +
+           std::to_string(width) + "x" + std::to_string(height) +
+           "\n" + path.u8string();
+}
+
 int ScaledPx(float value, const AppearanceSettings& appearance) {
     return static_cast<int>(std::lround(value * EffectiveUiScale(appearance)));
+}
+
+std::string EditorExtensionForMode(int mode) {
+    switch (mode) {
+    case 1: return ".ps1";
+    case 2: return ".cmd";
+    case 3: return ".json";
+    case 4: return ".md";
+    default: return ".txt";
+    }
+}
+
+std::string EditorModeName(int mode) {
+    switch (mode) {
+    case 1: return "powershell";
+    case 2: return "batch";
+    case 3: return "json";
+    case 4: return "markdown";
+    default: return "text";
+    }
+}
+
+std::filesystem::path BundledIdePath() {
+    wchar_t exePath[MAX_PATH]{};
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH))
+        return {};
+
+    const std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
+    const std::filesystem::path sameDir = exeDir / "clipboardpp_ide.exe";
+    std::error_code ec;
+    if (std::filesystem::exists(sameDir, ec))
+        return sameDir;
+
+    const std::filesystem::path buildSibling =
+        exeDir.parent_path() / "clipboardpp_ide" / "clipboardpp_ide.exe";
+    if (std::filesystem::exists(buildSibling, ec))
+        return buildSibling;
+
+    return sameDir;
+}
+
+std::string NormalizeExtension(std::string value, int mode) {
+    if (value.empty())
+        value = EditorExtensionForMode(mode);
+    if (value.front() != '.')
+        value.insert(value.begin(), '.');
+    for (char& c : value) {
+        if (c == '/' || c == '\\' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            c = '_';
+        }
+    }
+    return value;
+}
+
+std::filesystem::path EditorTempPath(const EditorSettings& settings) {
+    std::filesystem::path dir = ConfigStore::Directory() / "editor";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    std::ostringstream name;
+    name << "scratch-" << std::hex << GetTickCount64()
+         << NormalizeExtension(settings.externalTempExtension, settings.mode);
+    return dir / name.str();
+}
+
+bool HotkeyKeysReleased() {
+    return (GetAsyncKeyState(VK_CONTROL) & 0x8000) == 0 &&
+           (GetAsyncKeyState(VK_SHIFT) & 0x8000) == 0 &&
+           (GetAsyncKeyState(VK_MENU) & 0x8000) == 0 &&
+           (GetAsyncKeyState('Z') & 0x8000) == 0;
+}
+
+void SendCtrlC() {
+    INPUT in[4]{};
+    in[0].type = INPUT_KEYBOARD;
+    in[0].ki.wVk = VK_CONTROL;
+    in[0].ki.dwExtraInfo = kClipboardPasteMagic;
+    in[1].type = INPUT_KEYBOARD;
+    in[1].ki.wVk = 'C';
+    in[1].ki.dwExtraInfo = kClipboardPasteMagic;
+    in[2].type = INPUT_KEYBOARD;
+    in[2].ki.wVk = 'C';
+    in[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    in[2].ki.dwExtraInfo = kClipboardPasteMagic;
+    in[3].type = INPUT_KEYBOARD;
+    in[3].ki.wVk = VK_CONTROL;
+    in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    in[3].ki.dwExtraInfo = kClipboardPasteMagic;
+    SendInput(4, in, sizeof(INPUT));
+}
+
+bool WriteUtf8File(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out)
+        return false;
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    return out.good();
+}
+
+std::string ReadUtf8File(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return {};
+    std::ostringstream out;
+    out << in.rdbuf();
+    return out.str();
+}
+
+std::wstring QuoteArg(std::wstring value) {
+    std::wstring out = L"\"";
+    for (wchar_t c : value) {
+        if (c == L'"')
+            out += L'\\';
+        out += c;
+    }
+    out += L"\"";
+    return out;
+}
+
+void ReplaceAll(std::wstring& text, const std::wstring& from, const std::wstring& to) {
+    size_t pos = 0;
+    while ((pos = text.find(from, pos)) != std::wstring::npos) {
+        text.replace(pos, from.size(), to);
+        pos += to.size();
+    }
 }
 
 } // namespace
@@ -135,6 +273,170 @@ void Application::ShowMainWindow() {
     SetFocus(m_hwnd);
 }
 
+bool Application::InsertExternalClipboardText(const std::string& text,
+                                              const std::string& sourceProcess) {
+    if (!m_history || text.empty())
+        return false;
+
+    ClipboardItem item;
+    item.type = ContentType::Text;
+    item.text = text;
+    item.sourceProcess = sourceProcess.empty() ? "external" : sourceProcess;
+    item.tags = ContentDetector::DetectTags(item.text);
+    m_history->Push(std::move(item));
+    return true;
+}
+
+bool Application::AddAndroidClipboardText(const std::string& text,
+                                          const std::string& source) {
+    if (text.empty())
+        return false;
+
+    std::lock_guard<std::mutex> lock(m_androidClipboardMutex);
+    auto existing = std::find_if(m_androidClipboardEntries.begin(), m_androidClipboardEntries.end(),
+        [&](const AndroidClipboardEntry& entry) {
+            return entry.text == text;
+        });
+
+    if (existing != m_androidClipboardEntries.end()) {
+        AndroidClipboardEntry entry = std::move(*existing);
+        entry.source = source.empty() ? entry.source : source;
+        entry.capturedAt = std::chrono::system_clock::now();
+        m_androidClipboardEntries.erase(existing);
+        m_androidClipboardEntries.insert(m_androidClipboardEntries.begin(), std::move(entry));
+        return false;
+    }
+
+    AndroidClipboardEntry entry;
+    entry.id = m_nextAndroidClipboardEntryId++;
+    entry.text = text;
+    entry.source = source.empty() ? "android" : source;
+    entry.capturedAt = std::chrono::system_clock::now();
+    m_androidClipboardEntries.insert(m_androidClipboardEntries.begin(), std::move(entry));
+    return true;
+}
+
+std::vector<AndroidClipboardEntry> Application::GetAndroidClipboardEntries() const {
+    std::lock_guard<std::mutex> lock(m_androidClipboardMutex);
+    return m_androidClipboardEntries;
+}
+
+bool Application::RemoveAndroidClipboardEntry(uint64_t id) {
+    std::lock_guard<std::mutex> lock(m_androidClipboardMutex);
+    auto it = std::find_if(m_androidClipboardEntries.begin(), m_androidClipboardEntries.end(),
+        [&](const AndroidClipboardEntry& entry) {
+            return entry.id == id;
+        });
+    if (it == m_androidClipboardEntries.end())
+        return false;
+    m_androidClipboardEntries.erase(it);
+    return true;
+}
+
+bool Application::SetAndroidClipboardEntryPinned(uint64_t id, bool pinned) {
+    std::lock_guard<std::mutex> lock(m_androidClipboardMutex);
+    auto it = std::find_if(m_androidClipboardEntries.begin(), m_androidClipboardEntries.end(),
+        [&](const AndroidClipboardEntry& entry) {
+            return entry.id == id;
+        });
+    if (it == m_androidClipboardEntries.end())
+        return false;
+    it->pinned = pinned;
+    std::stable_sort(m_androidClipboardEntries.begin(), m_androidClipboardEntries.end(),
+        [](const AndroidClipboardEntry& a, const AndroidClipboardEntry& b) {
+            if (a.pinned != b.pinned)
+                return a.pinned && !b.pinned;
+            return a.capturedAt > b.capturedAt;
+        });
+    return true;
+}
+
+bool Application::SendTextItemsToAndroid(const std::vector<std::string>& texts, std::string* error) {
+    return androidsync::SendItemsToAndroid(m_androidDeviceEndpoint, texts, error);
+}
+
+void Application::SendSelectionToAndroidClipboard() {
+    if (m_androidDeviceEndpoint.empty()) {
+        AddDeveloperEvent("send selection to Android failed: endpoint not set");
+        return;
+    }
+
+    std::thread([this]() {
+        for (int i = 0; i < 60 && !HotkeyKeysReleased(); ++i)
+            Sleep(25);
+
+        const bool hadText = IsClipboardFormatAvailable(CF_UNICODETEXT) != FALSE;
+        const std::string previousText = hadText ? win32util::ClipboardUnicodeText() : std::string{};
+        const DWORD beforeSeq = GetClipboardSequenceNumber();
+
+        if (m_monitor)
+            m_monitor->SuppressNextUpdate();
+        SendCtrlC();
+
+        bool changed = false;
+        for (int i = 0; i < 40; ++i) {
+            Sleep(25);
+            if (GetClipboardSequenceNumber() != beforeSeq) {
+                changed = true;
+                break;
+            }
+        }
+
+        const std::string selectedText = win32util::ClipboardUnicodeText();
+        if (hadText) {
+            const std::wstring wide = win32util::Utf8ToWide(previousText);
+            if (m_monitor)
+                m_monitor->SuppressNextUpdate();
+            win32util::SetClipboardUnicodeText(nullptr, wide.c_str(), wide.size());
+        }
+
+        if (!changed || selectedText.empty()) {
+            AddDeveloperEvent("send selection to Android skipped: no selected text copied");
+            return;
+        }
+
+        std::string error;
+        if (SendTextItemsToAndroid({selectedText}, &error))
+            AddDeveloperEvent("sent selected text to Android clipboard");
+        else
+            AddDeveloperEvent("send selection to Android failed: " +
+                              (error.empty() ? std::string("unknown error") : error));
+    }).detach();
+}
+
+void Application::SetAndroidDeviceEndpoint(const std::string& endpoint) {
+    m_androidDeviceEndpoint = endpoint;
+    while (!m_androidDeviceEndpoint.empty() &&
+           std::isspace(static_cast<unsigned char>(m_androidDeviceEndpoint.front())))
+        m_androidDeviceEndpoint.erase(m_androidDeviceEndpoint.begin());
+    while (!m_androidDeviceEndpoint.empty() &&
+           std::isspace(static_cast<unsigned char>(m_androidDeviceEndpoint.back())))
+        m_androidDeviceEndpoint.pop_back();
+    if (!m_androidDeviceEndpoint.empty() &&
+        m_androidDeviceEndpoint.rfind("http://", 0) != 0 &&
+        m_androidDeviceEndpoint.rfind("https://", 0) != 0) {
+        m_androidDeviceEndpoint = "http://" + m_androidDeviceEndpoint;
+    }
+    m_config.android.deviceEndpoint = m_androidDeviceEndpoint;
+    SaveConfig();
+}
+
+bool Application::RequestAndroidSyncToWindows(std::string* error) {
+    return androidsync::RequestAndroidSyncToWindows(m_androidDeviceEndpoint, error);
+}
+
+bool Application::CheckAndroidDeviceHealth(std::string* error) {
+    return androidsync::CheckAndroidHealth(m_androidDeviceEndpoint, error);
+}
+
+bool Application::IsAndroidSyncServerRunning() const {
+    return m_androidSyncServer && m_androidSyncServer->IsRunning();
+}
+
+unsigned short Application::AndroidSyncServerPort() const {
+    return m_androidSyncServer ? m_androidSyncServer->Port() : 8766;
+}
+
 void Application::OpenSettingsWindow() {
     if (m_popup) {
         m_popup->OpenSettingsWindow();
@@ -160,6 +462,101 @@ void Application::ShowPopup() {
 void Application::ShowTrayPopup() {
     if (m_trayPopup)
         m_trayPopup->ShowAtCursor();
+}
+
+void Application::ShowEditorPopup() {
+    if (!m_config.editor.enabled)
+        return;
+    if (m_config.editor.provider == 1) {
+        if (LaunchExternalEditor())
+            return;
+        LogDebug("ShowEditorPopup: external editor launch failed; falling back to built-in editor");
+    }
+    if (m_editor)
+        m_editor->Show();
+}
+
+bool Application::LaunchExternalEditor() {
+    const EditorSettings settings = m_config.editor;
+    std::filesystem::path editorPath = settings.externalPath.empty()
+        ? BundledIdePath()
+        : std::filesystem::path(win32util::Utf8ToWide(settings.externalPath));
+    if (editorPath.empty())
+        return false;
+
+    const std::filesystem::path tempPath = EditorTempPath(settings);
+    const std::string text = settings.openWithClipboard
+        ? win32util::ClipboardUnicodeText()
+        : std::string{};
+    if (!WriteUtf8File(tempPath, text)) {
+        LogDebug("LaunchExternalEditor: failed to write temp file " + tempPath.u8string());
+        return false;
+    }
+
+    const std::wstring exe = editorPath.wstring();
+    std::wstring args = win32util::Utf8ToWide(
+        settings.externalArguments.empty() ? std::string("{file}") : settings.externalArguments);
+    ReplaceAll(args, L"{file}", QuoteArg(tempPath.wstring()));
+    ReplaceAll(args, L"{filePath}", tempPath.wstring());
+    ReplaceAll(args, L"{mode}", win32util::Utf8ToWide(EditorModeName(settings.mode)));
+
+    std::wstring command = QuoteArg(exe);
+    if (!args.empty()) {
+        command += L" ";
+        command += args;
+    }
+
+    std::filesystem::path workingDir;
+    std::error_code ec;
+    if (editorPath.has_parent_path() && std::filesystem::exists(editorPath.parent_path(), ec))
+        workingDir = editorPath.parent_path();
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::vector<wchar_t> commandBuf(command.begin(), command.end());
+    commandBuf.push_back(L'\0');
+    std::wstring workingDirText = workingDir.wstring();
+
+    const BOOL ok = CreateProcessW(
+        nullptr,
+        commandBuf.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        0,
+        nullptr,
+        workingDirText.empty() ? nullptr : workingDirText.c_str(),
+        &si,
+        &pi);
+
+    if (!ok) {
+        LogDebug("LaunchExternalEditor: CreateProcess failed for " + editorPath.u8string() +
+                 " gle=" + std::to_string(GetLastError()));
+        return false;
+    }
+
+    CloseHandle(pi.hThread);
+    const bool shouldWait = settings.externalWaitForExit || settings.externalReadBackToClipboard;
+    if (shouldWait) {
+        std::thread([process = pi.hProcess,
+                     tempPath,
+                     readBack = settings.externalReadBackToClipboard]() {
+            WaitForSingleObject(process, INFINITE);
+            CloseHandle(process);
+            if (readBack) {
+                const std::string edited = ReadUtf8File(tempPath);
+                const std::wstring wide = win32util::Utf8ToWide(edited);
+                win32util::SetClipboardUnicodeText(nullptr, wide.c_str(), wide.size());
+            }
+        }).detach();
+    } else {
+        CloseHandle(pi.hProcess);
+    }
+
+    LogDebug("LaunchExternalEditor: opened " + tempPath.u8string() +
+             " with " + editorPath.u8string());
+    return true;
 }
 
 void Application::ToggleDebugWindow() {
@@ -245,6 +642,29 @@ void Application::SetUiSettings(const UiSettings& settings) {
     m_config.ui = settings;
     SaveConfig();
     m_appearanceDirty = true;
+}
+
+void Application::SetEditorSettings(const EditorSettings& settings) {
+    m_config.editor = settings;
+    if (m_editor)
+        m_editor->ApplySettings(settings);
+    SaveConfig();
+}
+
+void Application::SetCustomFilters(const std::vector<CustomFilter>& filters) {
+    m_config.customFilters = filters;
+    ClearCustomFilterRegexCache();
+    SaveConfig();
+}
+
+void Application::SetPopupButtonOrder(const std::vector<std::string>& order) {
+    m_config.popupButtonOrder = order;
+    SaveConfig();
+}
+
+void Application::SetHidePopupOnOutsideClick(bool value) {
+    m_config.hidePopupOnOutsideClick = value;
+    SaveConfig();
 }
 
 void Application::SetImageSettings(const ImageSettings& settings) {
@@ -491,8 +911,72 @@ void Application::SaveActiveClipboardHistory() {
     SaveClipboardHistory(m_config.activeClipboardId);
 }
 
+void Application::AddScreenshotPair(ClipboardHistory* history,
+                                    const std::filesystem::path& path,
+                                    ClipboardItem imageItem,
+                                    bool newAtTop) {
+    if (!history || path.empty() || imageItem.type != ContentType::Image)
+        return;
+
+    const std::string pathText = path.u8string();
+    ClipboardItem pathItem;
+    pathItem.type = ContentType::FilePaths;
+    pathItem.tags = TAG_PATH | TAG_FILE | TAG_IMAGE_FILE;
+    pathItem.text = pathText;
+    pathItem.sourceKind = "screenshot-path";
+    pathItem.sourceFilePath = pathText;
+    pathItem.sourceProcess = imageItem.sourceProcess;
+
+    imageItem.sourceKind = "screenshot";
+    imageItem.sourceFilePath = pathText;
+    imageItem.text = "[Screenshot CF_DIB] " + path.filename().u8string() + " " +
+                     std::to_string(imageItem.imageW) + "x" +
+                     std::to_string(imageItem.imageH);
+
+    if (newAtTop) {
+        history->Push(std::move(imageItem));
+        history->Push(std::move(pathItem));
+    } else {
+        history->Push(std::move(pathItem));
+        history->Push(std::move(imageItem));
+    }
+
+    AddDeveloperEvent("added screenshot path + CF_DIB rows: " + pathText);
+}
+
+void Application::ScheduleScreenshotPairAdd(ClipboardHistory* history,
+                                            ClipboardItem imageItem,
+                                            bool newAtTop) {
+    if (!history || imageItem.sourcePixelHash == 0)
+        return;
+
+    if (!imageItem.sourceFilePath.empty()) {
+        AddScreenshotPair(history, std::filesystem::path(imageItem.sourceFilePath),
+                          std::move(imageItem), newAtTop);
+        return;
+    }
+
+    std::thread([history, imageItem = std::move(imageItem), newAtTop]() mutable {
+        for (int attempt = 0; attempt < 12; ++attempt) {
+            Sleep(attempt == 0 ? 150 : 300);
+            std::filesystem::path path =
+                ScreenshotTracker::Instance().FindRecentScreenshotFile(
+                    imageItem.imageW, imageItem.imageH, imageItem.sourcePixelHash);
+            if (path.empty())
+                continue;
+
+            if (Application* app = Application::Get())
+                app->AddScreenshotPair(history, path, std::move(imageItem), newAtTop);
+            return;
+        }
+        if (Application* app = Application::Get())
+            app->AddDeveloperEvent("screenshot dropped: no matching file path found");
+    }).detach();
+}
+
 void Application::ApplyLoadedConfig(const AppConfig& config) {
     m_config = config;
+    m_androidDeviceEndpoint = m_config.android.deviceEndpoint;
     m_appearance = m_config.appearance;
     m_appearance.uiScale = 1.0f;
     m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
@@ -506,6 +990,8 @@ void Application::ApplyLoadedConfig(const AppConfig& config) {
         m_popup->SetAppendNewlineAfterPaste(m_config.appendNewlineAfterPaste);
         m_popup->SetPasteMoveTarget(GetPasteMoveTarget());
     }
+    if (m_editor)
+        m_editor->ApplySettings(m_config.editor);
     if (m_hotkeys)
         m_hotkeys->ApplySettings(m_hotkeySettings);
 }
@@ -637,6 +1123,14 @@ ClipboardHistory* Application::HistoryForActiveClipboard() const {
             return m_histories[i].get();
     }
     return m_histories.empty() ? nullptr : m_histories.front().get();
+}
+
+ClipboardHistory* Application::HistoryForProfile(const std::string& profileId) const {
+    for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
+        if (m_config.clipboards[i].id == profileId)
+            return m_histories[i].get();
+    }
+    return nullptr;
 }
 
 ClipboardProfileConfig* Application::FindClipboardForProcess(const std::string& processName) {
@@ -840,7 +1334,48 @@ bool Application::Init() {
                               " from " + source +
                               " tags=" + Hex32(item.tags) +
                               " preview=\"" + preview + "\"");
-            m_history->Push(std::move(item));
+
+            ClipboardHistory* routeHistory = nullptr;
+            std::string routeProfileId;
+            std::string routeName;
+            bool routeMove = false;
+            for (const CustomFilter& filter : m_config.customFilters) {
+                if (!filter.enabled || !filter.routeToProfile || filter.routeProfileId.empty())
+                    continue;
+                if (!CustomFilterMatches(filter, item))
+                    continue;
+                routeHistory = HistoryForProfile(filter.routeProfileId);
+                if (!routeHistory)
+                    continue;
+                routeProfileId = filter.routeProfileId;
+                routeName = filter.name;
+                routeMove = filter.routeMove;
+                break;
+            }
+
+            const bool screenshotNeedsPair =
+                item.type == ContentType::Image &&
+                item.sourceKind == "screenshot" &&
+                item.sourcePixelHash != 0;
+            if (screenshotNeedsPair) {
+                if (routeHistory) {
+                    ScheduleScreenshotPairAdd(routeHistory, item, m_config.newItemsAtTop);
+                    AddDeveloperEvent("routed screenshot by filter \"" + routeName +
+                                      "\" to profile " + routeProfileId +
+                                      (routeMove ? " (move)" : " (copy)"));
+                }
+                if (!routeHistory || (!routeMove && routeHistory != m_history))
+                    ScheduleScreenshotPairAdd(m_history, std::move(item), m_config.newItemsAtTop);
+            } else {
+                if (routeHistory) {
+                    routeHistory->Push(item);
+                    AddDeveloperEvent("routed item by filter \"" + routeName +
+                                      "\" to profile " + routeProfileId +
+                                      (routeMove ? " (move)" : " (copy)"));
+                }
+                if (!routeHistory || (!routeMove && routeHistory != m_history))
+                    m_history->Push(std::move(item));
+            }
         }
     });
 
@@ -856,6 +1391,12 @@ bool Application::Init() {
         return false;
     m_trayPopup->ApplyAppearance(m_appearance);
 
+    m_editor = std::make_unique<TextEditorWindow>();
+    if (!m_editor->Create(m_hInstance, m_d3dDevice, m_d3dContext))
+        return false;
+    m_editor->ApplyAppearance(m_appearance);
+    m_editor->ApplySettings(m_config.editor);
+
     m_debugWindow = std::make_unique<DebugWindow>();
     if (!m_debugWindow->Create(m_hInstance, m_d3dDevice, m_d3dContext))
         return false;
@@ -866,6 +1407,12 @@ bool Application::Init() {
     m_hotkeys->Install(m_hwnd);
     m_hotkeys->ApplySettings(m_hotkeySettings);
 
+    m_androidSyncServer = std::make_unique<AndroidSyncServer>(*this);
+    if (m_androidSyncServer->Start())
+        LogDebug("Android sync server listening on port 8766");
+    else
+        LogDebug("Android sync server failed to start on port 8766");
+
     // TODO (Milestone 5): only show on first launch
     ShowMainWindow();
 
@@ -874,8 +1421,13 @@ bool Application::Init() {
 }
 
 void Application::Shutdown() {
+    if (m_androidSyncServer) {
+        m_androidSyncServer->Stop();
+        m_androidSyncServer.reset();
+    }
     if (m_hotkeys) m_hotkeys->Uninstall();
     if (m_debugWindow) m_debugWindow->Destroy();
+    if (m_editor) m_editor->Destroy();
     if (m_trayPopup) m_trayPopup->Destroy();
     if (m_popup)   m_popup->Destroy();
     if (m_monitor) m_monitor->Stop();
@@ -972,6 +1524,7 @@ void Application::RenderFrame() {
     // Popup has its own context + swap chain - rendered separately
     if (m_popup) m_popup->Render();
     if (m_trayPopup) m_trayPopup->Render();
+    if (m_editor) m_editor->Render();
     if (m_debugWindow) m_debugWindow->Render();
 }
 
@@ -979,8 +1532,9 @@ bool Application::HasRenderableUi() const {
     const bool mainRenderable = m_mainVisible && m_hwnd && !IsIconic(m_hwnd);
     const bool popupRenderable = m_popup && m_popup->IsVisible();
     const bool trayRenderable = m_trayPopup && m_trayPopup->IsVisible();
+    const bool editorRenderable = m_editor && m_editor->IsVisible();
     const bool debugRenderable = m_debugWindow && m_debugWindow->IsVisible();
-    return mainRenderable || popupRenderable || trayRenderable || debugRenderable;
+    return mainRenderable || popupRenderable || trayRenderable || editorRenderable || debugRenderable;
 }
 
 void Application::ApplyAppearanceNow() {
@@ -1011,6 +1565,8 @@ void Application::ApplyAppearanceNow() {
         m_popup->ApplyAppearance(m_appearance);
     if (m_trayPopup)
         m_trayPopup->ApplyAppearance(m_appearance);
+    if (m_editor)
+        m_editor->ApplyAppearance(m_appearance);
     if (m_debugWindow)
         m_debugWindow->ApplyAppearance(m_appearance);
     if (m_tray)
@@ -1297,6 +1853,12 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             break;
         case HotkeyAction::ToggleDebugWindow:
             app->ToggleDebugWindow();
+            break;
+        case HotkeyAction::ToggleEditorWindow:
+            app->ShowEditorPopup();
+            break;
+        case HotkeyAction::SendSelectionToAndroid:
+            app->SendSelectionToAndroidClipboard();
             break;
         case HotkeyAction::PasteVisibleSlot:
             if (app->m_popup)

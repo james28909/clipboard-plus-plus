@@ -665,8 +665,9 @@ bool ImageStore::Delete(const std::string& id) {
                             -1, &stmt, nullptr) != SQLITE_OK) return false;
     sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
     const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    const int changes = sqlite3_changes(m_db);
     sqlite3_finalize(stmt);
-    return ok;
+    return ok && changes > 0;
 }
 
 void ImageStore::DeleteByProfile(const std::string& profileId) {

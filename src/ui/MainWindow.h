@@ -17,7 +17,10 @@ private:
     static void DrawHotkeys();
     static void DrawAppearance();
     static void DrawHistory();
+    static void DrawFilters();
+    static void DrawEditor();
     static void DrawImages();
+    static void DrawAndroid();
     static void DrawPrivacy();
     static void DrawDeveloper();
     static void DrawAbout();

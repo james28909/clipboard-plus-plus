@@ -319,6 +319,29 @@ bool ClipboardHistory::SetPinnedById(uint64_t id, bool pinned) {
     return true;
 }
 
+bool ClipboardHistory::SetImageSourceFileByHash(uint64_t contentHash,
+                                                const std::string& sourceFilePath,
+                                                const std::string& description) {
+    if (contentHash == 0 || sourceFilePath.empty())
+        return false;
+
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    auto it = std::find_if(m_items.begin(), m_items.end(),
+        [contentHash](const ClipboardItem& e) {
+            return e.type == ContentType::Image && e.contentHash == contentHash;
+        });
+    if (it == m_items.end())
+        return false;
+
+    it->sourceKind = "screenshot";
+    it->sourceFilePath = sourceFilePath;
+    if (!description.empty())
+        it->text = description;
+    it->updatedAt = std::chrono::system_clock::now();
+    if (m_changedCb) m_changedCb();
+    return true;
+}
+
 void ClipboardHistory::SetMaxItems(int n) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_maxItems = (n > 0) ? n : 1;

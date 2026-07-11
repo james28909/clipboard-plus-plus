@@ -44,6 +44,9 @@ public:
     bool MoveItemById(uint64_t id, MoveTarget target);
     bool MoveItemsByIdBefore(const std::vector<uint64_t>& ids, uint64_t beforeId);
     bool SetPinnedById(uint64_t id, bool pinned);
+    bool SetImageSourceFileByHash(uint64_t contentHash,
+                                  const std::string& sourceFilePath,
+                                  const std::string& description);
     void SetMaxItems(int n);
     void SetNewItemsAtTop(bool top);
     void SetOverflowCallback(OverflowCb cb);

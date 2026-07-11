@@ -61,6 +61,8 @@ enum class HotkeyAction : WPARAM {
     LaunchWebSearch = 9,
     LaunchClipboardWebSearch = 10,
     ToggleDebugWindow = 11,
+    ToggleEditorWindow = 12,
+    SendSelectionToAndroid = 13,
 };
 
 struct KeyBinding {
@@ -104,6 +106,9 @@ public:
     bool IsCapturing() const { return m_captureActive; }
     bool ConsumeCapturedBinding(KeyBinding& binding);
     std::string CapturePreviewText() const;
+    bool IsCtrlDown() const { return m_ctrlDown; }
+    bool IsShiftDown() const { return m_shiftDown; }
+    bool IsAltDown() const { return m_altDown; }
 
     // Default bindings returned as a starting point for settings UI.
     static std::vector<KeyBinding> DefaultBindings();

@@ -9,6 +9,21 @@ option(CLIPBOARDPP_RESTART_AFTER_BUILD "Stop running clipboardpp.exe before buil
 set(IMGUI_DIR   "${CMAKE_SOURCE_DIR}/third_party/imgui")
 set(NLOHMANN_DIR "${CMAKE_SOURCE_DIR}/third_party/nlohmann")
 set(SQLITE_DIR  "${CMAKE_SOURCE_DIR}/third_party/sqlite")
+set(PCRE2_DIR   "${CMAKE_SOURCE_DIR}/third_party/pcre2")
+
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(PCRE2_BUILD_PCRE2_8 ON CACHE BOOL "" FORCE)
+set(PCRE2_BUILD_PCRE2_16 OFF CACHE BOOL "" FORCE)
+set(PCRE2_BUILD_PCRE2_32 OFF CACHE BOOL "" FORCE)
+set(PCRE2_BUILD_PCRE2GREP OFF CACHE BOOL "" FORCE)
+set(PCRE2_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(PCRE2_SUPPORT_JIT ON CACHE BOOL "" FORCE)
+set(PCRE2_STATIC_RUNTIME ON CACHE BOOL "" FORCE)
+add_subdirectory(${PCRE2_DIR} EXCLUDE_FROM_ALL)
+if(TARGET pcre2-8-static)
+    set_property(TARGET pcre2-8-static PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # -- ImGui (vendored docking branch) ------------------------------------------
 set(IMGUI_SOURCES
@@ -23,6 +38,8 @@ set(IMGUI_SOURCES
 # -- App sources ---------------------------------------------------------------
 set(APP_SOURCES
     src/main.cpp
+    src/android/AndroidDeviceClient.cpp
+    src/android/AndroidSyncServer.cpp
     src/cli/CLI.cpp
     src/ipc/IpcClient.cpp
     src/util/Win32Util.cpp
@@ -30,10 +47,13 @@ set(APP_SOURCES
     src/app/ConfigStore.cpp
     src/app/IconPatcher.cpp
     src/app/TrayIcon.cpp
+    src/filters/CustomFilter.cpp
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
     src/ui/PopupWindow.cpp
     src/ui/TrayPopupWindow.cpp
+    src/ui/TextEditorWindow.cpp
+    src/ui/ToastWindow.cpp
     src/ui/DebugWindow.cpp
     # Milestone 4 - hotkeys
     src/hotkeys/HotkeyManager.cpp
@@ -44,11 +64,13 @@ set(APP_SOURCES
     src/clipboard/ClipboardMonitor.cpp
     src/clipboard/ContentDetector.cpp
     src/clipboard/ImageStore.cpp
+    src/clipboard/ScreenshotTracker.cpp
     ${SQLITE_DIR}/sqlite3.c
 )
 
 set(PORTABLE_CORE_SOURCES
     src/app/ConfigStore.cpp
+    src/filters/CustomFilter.cpp
     src/ui/Appearance.cpp
     src/hotkeys/HotkeyManager.cpp
     src/clipboard/ClipboardItem.cpp
@@ -71,9 +93,11 @@ if(WIN32)
         ${IMGUI_DIR}/backends
         ${NLOHMANN_DIR}
         ${SQLITE_DIR}
+        ${PCRE2_DIR}/src
     )
 
     target_link_libraries(clipboardpp PRIVATE
+        pcre2-8-static
         d3d11.lib
         dxgi.lib
         d3dcompiler.lib
@@ -84,6 +108,7 @@ if(WIN32)
         user32.lib
         gdi32.lib
         psapi.lib
+        ws2_32.lib
     )
 
     if(CLIPBOARDPP_RESTART_AFTER_BUILD)
@@ -161,6 +186,24 @@ if(UNIX AND NOT APPLE)
         )
     endif()
 endif()
+
+add_executable(filter_matcher_tests
+    tests/filter_matcher_tests.cpp
+    src/util/Win32Util.cpp
+    src/filters/CustomFilter.cpp
+    src/clipboard/ClipboardItem.cpp
+    src/clipboard/ContentDetector.cpp
+)
+
+target_include_directories(filter_matcher_tests PRIVATE
+    src
+    ${PCRE2_DIR}/src
+)
+
+target_link_libraries(filter_matcher_tests PRIVATE pcre2-8-static)
+
+set_property(TARGET filter_matcher_tests PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # -- Compiler options ----------------------------------------------------------
 if(MSVC)

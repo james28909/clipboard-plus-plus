@@ -2,6 +2,7 @@
 
 #include "../hotkeys/HotkeyManager.h"
 #include "../ui/Appearance.h"
+#include "../filters/CustomFilter.h"
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -46,14 +47,43 @@ struct UiSettings {
     int helperDurationMs{3500};
 };
 
+struct EditorSettings {
+    bool enabled{true};
+    int provider{1}; // 0=built-in popup, 1=external executable
+    bool alwaysOnTop{true};
+    bool openWithClipboard{true};
+    bool copyOnClose{false};
+    bool confirmClose{true};
+    bool showLineNumbers{true};
+    bool showStatusBar{true};
+    bool allowTabInput{true};
+    bool externalWaitForExit{false};
+    bool externalReadBackToClipboard{false};
+    int mode{0}; // 0=text, 1=PowerShell, 2=batch, 3=JSON, 4=Markdown
+    int width{760};
+    int height{520};
+    std::string externalPath;
+    std::string externalArguments{"--file {file} --mode {mode}"};
+    std::string externalTempExtension;
+};
+
+struct AndroidSettings {
+    std::string deviceEndpoint;
+};
+
 struct AppConfig {
     AppearanceSettings appearance{};
     HotkeySettings hotkeys{HotkeyManager::DefaultSettings()};
     DeveloperSettings developer{};
     UiSettings ui{};
+    EditorSettings editor{};
+    AndroidSettings android{};
     ImageSettings images{};
+    std::vector<CustomFilter> customFilters;
+    std::vector<std::string> popupButtonOrder;
     bool newItemsAtTop{true};
     bool appendNewlineAfterPaste{false};
+    bool hidePopupOnOutsideClick{false};
     int pasteMoveTarget{0}; // 0=keep, 1=top, 2=bottom
     std::string activeClipboardId{"default"};
 #ifdef NDEBUG

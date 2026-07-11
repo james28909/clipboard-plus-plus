@@ -1,6 +1,9 @@
 #pragma once
 #include <windows.h>
 #include <d3d11.h>
+#include <chrono>
+#include <filesystem>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,7 +17,9 @@ class ClipboardMonitor;
 class ImageStore;
 class PopupWindow;
 class TrayPopupWindow;
+class TextEditorWindow;
 class DebugWindow;
+class AndroidSyncServer;
 enum class HotkeyAction : WPARAM;
 
 // Message IDs used across the app
@@ -33,6 +38,14 @@ struct ClipboardTextCommand {
     wchar_t text[1];
 };
 
+struct AndroidClipboardEntry {
+    uint64_t id{};
+    std::string text;
+    std::string source;
+    std::chrono::system_clock::time_point capturedAt;
+    bool pinned{false};
+};
+
 class Application {
 public:
     explicit Application(HINSTANCE hInstance);
@@ -44,6 +57,7 @@ public:
     void HideMainWindow();
     void ShowPopup();
     void ShowTrayPopup();
+    void ShowEditorPopup();
     void ToggleDebugWindow();
     void LogDebug(const std::string& event);
 
@@ -54,6 +68,7 @@ public:
     ClipboardHistory*    GetHistory() const { return m_history; }
     ClipboardMonitor*    GetMonitor() const { return m_monitor.get(); }
     PopupWindow*         GetPopup()   const { return m_popup.get(); }
+    TextEditorWindow*    GetEditor()  const { return m_editor.get(); }
     ImageStore*          GetImageStore() const { return m_imageStore.get(); }
     TrayIcon*            GetTray()    const { return m_tray.get(); }
     HotkeyManager*       GetHotkeys() const { return m_hotkeys.get(); }
@@ -70,6 +85,14 @@ public:
     void SetDeveloperSettings(const DeveloperSettings& settings);
     const UiSettings& GetUiSettings() const { return m_config.ui; }
     void SetUiSettings(const UiSettings& settings);
+    const EditorSettings& GetEditorSettings() const { return m_config.editor; }
+    void SetEditorSettings(const EditorSettings& settings);
+    const std::vector<CustomFilter>& GetCustomFilters() const { return m_config.customFilters; }
+    void SetCustomFilters(const std::vector<CustomFilter>& filters);
+    const std::vector<std::string>& GetPopupButtonOrder() const { return m_config.popupButtonOrder; }
+    void SetPopupButtonOrder(const std::vector<std::string>& order);
+    bool GetHidePopupOnOutsideClick() const { return m_config.hidePopupOnOutsideClick; }
+    void SetHidePopupOnOutsideClick(bool value);
     void AddDeveloperEvent(const std::string& event);
     const std::vector<std::string>& GetDeveloperEvents() const { return m_developerEvents; }
     void ClearDeveloperEvents() { m_developerEvents.clear(); }
@@ -103,7 +126,22 @@ public:
     void UseCurrentPopupSizeAsDefault();
     void SyncClipboardForForegroundProcess();
     void SyncClipboardForWindow(HWND hwnd);
+    void SendSelectionToAndroidClipboard();
     ID3D11ShaderResourceView* GetAppIconSrv();
+    bool InsertExternalClipboardText(const std::string& text,
+                                     const std::string& sourceProcess = "external");
+    bool AddAndroidClipboardText(const std::string& text,
+                                 const std::string& source = "android");
+    std::vector<AndroidClipboardEntry> GetAndroidClipboardEntries() const;
+    bool RemoveAndroidClipboardEntry(uint64_t id);
+    bool SetAndroidClipboardEntryPinned(uint64_t id, bool pinned);
+    const std::string& GetAndroidDeviceEndpoint() const { return m_androidDeviceEndpoint; }
+    void SetAndroidDeviceEndpoint(const std::string& endpoint);
+    bool SendTextItemsToAndroid(const std::vector<std::string>& texts, std::string* error = nullptr);
+    bool RequestAndroidSyncToWindows(std::string* error = nullptr);
+    bool CheckAndroidDeviceHealth(std::string* error = nullptr);
+    bool IsAndroidSyncServerRunning() const;
+    unsigned short AndroidSyncServerPort() const;
 
 private:
     bool Init();
@@ -114,13 +152,22 @@ private:
     bool HasRenderableUi() const;
     void ApplyLoadedConfig(const AppConfig& config);
     bool HandleClipboardTextCommand(const COPYDATASTRUCT& cds);
+    bool LaunchExternalEditor();
     void RebuildClipboardHistories();
     void SaveClipboardHistory(const std::string& profileId);
     void SaveActiveClipboardHistory();
+    void AddScreenshotPair(ClipboardHistory* history,
+                           const std::filesystem::path& path,
+                           ClipboardItem imageItem,
+                           bool newAtTop);
+    void ScheduleScreenshotPairAdd(ClipboardHistory* history,
+                                   ClipboardItem imageItem,
+                                   bool newAtTop);
     void SwitchClipboardForProcess(const std::string& processName);
     ClipboardProfileConfig* FindClipboardForProcess(const std::string& processName);
     void CreateClipboardForProcess(const std::string& processName);
     ClipboardHistory* HistoryForActiveClipboard() const;
+    ClipboardHistory* HistoryForProfile(const std::string& profileId) const;
 
     bool CreateD3D();
     void DestroyD3D();
@@ -147,8 +194,14 @@ private:
     std::unique_ptr<ClipboardMonitor> m_monitor;
     std::unique_ptr<PopupWindow>      m_popup;
     std::unique_ptr<TrayPopupWindow>  m_trayPopup;
+    std::unique_ptr<TextEditorWindow> m_editor;
     std::unique_ptr<DebugWindow>      m_debugWindow;
     std::unique_ptr<HotkeyManager>    m_hotkeys;
+    std::unique_ptr<AndroidSyncServer> m_androidSyncServer;
+    mutable std::mutex m_androidClipboardMutex;
+    std::vector<AndroidClipboardEntry> m_androidClipboardEntries;
+    uint64_t m_nextAndroidClipboardEntryId{1};
+    std::string m_androidDeviceEndpoint;
 
     bool m_running{false};
     bool m_mainVisible{false};

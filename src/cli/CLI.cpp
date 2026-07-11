@@ -195,26 +195,26 @@ Help:
       Show this help.
 
 Examples:
-  clipboardpp.exe --show
-  clipboardpp.exe --popup
-  clipboardpp.exe --config-path
-  clipboardpp.exe --set theme=TokyoNight
-  clipboardpp.exe config --list
-  clipboardpp.exe config --get popup.opacity
-  clipboardpp.exe config --set paste.newline true
-  clipboardpp.exe config --reset-font
-  clipboardpp.exe --clipboard set "C:\Temp\report.pdf"
-  clipboardpp.exe --clipboard get
-  clipboardpp.exe --clipboard insert "hello from the CLI" --top
-  clipboardpp.exe --clipboard "hello from the CLI" --top
-  clipboardpp.exe --clipboard "archive this lower" --bottom
-  clipboardpp.exe --clipboard "put me at slot 7" --index 7
-  clipboardpp.exe --clipboard-file "C:\Temp\note.txt" --bottom --system
-  clipboardpp.exe --set popup.opacity=0.85
-  clipboardpp.exe --set font.path="C:\Windows\Fonts\consola.ttf"
-  clipboardpp.exe --set font.size=16
-  clipboardpp.exe --set paste.move=bottom
-  clipboardpp.exe status --format json
+  .\clipboardpp.exe --show
+  .\clipboardpp.exe --popup
+  .\clipboardpp.exe --config-path
+  .\clipboardpp.exe --set theme=TokyoNight
+  .\clipboardpp.exe config --list
+  .\clipboardpp.exe config --get popup.opacity
+  .\clipboardpp.exe config --set paste.newline true
+  .\clipboardpp.exe config --reset-font
+  .\clipboardpp.exe --clipboard set "C:\Temp\report.pdf"
+  .\clipboardpp.exe --clipboard get
+  .\clipboardpp.exe --clipboard insert "hello from the CLI" --top
+  .\clipboardpp.exe --clipboard "hello from the CLI" --top
+  .\clipboardpp.exe --clipboard "archive this lower" --bottom
+  .\clipboardpp.exe --clipboard "put me at slot 7" --index 7
+  .\clipboardpp.exe --clipboard-file "C:\Temp\note.txt" --bottom --system
+  .\clipboardpp.exe --set popup.opacity=0.85
+  .\clipboardpp.exe --set font.path="C:\Windows\Fonts\consola.ttf"
+  .\clipboardpp.exe --set font.size=16
+  .\clipboardpp.exe --set paste.move=bottom
+  .\clipboardpp.exe status --format json
 
 Notes:
   Running clipboardpp.exe with no arguments starts the tray app.

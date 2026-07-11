@@ -2,9 +2,11 @@
 #include "ImGuiWidgets.h"
 #include "../app/Application.h"
 #include "../app/ConfigStore.h"
+#include "../app/TrayIcon.h"
 #include "../clipboard/ImageStore.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ContentDetector.h"
+#include "../filters/CustomFilter.h"
 #include "Appearance.h"
 #include "PopupWindow.h"
 #include <imgui.h>
@@ -30,13 +32,16 @@ enum Section {
     SEC_HOTKEYS    = 1,
     SEC_APPEARANCE = 2,
     SEC_HISTORY    = 3,
-    SEC_IMAGES     = 4,
-    SEC_PRIVACY    = 5,
+    SEC_FILTERS    = 4,
+    SEC_EDITOR     = 5,
+    SEC_IMAGES     = 6,
+    SEC_ANDROID    = 7,
+    SEC_PRIVACY    = 8,
 #ifndef NDEBUG
-    SEC_DEVELOPER  = 6,
-    SEC_ABOUT      = 7,
+    SEC_DEVELOPER  = 9,
+    SEC_ABOUT      = 10,
 #else
-    SEC_ABOUT      = 6,
+    SEC_ABOUT      = 9,
 #endif
     SEC_COUNT
 };
@@ -44,10 +49,10 @@ enum Section {
 static const char* kSectionLabels[SEC_COUNT] = {
 #ifndef NDEBUG
     "General", "Hotkeys", "Appearance", "History",
-    "Images", "Privacy", "Developer", "About",
+    "Filters", "Editor", "Images", "Android", "Privacy", "Developer", "About",
 #else
     "General", "Hotkeys", "Appearance", "History",
-    "Images", "Privacy", "About",
+    "Filters", "Editor", "Images", "Android", "Privacy", "About",
 #endif
 };
 
@@ -82,6 +87,18 @@ static bool PickFontFile(char* path, DWORD pathSize) {
     ofn.nMaxFile = pathSize;
     ofn.lpstrFilter = "Font Files (*.ttf;*.otf)\0*.ttf;*.otf\0All Files (*.*)\0*.*\0";
     ofn.lpstrTitle = "Choose font";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return GetOpenFileNameA(&ofn) != FALSE;
+}
+
+static bool PickExecutableFile(char* path, DWORD pathSize) {
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = Application::Get() ? Application::Get()->GetHwnd() : nullptr;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = pathSize;
+    ofn.lpstrFilter = "Executable Files (*.exe)\0*.exe\0All Files (*.*)\0*.*\0";
+    ofn.lpstrTitle = "Choose external editor";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     return GetOpenFileNameA(&ofn) != FALSE;
 }
@@ -271,7 +288,59 @@ static std::vector<std::string> SplitLines(const char* text) {
     return lines;
 }
 
+static std::string SafeFilename(std::string value) {
+    if (value.empty())
+        return "unnamed";
+    for (char& c : value) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (uc < 32 || c == '<' || c == '>' || c == ':' || c == '"' ||
+            c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
+            c = '_';
+        }
+    }
+    return value;
+}
+
+static std::filesystem::path DumpCurrentIcons() {
+    const std::filesystem::path outDir = ConfigStore::Directory() / "icon-dump";
+    std::error_code ec;
+    std::filesystem::create_directories(outDir, ec);
+    if (ec)
+        return {};
+
+    for (int i = 0; i < static_cast<int>(ThemeId::Count); ++i) {
+        const ThemeId theme = static_cast<ThemeId>(i);
+        const std::filesystem::path outPath =
+            outDir / (SafeFilename(ThemeName(theme)) + ".ico");
+        TrayIcon::WriteThemeIco(ThemeDefaults(theme), outPath.wstring());
+    }
+
+    if (Application* app = Application::Get()) {
+        const AppearanceSettings& ap = app->GetAppearance();
+        const std::string customName = ap.customColors
+            ? ap.customThemeName
+            : std::string("active_") + ThemeName(ap.theme);
+        TrayIcon::WriteThemeIco(ap, (outDir / (SafeFilename(customName) + "_current.ico")).wstring());
+
+        if (!ap.exeIconPath.empty()) {
+            const std::filesystem::path src(ap.exeIconPath);
+            if (std::filesystem::exists(src, ec)) {
+                std::filesystem::copy_file(
+                    src,
+                    outDir / ("user_selected_" + SafeFilename(src.filename().string())),
+                    std::filesystem::copy_options::overwrite_existing,
+                    ec);
+            }
+        }
+
+        app->AddDeveloperEvent("dumped themed icons to " + outDir.string());
+    }
+
+    return outDir;
+}
+
 using ImGuiWidgets::KeepMouseWheelOnLastItem;
+using ImGuiWidgets::SmoothScrollCurrentWindow;
 using ImGuiWidgets::SliderFloatWheel;
 using ImGuiWidgets::SliderIntWheel;
 
@@ -497,8 +566,10 @@ void MainWindow::Draw(bool& open) {
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {S(12.0f), S(12.0f)});
     ImGui::BeginChild("##sidebar", {sidebarW, 0},
-                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoScrollWithMouse);
     DrawSidebarNav(s_activeSection);
+    SmoothScrollCurrentWindow("sidebar");
     ImGui::EndChild();
     ImGui::PopStyleVar();
 
@@ -509,6 +580,7 @@ void MainWindow::Draw(bool& open) {
     ImGuiWindowFlags contentFlags = app && !app->GetAppearance().showScrollbars
         ? ImGuiWindowFlags_NoScrollbar
         : ImGuiWindowFlags_None;
+    contentFlags |= ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::BeginChild("##content", {contentW, 0},
                       ImGuiChildFlags_AlwaysUseWindowPadding,
                       contentFlags);
@@ -517,13 +589,17 @@ void MainWindow::Draw(bool& open) {
     case SEC_HOTKEYS:    DrawHotkeys();    break;
     case SEC_APPEARANCE: DrawAppearance(); break;
     case SEC_HISTORY:    DrawHistory();    break;
+    case SEC_FILTERS:    DrawFilters();    break;
+    case SEC_EDITOR:     DrawEditor();     break;
     case SEC_IMAGES:     DrawImages();     break;
+    case SEC_ANDROID:    DrawAndroid();    break;
     case SEC_PRIVACY:    DrawPrivacy();    break;
 #ifndef NDEBUG
     case SEC_DEVELOPER:  DrawDeveloper();  break;
 #endif
     case SEC_ABOUT:      DrawAbout();      break;
     }
+    SmoothScrollCurrentWindow("settings_content");
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
 
@@ -574,6 +650,10 @@ void MainWindow::DrawGeneral() {
     }
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
     HelpTooltip("When off, new items are added to the bottom.");
+    ImGui::Spacing();
+    bool hidePopupOnOutsideClick = app->GetHidePopupOnOutsideClick();
+    if (ImGui::Checkbox("Hide popup when clicking outside it", &hidePopupOnOutsideClick))
+        app->SetHidePopupOnOutsideClick(hidePopupOnOutsideClick);
     ImGui::Spacing();
     ImGui::Checkbox("Deduplicate - move existing copy to configured position", &deduplication);
 
@@ -637,7 +717,7 @@ void MainWindow::DrawGeneral() {
         HelpTooltip("Click to select a clipboard or type a name");
     if (showClipboardSave) {
         ImGui::SameLine();
-        if (PaddedButton("Save", saveW)) {
+        if (BlueButton("Save", saveW)) {
             std::string name = TrimAscii(clipboardNameBuf);
             if (!name.empty()) {
                 app->CreateClipboardProfile(name);
@@ -1151,6 +1231,7 @@ void MainWindow::DrawAppearance() {
         next.uiScale = 1.0f;
         next.popupOpacity = current.popupOpacity;
         next.popupOutlineStrength = current.popupOutlineStrength;
+        next.popupOutlineEffect = current.popupOutlineEffect;
         next.popupOutlineAnimated = current.popupOutlineAnimated;
         next.popupOutlineAnimationSpeed = current.popupOutlineAnimationSpeed;
         next.popupOutlineColorSharpness = current.popupOutlineColorSharpness;
@@ -1167,6 +1248,8 @@ void MainWindow::DrawAppearance() {
         next.scrollbarRounding = current.scrollbarRounding;
         next.scrollbarPadding = current.scrollbarPadding;
         next.popupRounding = current.popupRounding;
+        next.popupButtonRowPadding = current.popupButtonRowPadding;
+        next.popupButtonColumnPadding = current.popupButtonColumnPadding;
         next.controlRounding = current.controlRounding;
         next.savedThemes  = current.savedThemes;
         next.exeIconPath  = current.exeIconPath;
@@ -1225,6 +1308,7 @@ void MainWindow::DrawAppearance() {
             fallback.uiScale = 1.0f;
             fallback.popupOpacity = next.popupOpacity;
             fallback.popupOutlineStrength = next.popupOutlineStrength;
+            fallback.popupOutlineEffect = next.popupOutlineEffect;
             fallback.popupOutlineAnimated = next.popupOutlineAnimated;
             fallback.popupOutlineAnimationSpeed = next.popupOutlineAnimationSpeed;
             fallback.popupOutlineColorSharpness = next.popupOutlineColorSharpness;
@@ -1241,6 +1325,8 @@ void MainWindow::DrawAppearance() {
             fallback.scrollbarRounding = next.scrollbarRounding;
             fallback.scrollbarPadding = next.scrollbarPadding;
             fallback.popupRounding = next.popupRounding;
+            fallback.popupButtonRowPadding = next.popupButtonRowPadding;
+            fallback.popupButtonColumnPadding = next.popupButtonColumnPadding;
             fallback.controlRounding = next.controlRounding;
             fallback.savedThemes = next.savedThemes;
             next = fallback;
@@ -1274,7 +1360,7 @@ void MainWindow::DrawAppearance() {
         HelpTooltip("Click to select a theme or type a custom theme name");
     if (showThemeSave) {
         ImGui::SameLine();
-        if (PaddedButton("Save", themeSaveW)) {
+        if (BlueButton("Save", themeSaveW)) {
             const std::string name = TrimAscii(customName);
             if (IsBuiltInThemeName(name)) {
                 MessageBeep(MB_ICONWARNING);
@@ -1397,17 +1483,24 @@ void MainWindow::DrawAppearance() {
     ImGui::Text("Popup outline");
     ImGui::SetNextItemWidth(240.0f);
     SliderFloatWheel("##outline_strength", &draft.popupOutlineStrength, 0.0f, 1.0f, "%.2f", 0.05f);
-    if (ImGui::Checkbox("Animated multicolor outline", &draft.popupOutlineAnimated)) {
+    const char* outlineEffects[] = {"Solid accent", "Rainbow flow", "Pulse glow", "Comet chase"};
+    draft.popupOutlineEffect = std::clamp(draft.popupOutlineEffect, 0, 3);
+    ImGui::SetNextItemWidth(240.0f);
+    if (ImGui::Combo("Outline effect", &draft.popupOutlineEffect,
+                     outlineEffects, IM_ARRAYSIZE(outlineEffects))) {
         AppearanceSettings next = app->GetAppearance();
-        next.popupOutlineAnimated = draft.popupOutlineAnimated;
+        next.popupOutlineEffect = draft.popupOutlineEffect;
+        next.popupOutlineAnimated = draft.popupOutlineEffect != 0;
         app->RequestAppearance(next);
         draft = app->GetAppearance();
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
-    if (draft.popupOutlineAnimated) {
+    if (draft.popupOutlineEffect != 0) {
         bool outlineAnimationChanged = false;
         auto applyOutlineAnimation = [&]() {
             AppearanceSettings next = app->GetAppearance();
+            next.popupOutlineEffect = std::clamp(draft.popupOutlineEffect, 0, 3);
+            next.popupOutlineAnimated = next.popupOutlineEffect != 0;
             next.popupOutlineAnimationSpeed = std::clamp(draft.popupOutlineAnimationSpeed, 0.05f, 5.0f);
             next.popupOutlineColorSharpness = std::clamp(draft.popupOutlineColorSharpness, 0.0f, 1.0f);
             next.popupOutlineColorSpread = std::clamp(draft.popupOutlineColorSpread, 0.0f, 2.0f);
@@ -1438,6 +1531,7 @@ void MainWindow::DrawAppearance() {
         if (outlineAnimationChanged)
             applyOutlineAnimation();
         if (PaddedButton("Reset outline animation", 180.0f)) {
+            draft.popupOutlineEffect = 1;
             draft.popupOutlineAnimationSpeed = 1.0f;
             draft.popupOutlineColorSpread = 1.0f;
             draft.popupOutlineColorSharpness = 0.55f;
@@ -1464,6 +1558,14 @@ void MainWindow::DrawAppearance() {
                         static_cast<long>(livePopupSize.cx),
                         static_cast<long>(livePopupSize.cy));
     ImGui::Spacing();
+    if (PopupWindow* pw = app->GetPopup()) {
+        SectionHeader("Focus Behavior (Test)");
+        bool focusTest = pw->m_focusTestMode;
+        if (ImGui::Checkbox("Restore focus to caller on show", &focusTest))
+            pw->m_focusTestMode = focusTest;
+        HelpTooltip("Removes WS_EX_NOACTIVATE so the popup activates normally,\nthen immediately returns foreground focus to the window\nthat was active when the popup was opened.\nTakes effect on the next popup show.");
+    }
+    ImGui::Spacing();
     if (PaddedButton("Use current as default", 180.0f)) {
         app->UseCurrentPopupSizeAsDefault();
         draft = app->GetAppearance();
@@ -1474,7 +1576,8 @@ void MainWindow::DrawAppearance() {
         AppearanceSettings next = app->GetAppearance();
         next.popupOpacity = std::clamp(draft.popupOpacity, 0.1f, 1.0f);
         next.popupOutlineStrength = std::clamp(draft.popupOutlineStrength, 0.0f, 1.0f);
-        next.popupOutlineAnimated = draft.popupOutlineAnimated;
+        next.popupOutlineEffect = std::clamp(draft.popupOutlineEffect, 0, 3);
+        next.popupOutlineAnimated = next.popupOutlineEffect != 0;
         next.popupOutlineAnimationSpeed = std::clamp(draft.popupOutlineAnimationSpeed, 0.05f, 5.0f);
         next.popupOutlineColorSharpness = std::clamp(draft.popupOutlineColorSharpness, 0.0f, 1.0f);
         next.popupOutlineColorSpread = std::clamp(draft.popupOutlineColorSpread, 0.0f, 2.0f);
@@ -1740,9 +1843,13 @@ void MainWindow::DrawAppearance() {
                                      0.0f, 12.0f, "%.1f", 0.5f);
     if (shapeChanged) {
         draft.popupRounding = std::clamp(draft.popupRounding, 0.0f, 18.0f);
+        draft.popupButtonRowPadding = std::clamp(draft.popupButtonRowPadding, 0.0f, 12.0f);
+        draft.popupButtonColumnPadding = std::clamp(draft.popupButtonColumnPadding, 0.0f, 16.0f);
         draft.controlRounding = std::clamp(draft.controlRounding, 0.0f, 12.0f);
         AppearanceSettings next = app->GetAppearance();
         next.popupRounding = draft.popupRounding;
+        next.popupButtonRowPadding = draft.popupButtonRowPadding;
+        next.popupButtonColumnPadding = draft.popupButtonColumnPadding;
         next.controlRounding = draft.controlRounding;
         app->RequestAppearance(next);
         draft = app->GetAppearance();
@@ -1795,6 +1902,7 @@ void MainWindow::DrawHistory() {
         ImGuiWindowFlags childFlags = Application::Get()->GetAppearance().showScrollbars
             ? ImGuiWindowFlags_None
             : ImGuiWindowFlags_NoScrollbar;
+        childFlags |= ImGuiWindowFlags_NoScrollWithMouse;
         if (ImGui::BeginChild("##histlive", {-1.0f, 220.0f},
                               ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
                               childFlags)) {
@@ -1835,9 +1943,353 @@ void MainWindow::DrawHistory() {
                 ImGui::TextUnformatted(item->Preview(72).c_str());
             }
         }
+        SmoothScrollCurrentWindow("history_live", 72.0f);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
+}
+
+// -- Section: Filters ---------------------------------------------------------
+
+void MainWindow::DrawFilters() {
+    Application* app = Application::Get();
+    if (!app) return;
+
+    ImGui::TextDisabled("Filters");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    std::vector<CustomFilter> filters = app->GetCustomFilters();
+    static std::string selectedId;
+    static CustomFilter draft;
+    static char nameBuf[96]{};
+    static char patternBuf[512]{};
+    static char testBuf[512]{};
+
+    auto findFilter = [&](const std::string& id) {
+        return std::find_if(filters.begin(), filters.end(),
+            [&](const CustomFilter& filter) { return filter.id == id; });
+    };
+    auto loadDraft = [&](const CustomFilter& filter) {
+        draft = filter;
+        selectedId = filter.id;
+        strncpy_s(nameBuf, filter.name.c_str(), _TRUNCATE);
+        strncpy_s(patternBuf, filter.pattern.c_str(), _TRUNCATE);
+    };
+    auto saveFilters = [&]() {
+        app->SetCustomFilters(filters);
+    };
+
+    if (selectedId.empty() && !filters.empty())
+        loadDraft(filters.front());
+    if (!selectedId.empty() && findFilter(selectedId) == filters.end()) {
+        selectedId.clear();
+        if (!filters.empty())
+            loadDraft(filters.front());
+    }
+
+    SectionHeader("Filter Buttons");
+    if (filters.empty()) {
+        ImGui::TextDisabled("No custom filters yet.");
+    } else {
+        ImGui::TextDisabled("Drag filters to reorder popup buttons.");
+        ImGui::Spacing();
+        for (int i = 0; i < static_cast<int>(filters.size()); ++i) {
+            ImGui::PushID(filters[i].id.c_str());
+            const bool selected = filters[i].id == selectedId;
+            std::string label = filters[i].name;
+            if (!filters[i].enabled)
+                label += " (off)";
+            if (ImGui::Selectable(label.c_str(), selected))
+                loadDraft(filters[i]);
+
+            if (ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload("CPP_CUSTOM_FILTER", &i, sizeof(i));
+                ImGui::TextUnformatted(filters[i].name.c_str());
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CPP_CUSTOM_FILTER")) {
+                    int from = *static_cast<const int*>(payload->Data);
+                    if (from >= 0 && from < static_cast<int>(filters.size()) && from != i) {
+                        CustomFilter moved = filters[static_cast<size_t>(from)];
+                        filters.erase(filters.begin() + from);
+                        const int to = from < i ? i - 1 : i;
+                        filters.insert(filters.begin() + to, std::move(moved));
+                        saveFilters();
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::PopID();
+        }
+    }
+
+    SectionHeader("Editor");
+    if (BlueButton("New filter", 120.0f)) {
+        CustomFilter filter;
+        filter.id = NewCustomFilterId();
+        filter.name = "New filter";
+        filter.pattern = "text";
+        filters.push_back(filter);
+        saveFilters();
+        loadDraft(filters.back());
+    }
+
+    if (selectedId.empty()) {
+        ImGui::TextDisabled("Create a filter to edit its button and matching rule.");
+        return;
+    }
+
+    draft.name = TrimAscii(nameBuf);
+    draft.pattern = patternBuf;
+
+    ImGui::Checkbox("Enabled", &draft.enabled);
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputText("Name", nameBuf, sizeof(nameBuf));
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextMultiline("Pattern", patternBuf, sizeof(patternBuf), {0.0f, 88.0f});
+    draft.name = TrimAscii(nameBuf);
+    draft.pattern = patternBuf;
+
+    int mode = static_cast<int>(draft.mode);
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("Mode", CustomFilterModeName(draft.mode))) {
+        for (int i = 0; i <= 3; ++i) {
+            const auto value = static_cast<CustomFilterMode>(i);
+            if (ImGui::Selectable(CustomFilterModeName(value), mode == i))
+                mode = i;
+        }
+        ImGui::EndCombo();
+    }
+    draft.mode = static_cast<CustomFilterMode>(std::clamp(mode, 0, 3));
+
+    int target = static_cast<int>(draft.target);
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("Target", CustomFilterTargetName(draft.target))) {
+        for (int i = 0; i <= 4; ++i) {
+            const auto value = static_cast<CustomFilterTarget>(i);
+            if (ImGui::Selectable(CustomFilterTargetName(value), target == i))
+                target = i;
+        }
+        ImGui::EndCombo();
+    }
+    draft.target = static_cast<CustomFilterTarget>(std::clamp(target, 0, 4));
+
+    ImGui::Checkbox("Case sensitive", &draft.caseSensitive);
+    if (draft.mode == CustomFilterMode::Regex) {
+        ImGui::Checkbox("Multiline", &draft.multiline);
+        ImGui::Checkbox("Dot matches newline", &draft.dotMatchesNewline);
+    }
+
+    SectionHeader("Routing");
+    ImGui::Checkbox("Route matching copies to another clipboard", &draft.routeToProfile);
+    if (draft.routeToProfile) {
+        const std::vector<ClipboardProfileConfig>& profiles = app->GetClipboardProfiles();
+        const char* selectedProfileName = "(select profile)";
+        for (const ClipboardProfileConfig& profile : profiles) {
+            if (profile.id == draft.routeProfileId) {
+                selectedProfileName = profile.name.c_str();
+                break;
+            }
+        }
+        ImGui::SetNextItemWidth(260.0f);
+        if (ImGui::BeginCombo("Destination profile", selectedProfileName)) {
+            for (const ClipboardProfileConfig& profile : profiles) {
+                const bool selected = profile.id == draft.routeProfileId;
+                if (ImGui::Selectable(profile.name.c_str(), selected))
+                    draft.routeProfileId = profile.id;
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::Checkbox("Move instead of copy", &draft.routeMove);
+        ImGui::TextDisabled("Copy keeps the item in the active clipboard and also adds it to the destination.");
+    }
+
+    CustomFilterValidation validation = ValidateCustomFilter(draft);
+    const bool routingOk = !draft.routeToProfile || !draft.routeProfileId.empty();
+    if (validation.ok)
+        ImGui::TextDisabled("Pattern is valid.");
+    else
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", validation.message.c_str());
+    if (!routingOk)
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f), "Choose a destination profile for routing.");
+
+    SectionHeader("Test");
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextMultiline("Sample text", testBuf, sizeof(testBuf), {0.0f, 72.0f});
+    ClipboardItem sample;
+    sample.type = ContentType::Text;
+    sample.text = testBuf;
+    sample.tags = ContentDetector::DetectTags(sample.text);
+    const bool sampleMatches = validation.ok && CustomFilterMatches(draft, sample);
+    ImGui::TextDisabled("Result: %s", sampleMatches ? "match" : "no match");
+
+    SectionHeader("Actions");
+    if (!validation.ok || !routingOk)
+        ImGui::BeginDisabled();
+    if (BlueButton("Save filter", 120.0f)) {
+        draft.name = TrimAscii(nameBuf);
+        draft.pattern = patternBuf;
+        auto it = findFilter(selectedId);
+        if (it != filters.end()) {
+            *it = draft;
+            saveFilters();
+            loadDraft(*it);
+        }
+    }
+    if (!validation.ok || !routingOk)
+        ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (DangerButton("Delete filter", 120.0f))
+        ImGui::OpenPopup("Confirm filter delete");
+
+    if (ImGui::BeginPopupModal("Confirm filter delete", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Delete this custom filter?");
+        ImGui::TextDisabled("%s", draft.name.c_str());
+        ImGui::Spacing();
+        if (DangerButton("Delete", 90.0f)) {
+            filters.erase(std::remove_if(filters.begin(), filters.end(),
+                [&](const CustomFilter& filter) { return filter.id == selectedId; }),
+                filters.end());
+            selectedId.clear();
+            saveFilters();
+            if (!filters.empty())
+                loadDraft(filters.front());
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (PaddedButton("Cancel", 90.0f) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+// -- Section: Editor ----------------------------------------------------------
+
+void MainWindow::DrawEditor() {
+    Application* app = Application::Get();
+    if (!app) return;
+
+    ImGui::TextDisabled("Text / Script Editor");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    EditorSettings s = app->GetEditorSettings();
+    bool changed = false;
+
+    changed |= ImGui::Checkbox("Enable editor hotkey and menu actions", &s.enabled);
+    ImGui::SameLine(); ImGui::TextDisabled("(?)");
+    HelpTooltip("When enabled, Ctrl+Shift+E opens the selected editor provider.");
+
+    if (!s.enabled)
+        ImGui::BeginDisabled();
+
+    if (BlueButton("Open editor", 120.0f))
+        app->ShowEditorPopup();
+    ImGui::SameLine();
+    ImGui::TextDisabled("Default hotkey: Ctrl+Shift+E");
+
+    SectionHeader("Provider");
+    const char* providers[] = {"Built-in popup", "External executable"};
+    ImGui::SetNextItemWidth(std::min(360.0f, ImGui::GetContentRegionAvail().x));
+    if (ImGui::Combo("Editor provider##editorProvider", &s.provider, providers, IM_ARRAYSIZE(providers))) {
+        s.provider = std::clamp(s.provider, 0, static_cast<int>(IM_ARRAYSIZE(providers)) - 1);
+        changed = true;
+    }
+
+    const char* modes[] = {"Plain text", "PowerShell", "Batch", "JSON", "Markdown"};
+    ImGui::SetNextItemWidth(std::min(360.0f, ImGui::GetContentRegionAvail().x));
+    if (ImGui::Combo("Default mode##editorMode", &s.mode, modes, IM_ARRAYSIZE(modes))) {
+        s.mode = std::clamp(s.mode, 0, static_cast<int>(IM_ARRAYSIZE(modes)) - 1);
+        changed = true;
+    }
+
+    SectionHeader("Clipboard");
+    changed |= ImGui::Checkbox("Load clipboard text when the editor opens", &s.openWithClipboard);
+    ImGui::SameLine(); ImGui::TextDisabled("(?)");
+    HelpTooltip("Only text clipboard content is loaded. Images and files are ignored.");
+
+    if (s.provider == 0) {
+        changed |= ImGui::Checkbox("Copy editor text to clipboard when closing", &s.copyOnClose);
+
+        SectionHeader("Built-in Popup");
+        changed |= ImGui::Checkbox("Keep editor on top", &s.alwaysOnTop);
+        changed |= ImGui::Checkbox("Confirm before closing unsaved text", &s.confirmClose);
+        ImGui::SetNextItemWidth(140.0f);
+        if (ImGui::InputInt("Width##editorWidth", &s.width, 20)) {
+            s.width = std::clamp(s.width, 520, 3840);
+            changed = true;
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(140.0f);
+        if (ImGui::InputInt("Height##editorHeight", &s.height, 20)) {
+            s.height = std::clamp(s.height, 360, 2160);
+            changed = true;
+        }
+
+        SectionHeader("Editing");
+        changed |= ImGui::Checkbox("Show line numbers", &s.showLineNumbers);
+        changed |= ImGui::Checkbox("Show status bar", &s.showStatusBar);
+        changed |= ImGui::Checkbox("Allow Tab inside editor", &s.allowTabInput);
+    } else {
+        SectionHeader("External Executable");
+        ImGui::TextDisabled("Leave the path empty to use bundled clipboardpp_ide.exe.");
+        char pathBuf[MAX_PATH]{};
+        strncpy_s(pathBuf, s.externalPath.c_str(), _TRUNCATE);
+        ImGui::SetNextItemWidth(std::max(260.0f, ImGui::GetContentRegionAvail().x - 96.0f));
+        if (ImGui::InputText("Path##externalEditorPath", pathBuf, sizeof(pathBuf))) {
+            s.externalPath = pathBuf;
+            changed = true;
+        }
+        ImGui::SameLine();
+        if (PaddedButton("Browse", 84.0f)) {
+            char picked[MAX_PATH]{};
+            strncpy_s(picked, s.externalPath.c_str(), _TRUNCATE);
+            if (PickExecutableFile(picked, sizeof(picked))) {
+                const std::string bundledArgs = EditorSettings{}.externalArguments;
+                s.externalPath = picked;
+                if (s.externalArguments == bundledArgs)
+                    s.externalArguments = "{file}";
+                changed = true;
+            }
+        }
+
+        char argsBuf[512]{};
+        strncpy_s(argsBuf, s.externalArguments.c_str(), _TRUNCATE);
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("Arguments##externalEditorArgs", argsBuf, sizeof(argsBuf))) {
+            s.externalArguments = argsBuf;
+            changed = true;
+        }
+        ImGui::SameLine(); ImGui::TextDisabled("(?)");
+        HelpTooltip("{file} inserts the quoted temporary file path. {filePath} inserts the raw path.");
+
+        char extBuf[32]{};
+        strncpy_s(extBuf, s.externalTempExtension.c_str(), _TRUNCATE);
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::InputText("Temp extension##externalEditorExt", extBuf, sizeof(extBuf))) {
+            s.externalTempExtension = extBuf;
+            changed = true;
+        }
+        ImGui::SameLine(); ImGui::TextDisabled("(?)");
+        HelpTooltip("Leave blank to use the extension implied by the default mode.");
+
+        changed |= ImGui::Checkbox("Wait for external editor to exit", &s.externalWaitForExit);
+        changed |= ImGui::Checkbox("Copy edited file back to clipboard after exit", &s.externalReadBackToClipboard);
+        if (s.externalReadBackToClipboard && !s.externalWaitForExit) {
+            s.externalWaitForExit = true;
+            changed = true;
+        }
+    }
+
+    if (!s.enabled)
+        ImGui::EndDisabled();
+
+    if (changed)
+        app->SetEditorSettings(s);
 }
 
 // -- Section: Images ----------------------------------------------------------
@@ -2002,6 +2454,104 @@ void MainWindow::DrawImages() {
     }
 }
 
+// -- Section: Android ---------------------------------------------------------
+
+void MainWindow::DrawAndroid() {
+    Application* app = Application::Get();
+    if (!app) return;
+
+    ImGui::TextDisabled("Android Sync");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    const bool running = app->IsAndroidSyncServerRunning();
+    const unsigned short port = app->AndroidSyncServerPort();
+    const std::string localhostHealth = "http://127.0.0.1:" + std::to_string(port) + "/health";
+    const std::string hotspotEndpoint = "http://192.168.137.1:" + std::to_string(port);
+
+    ImGui::Text("Windows receiver: %s", running ? "listening" : "not running");
+    ImGui::Text("Port: %hu", port);
+    ImGui::TextWrapped("In the Android app, set Windows Endpoint to this PC's reachable address, for example:");
+    ImGui::BulletText("%s", hotspotEndpoint.c_str());
+    ImGui::TextDisabled("Use 192.168.137.1 when the phone is connected to the Windows hotspot.");
+
+    ImGui::Spacing();
+    if (ImGui::Button("Copy hotspot endpoint")) {
+        ImGui::SetClipboardText(hotspotEndpoint.c_str());
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Open local health check")) {
+        ShellExecuteA(nullptr, "open", localhostHealth.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Android endpoint");
+    ImGui::TextWrapped("Set the Android app API endpoint used when Clipboard++ sends items to Android or requests a sync.");
+
+    static char endpointBuf[256]{};
+    static std::string lastLoadedEndpoint;
+    static std::string endpointStatus;
+    const std::string currentEndpoint = app->GetAndroidDeviceEndpoint();
+    if (!ImGui::IsAnyItemActive() && currentEndpoint != lastLoadedEndpoint) {
+        std::snprintf(endpointBuf, sizeof(endpointBuf), "%s", currentEndpoint.c_str());
+        lastLoadedEndpoint = currentEndpoint;
+    }
+    if (lastLoadedEndpoint.empty() && endpointBuf[0] == '\0' && !currentEndpoint.empty()) {
+        std::snprintf(endpointBuf, sizeof(endpointBuf), "%s", currentEndpoint.c_str());
+        lastLoadedEndpoint = currentEndpoint;
+    }
+
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##androidEndpointSettings",
+                             "Android app API endpoint, e.g. http://192.168.137.42:8765",
+                             endpointBuf, sizeof(endpointBuf));
+    if (ImGui::Button("Save Android endpoint")) {
+        app->SetAndroidDeviceEndpoint(endpointBuf);
+        std::snprintf(endpointBuf, sizeof(endpointBuf), "%s",
+                      app->GetAndroidDeviceEndpoint().c_str());
+        lastLoadedEndpoint = app->GetAndroidDeviceEndpoint();
+        endpointStatus = app->GetAndroidDeviceEndpoint().empty()
+            ? "Android endpoint cleared"
+            : "Android endpoint saved";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Test Android endpoint")) {
+        app->SetAndroidDeviceEndpoint(endpointBuf);
+        std::snprintf(endpointBuf, sizeof(endpointBuf), "%s",
+                      app->GetAndroidDeviceEndpoint().c_str());
+        lastLoadedEndpoint = app->GetAndroidDeviceEndpoint();
+        std::string error;
+        if (app->CheckAndroidDeviceHealth(&error))
+            endpointStatus = "Android endpoint reachable";
+        else
+            endpointStatus = error.empty() ? "Android endpoint test failed" : error;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear##androidEndpoint")) {
+        endpointBuf[0] = '\0';
+        app->SetAndroidDeviceEndpoint("");
+        lastLoadedEndpoint.clear();
+        endpointStatus = "Android endpoint cleared";
+    }
+    if (app->GetAndroidDeviceEndpoint().empty())
+        ImGui::TextDisabled("No Android endpoint saved. The popup Android list will ask for one.");
+    else
+        ImGui::TextDisabled("Saved: %s", app->GetAndroidDeviceEndpoint().c_str());
+    if (!endpointStatus.empty())
+        ImGui::TextDisabled("%s", endpointStatus.c_str());
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Android app");
+    ImGui::TextWrapped("Install the latest debug APK, enable Clipboard++ Capture Keyboard, then turn on Push captured items to Windows Clipboard++.");
+    ImGui::TextWrapped("If the phone cannot reach the health URL, allow inbound TCP %hu in Windows Firewall.", port);
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Current behavior");
+    ImGui::BulletText("Captured Android text is shown in the dedicated Android popup list.");
+    ImGui::BulletText("Clipboard++ can send selected text items to the saved Android endpoint.");
+    ImGui::BulletText("Android may show a clipboard access banner when the IME reads copied text.");
+}
+
 // -- Section: Privacy ---------------------------------------------------------
 
 void MainWindow::DrawPrivacy() {
@@ -2097,6 +2647,17 @@ void MainWindow::DrawDeveloper() {
     ImGui::Text("Fonts: %s", ConfigStore::FontsDirectory().string().c_str());
     if (ImGui::SmallButton("Toggle debug output"))
         app->ToggleDebugWindow();
+    ImGui::SameLine();
+    static std::filesystem::path lastIconDumpPath;
+    if (ImGui::SmallButton("Dump current icons")) {
+        lastIconDumpPath = DumpCurrentIcons();
+        if (!lastIconDumpPath.empty())
+            ShellExecuteW(nullptr, L"open", lastIconDumpPath.wstring().c_str(),
+                          nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    if (!lastIconDumpPath.empty()) {
+        ImGui::TextWrapped("Icon dump: %s", lastIconDumpPath.string().c_str());
+    }
 
     if (dev.enabled && hist && hist->Size() > 0) {
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
@@ -2105,6 +2666,7 @@ void MainWindow::DrawDeveloper() {
         ImGuiWindowFlags childFlags = app->GetAppearance().showScrollbars
             ? ImGuiWindowFlags_None
             : ImGuiWindowFlags_NoScrollbar;
+        childFlags |= ImGuiWindowFlags_NoScrollWithMouse;
         if (ImGui::BeginChild("##dev_item_inspector", {-1.0f, 210.0f},
                               ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
                               childFlags)) {
@@ -2130,6 +2692,7 @@ void MainWindow::DrawDeveloper() {
                 }
                 ImGui::PopID();
             }
+            SmoothScrollCurrentWindow("dev_item_inspector", 72.0f);
         }
         ImGui::EndChild();
         ImGui::PopStyleVar();
@@ -2155,6 +2718,7 @@ void MainWindow::DrawDeveloper() {
         ImGuiWindowFlags childFlags = app->GetAppearance().showScrollbars
             ? ImGuiWindowFlags_None
             : ImGuiWindowFlags_NoScrollbar;
+        childFlags |= ImGuiWindowFlags_NoScrollWithMouse;
         if (ImGui::BeginChild("##dev_event_log", {-1.0f, 180.0f},
                               ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
                               childFlags)) {
@@ -2169,6 +2733,7 @@ void MainWindow::DrawDeveloper() {
                 if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
                     ImGui::SetScrollHereY(1.0f);
             }
+            SmoothScrollCurrentWindow("dev_event_log", 72.0f);
         }
         ImGui::EndChild();
         ImGui::PopStyleVar();

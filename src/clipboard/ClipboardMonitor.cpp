@@ -1,10 +1,13 @@
 #include "ClipboardMonitor.h"
 #include "ContentDetector.h"
 #include "ImageStore.h"
+#include "ScreenshotTracker.h"
 #include "../util/Win32Util.h"
 #include <shellapi.h>   // DragQueryFileW
 #include <chrono>
 #include <fstream>
+#include <cstdint>
+#include <filesystem>
 #include <vector>
 
 static constexpr wchar_t kMonitorClass[] = L"CPPClipboardMonitor";
@@ -12,6 +15,29 @@ static constexpr int kOpenClipboardAttempts = 12;
 static constexpr DWORD kOpenClipboardRetryMs = 8;
 
 namespace {
+
+constexpr uint64_t kFnvOffset = 14695981039346656037ull;
+constexpr uint64_t kFnvPrime = 1099511628211ull;
+
+uint64_t StableImageHash(const std::vector<uint8_t>& bytes, int width, int height, bool pngDirect) {
+    uint64_t hash = kFnvOffset;
+    auto hashByte = [&](uint8_t value) {
+        hash ^= value;
+        hash *= kFnvPrime;
+    };
+    auto hashBytes = [&](const void* data, size_t size) {
+        const auto* p = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < size; ++i)
+            hashByte(p[i]);
+    };
+
+    const uint8_t type = pngDirect ? 1 : 2;
+    hashByte(type);
+    hashBytes(&width, sizeof(width));
+    hashBytes(&height, sizeof(height));
+    hashBytes(bytes.data(), bytes.size());
+    return hash ? hash : 1;
+}
 
 std::string FileDropPathsUtf8(HDROP hDrop) {
     UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
@@ -127,17 +153,20 @@ void ClipboardMonitor::OnClipboardUpdate() {
     ClipboardItem item = ReadClipboard();
     if (item.IsEmpty()) return;
 
-    // Image-capture debounce: Windows fires WM_CLIPBOARDUPDATE twice per screenshot
-    // because it updates the clipboard with delayed-render formats after the initial set.
-    // Drop the second event if same dimensions arrive within 500ms.
+    // Image-capture debounce: Windows can fire WM_CLIPBOARDUPDATE more than once
+    // for one screenshot as delayed-render formats settle. Use a stable byte hash,
+    // not dimensions alone, so same-size screenshots are still captured correctly.
     if (item.type == ContentType::Image) {
         const ULONGLONG now = GetTickCount64();
-        if (now - m_lastImgTickMs < 500 &&
+        if (item.contentHash != 0 &&
+            item.contentHash == m_lastImgHash &&
+            now - m_lastImgTickMs < 3000 &&
             item.imageW == m_lastImgW && item.imageH == m_lastImgH) {
             if (m_imageStore && !item.imageStoreId.empty())
                 m_imageStore->Delete(item.imageStoreId);
             return;
         }
+        m_lastImgHash   = item.contentHash;
         m_lastImgW      = item.imageW;
         m_lastImgH      = item.imageH;
         m_lastImgTickMs = now;
@@ -205,8 +234,15 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
                                     m_imageStore->GetRecord(item.imageStoreId, rec);
                                     item.imageW = rec.width;
                                     item.imageH = rec.height;
-                                    item.text   = "[Image " + std::to_string(item.imageW)
-                                                + "x"       + std::to_string(item.imageH) + "]";
+                                    item.contentHash = StableImageHash(fileBytes, item.imageW, item.imageH, isPng);
+                                    item.sourceKind = "image-file";
+                                    item.sourceFilePath = std::filesystem::path(wpath).u8string();
+                                    std::string filename = std::filesystem::path(wpath).filename().u8string();
+                                    if (filename.empty())
+                                        filename = "Image";
+                                    item.text   = "[IMG] " + filename + " "
+                                                + std::to_string(item.imageW)
+                                                + "x" + std::to_string(item.imageH);
                                     item.type   = ContentType::Image;
                                     handledAsImage = true;
                                 }
@@ -366,6 +402,28 @@ void ClipboardMonitor::ReadImageFormats(ClipboardItem& item) const {
 
     item.text = "[Image " + std::to_string(item.imageW)
               + "x"       + std::to_string(item.imageH) + "]";
+    item.contentHash = StableImageHash(rawBytes, item.imageW, item.imageH, isPngDirect);
+    item.sourceKind = "image";
+
+    ScreenshotTracker& screenshots = ScreenshotTracker::Instance();
+    const std::string screenshotHint = screenshots.LastHint();
+    if (!screenshotHint.empty()) {
+        item.sourceKind = "screenshot";
+        const uint64_t pixelHash =
+            ScreenshotTracker::PixelHashFromImageBytes(rawBytes, isPngDirect);
+        item.sourcePixelHash = pixelHash;
+        const std::filesystem::path screenshotPath =
+            screenshots.FindRecentScreenshotFile(item.imageW, item.imageH, pixelHash);
+        if (!screenshotPath.empty()) {
+            item.sourceFilePath = screenshotPath.u8string();
+            item.text = "[Screenshot] " + screenshotPath.filename().u8string() + " "
+                      + std::to_string(item.imageW) + "x" + std::to_string(item.imageH)
+                      + "\n" + item.sourceFilePath;
+        } else {
+            item.text = "[Screenshot] " + screenshotHint + " "
+                      + std::to_string(item.imageW) + "x" + std::to_string(item.imageH);
+        }
+    }
 
     // Store into ImageStore if available
     if (m_imageStore) {
