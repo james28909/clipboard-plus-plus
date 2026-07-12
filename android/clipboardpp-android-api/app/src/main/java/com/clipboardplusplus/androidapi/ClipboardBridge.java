@@ -3,6 +3,7 @@ package com.clipboardplusplus.androidapi;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
@@ -117,6 +118,16 @@ final class ClipboardBridge {
 
     boolean captureCurrentClipboard(String source) {
         return captureCurrentClipboard(source, true);
+    }
+
+    void requestForegroundSync(String source) {
+        Intent sync = new Intent(appContext, FloatingSyncActivity.class);
+        sync.putExtra(FloatingSyncActivity.EXTRA_SOURCE, source);
+        sync.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
+                Intent.FLAG_ACTIVITY_MULTIPLE_TASK |
+                Intent.FLAG_ACTIVITY_NO_HISTORY |
+                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+        appContext.startActivity(sync);
     }
 
     boolean captureCurrentClipboard(String source, boolean autoPushNewItems) {

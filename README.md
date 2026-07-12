@@ -2,7 +2,7 @@
 
 A lean, modern Windows clipboard manager built with C++17, Dear ImGui (docking branch), DirectX 11, and CMake. Runs as a system tray app with a main settings window, an always-on-top quick paste popup, configurable hotkeys, multiple named clipboard profiles, image capture, Android clipboard sync, and a CLI.
 
-**Current release:** Beta 3  
+**Current release:** Beta 6  
 **Platform:** Windows 10 / 11 — no installer, no runtime required  
 **Developed by:** james28909 with AI-assisted development from OpenAI Codex and Claude
 
@@ -56,8 +56,9 @@ Popup Android entry point:
 
 ### Android Clipboard Bridge
 - Companion Android app under `android/clipboardpp-android-api`
-- Android clipboard capture through the enabled Clipboard++ Capture Keyboard / IME path
-- Floating Android sync button that captures the current Android clipboard and pushes new items to Windows
+- Accessibility-triggered Android clipboard sync that lets Gboard or another keyboard remain active
+- Invisible foreground sync activity that briefly gives the companion app clipboard-read context, then pushes missing items to Windows
+- Clipboard++ Capture Keyboard / IME and floating sync button remain available as fallback/manual tools
 - Dedicated Android list in the Clipboard++ popup
 - Persistent Android endpoint setting in Settings -> Android
 - Manual sync and endpoint health-test controls from Clipboard++
@@ -307,6 +308,10 @@ gradle :app:assembleDebug
 ```
 
 If Gradle is not on PATH, use your local Gradle install or open `android/clipboardpp-android-api` in Android Studio. See [android/clipboardpp-android-api/README.md](android/clipboardpp-android-api/README.md) for setup and endpoint details.
+
+For normal Android-to-Windows capture, install the APK, open **Clipboard++ Android API**, tap **Enable Accessibility Sync**, and enable **Clipboard++ Clipboard Sync** in Android Accessibility settings. When Android reports a likely Copy/Cut action, the service launches a transparent foreground sync activity, reads the current primary clipboard, deduplicates the captured text, and pushes missing items to Clipboard++ over the existing LAN HTTP bridge. The activity is intentionally invisible and closes automatically.
+
+The companion still includes the Clipboard++ Capture Keyboard and floating sync button as fallback/manual sync options, but they are no longer required for the standard Gboard-friendly flow.
 
 ### Manual CMake
 

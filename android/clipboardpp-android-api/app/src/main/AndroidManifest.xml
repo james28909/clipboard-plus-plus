@@ -30,6 +30,20 @@
             android:exported="false" />
 
         <service
+            android:name=".ClipboardPpAccessibilityService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/accessibility_service_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/clipboardpp_accessibility" />
+        </service>
+
+        <service
             android:name=".ClipboardPpImeService"
             android:directBootAware="true"
             android:exported="true"

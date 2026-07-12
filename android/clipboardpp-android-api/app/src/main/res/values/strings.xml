@@ -1,4 +1,6 @@
 <resources>
     <string name="app_name">Clipboard++ Android API</string>
     <string name="ime_name">Clipboard++ Capture Keyboard</string>
+    <string name="accessibility_service_name">Clipboard++ Clipboard Sync</string>
+    <string name="accessibility_service_description">Detects copy and cut actions, then briefly opens Clipboard++ in the foreground so the current clipboard can sync to Windows.</string>
 </resources>

@@ -1,7 +1,6 @@
 package com.clipboardplusplus.androidapi;
 
 import android.content.Context;
-import android.content.Intent;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -188,12 +187,7 @@ final class ApiServer {
         }
 
         if ("POST".equals(method) && "/sync/windows".equals(path)) {
-            Intent sync = new Intent(appContext, FloatingSyncActivity.class);
-            sync.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
-                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK |
-                    Intent.FLAG_ACTIVITY_NO_HISTORY |
-                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
-            appContext.startActivity(sync);
+            bridge.requestForegroundSync("windows-request");
             send(writer, 200, ok());
             return;
         }

@@ -39,7 +39,7 @@ public class MainActivity extends Activity implements ClipboardBridge.Listener {
         root.addView(title);
 
         TextView explainer = new TextView(this);
-        explainer.setText("This app is a Clipboard++ companion. Enable the capture keyboard, set the Windows endpoint, and captured clipboard text will auto-push to Clipboard++.");
+        explainer.setText("This app is a Clipboard++ companion. Enable accessibility sync, set the Windows endpoint, and copied Android text will auto-push to Clipboard++.");
         root.addView(explainer);
 
         status = new TextView(this);
@@ -49,6 +49,11 @@ public class MainActivity extends Activity implements ClipboardBridge.Listener {
         enableKeyboard.setText("Enable Keyboard");
         enableKeyboard.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
         root.addView(enableKeyboard);
+
+        Button enableAccessibility = new Button(this);
+        enableAccessibility.setText("Enable Accessibility Sync");
+        enableAccessibility.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        root.addView(enableAccessibility);
 
         Button pickKeyboard = new Button(this);
         pickKeyboard.setText("Pick Keyboard");
@@ -63,7 +68,7 @@ public class MainActivity extends Activity implements ClipboardBridge.Listener {
         Button syncNow = new Button(this);
         syncNow.setText("Sync Current Clipboard Now");
         syncNow.setOnClickListener(v -> {
-            bridge.captureCurrentClipboard("activity");
+            bridge.requestForegroundSync("activity-button");
             refresh();
         });
         root.addView(syncNow);

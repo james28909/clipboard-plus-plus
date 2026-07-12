@@ -1,5 +1,12 @@
 # Changes
 
+## Beta 6 - Android Accessibility Sync
+
+- Added **Clipboard++ Clipboard Sync**, an Android Accessibility Service that detects likely Copy/Cut actions while Gboard or another keyboard remains active.
+- Routed Android sync triggers through an invisible foreground sync activity so the app can read the current primary clipboard and push missing items to Windows without showing a dialog or toast.
+- Kept the Clipboard++ Capture Keyboard / IME and floating sync button as fallback/manual sync tools.
+- Updated Android app setup copy and documentation to make the accessibility sync path the default workflow.
+
 ## Android Clipboard Bridge
 
 Clipboard++ now includes an experimental Android clipboard bridge built around a companion Android app and a Windows-side sync server.

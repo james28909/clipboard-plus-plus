@@ -100,12 +100,7 @@ public class FloatingSyncService extends Service {
             case MotionEvent.ACTION_UP:
                 if (!moved) {
                     bubble.setText("...");
-                    Intent sync = new Intent(this, FloatingSyncActivity.class);
-                    sync.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
-                            Intent.FLAG_ACTIVITY_MULTIPLE_TASK |
-                            Intent.FLAG_ACTIVITY_NO_HISTORY |
-                            Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
-                    startActivity(sync);
+                    bridge.requestForegroundSync("floating-button");
                     bubble.setText("OK");
                     bubble.postDelayed(() -> {
                         if (bubble != null) {

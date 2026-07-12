@@ -2,7 +2,7 @@
 
 Experimental Android companion app for Clipboard++.
 
-The app provides the Android side of the Clipboard++ Android clipboard bridge. It uses a lightweight IME path to read Android clipboard text when Android allows access, keeps a local captured-item list, exposes a small HTTP API, and can push captured text to the Windows Clipboard++ sync server.
+The app provides the Android side of the Clipboard++ Android clipboard bridge. It uses an accessibility-triggered foreground sync activity to read Android clipboard text when Android allows access, keeps a local captured-item list, exposes a small HTTP API, and can push captured text to the Windows Clipboard++ sync server.
 
 ## Build
 
@@ -20,11 +20,13 @@ This repository does not currently include a Gradle wrapper. Android Studio can 
 
 1. Install the app on Android.
 2. Open **Clipboard++ Android API**.
-3. Tap **Enable Keyboard** and enable **Clipboard++ Capture Keyboard**.
-4. Tap **Pick Keyboard** and select **Clipboard++ Capture Keyboard**.
+3. Tap **Enable Accessibility Sync** and enable **Clipboard++ Clipboard Sync**.
+4. Set the Windows endpoint and save it.
 5. Copy text in another Android app.
-6. Tap the floating sync button, or return to the app and tap **Sync current clipboard now**.
+6. Clipboard++ briefly opens a translucent foreground sync activity, reads the current clipboard, and pushes missing items to Windows.
 7. Check whether the captured item appears in the app list and in the Clipboard++ Android popup list on Windows.
+
+The capture keyboard and floating sync button are still available as fallback/manual tools, but Gboard can remain your active keyboard when accessibility sync is enabled.
 
 ## Push Captures to Windows
 
@@ -54,7 +56,7 @@ http://ANDROID-PHONE-IP:8765
 ```
 
 3. Save and test the endpoint.
-4. Open the popup Android list and click **Sync** to ask the Android app to capture its current clipboard and push missing items to Windows.
+4. Open the popup Android list and click **Sync** to ask the Android app to launch its translucent foreground sync activity, capture the current clipboard, and push missing items to Windows.
 
 You can also right-click text items in any Clipboard++ profile and choose **Send to Android clipboard**.
 

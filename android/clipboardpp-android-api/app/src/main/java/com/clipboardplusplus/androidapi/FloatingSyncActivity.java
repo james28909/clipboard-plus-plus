@@ -1,15 +1,19 @@
 package com.clipboardplusplus.androidapi;
 
 import android.app.Activity;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.widget.TextView;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
 
-public class FloatingSyncActivity extends Activity implements ClipboardBridge.Listener {
+public class FloatingSyncActivity extends Activity {
+    static final String EXTRA_SOURCE = "com.clipboardplusplus.androidapi.SYNC_SOURCE";
+
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private TextView status;
     private ClipboardBridge bridge;
     private boolean syncStarted;
 
@@ -17,14 +21,19 @@ public class FloatingSyncActivity extends Activity implements ClipboardBridge.Li
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        status = new TextView(this);
-        status.setText("Syncing Clipboard++...");
-        status.setGravity(Gravity.CENTER);
-        status.setPadding(32, 24, 32, 24);
-        setContentView(status);
+        View invisible = new View(this);
+        invisible.setBackgroundColor(Color.TRANSPARENT);
+        setContentView(invisible);
+
+        Window window = getWindow();
+        if (window != null) {
+            window.setGravity(Gravity.TOP | Gravity.START);
+            window.setDimAmount(0f);
+            window.setLayout(1, 1);
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
 
         bridge = ClipboardBridge.get(this);
-        bridge.addListener(this);
     }
 
     @Override
@@ -34,10 +43,14 @@ public class FloatingSyncActivity extends Activity implements ClipboardBridge.Li
             return;
         }
         syncStarted = true;
+        String source = getIntent().getStringExtra(EXTRA_SOURCE);
+        if (source == null || source.trim().isEmpty()) {
+            source = "floating-activity";
+        }
+        final String syncSource = source;
         handler.postDelayed(() -> {
             if (bridge != null) {
-                bridge.syncCurrentClipboardToWindowsBlocking("floating-activity", this);
-                status.setText("Clipboard++ sync requested");
+                bridge.syncCurrentClipboardToWindowsBlocking(syncSource, null);
             }
         }, 180);
 
@@ -49,16 +62,6 @@ public class FloatingSyncActivity extends Activity implements ClipboardBridge.Li
 
     @Override
     protected void onDestroy() {
-        if (bridge != null) {
-            bridge.removeListener(this);
-        }
         super.onDestroy();
-    }
-
-    @Override
-    public void onBridgeChanged() {
-        if (status != null && bridge != null) {
-            status.setText(bridge.getLastStatus() + "\n" + bridge.getLastPushStatus());
-        }
     }
 }
