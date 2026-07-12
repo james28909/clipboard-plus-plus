@@ -40,7 +40,7 @@ Click any preview to open the full-size image.
 
 | Hotkey settings | Appearance settings |
 |---|---|
-| [<img src="docs/images/Settings-Hotkeys.png" alt="Hotkey settings" width="420">](docs/images/Settings-Hotkeys.png) | [<img src="docs/images/Settings-Appearance.png" alt="Appearance settings" width="420">](docs/images/Settings-Appearance.png) |
+| [<img src="docs/images/Settings-Hotkeys.png" alt="Hotkey settings" width="420">](docs/images/Settings-Hotkeys.png) | [<img src="docs/images/settings-appearance.png" alt="Appearance settings" width="420">](docs/images/settings-appearance.png) |
 
 | System tray popup |
 |---|
