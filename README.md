@@ -2,6 +2,8 @@
 
 A lean, modern Windows clipboard manager built with C++17, Dear ImGui (docking branch), DirectX 11, and CMake. Runs as a system tray app with a main settings window, an always-on-top quick paste popup, configurable hotkeys, multiple named clipboard profiles, image capture, Android clipboard sync, and a CLI.
 
+Clipboard++ can sync copied Android text into a dedicated Windows Android clipboard list, send any saved Clipboard++ item back to Android from the right-click item menu, and send highlighted Windows text to Android system-wide with the default `Ctrl+Alt+Shift+Z` hotkey.
+
 **Current release:** Beta 6  
 **Platform:** Windows 10 / 11 — no installer, no runtime required  
 **Developed by:** james28909 with AI-assisted development from OpenAI Codex and Claude
@@ -20,35 +22,29 @@ This repository contains multiple Clipboard++ tools and companion projects that 
 | **SQLite Editor** | `sqlite_editor.exe` | Standalone SQLite database viewer and query tool |
 | **JSON Viewer** | `json_viewer.exe` | Standalone JSON file viewer with syntax highlighting and tree view |
 
-All three are built from the same repository root using a single build script. Each has its own context menu `.reg` template for Windows Explorer shell integration.
+The Windows tools are built from the same repository root using a single build script. The viewer tools include context menu `.reg` templates for Windows Explorer shell integration.
 
 ---
 
 ## Screenshots
 
-Quick paste popup:
-![Clipboard++ popup window](docs/images/clipboardpp-popup-window.png)
+Click any preview to open the full-size image.
 
-Popup with history and controls:
-![Popup example history](docs/images/popup-example-history.png)
+| Quick paste popup | Android clipboard list |
+|---|---|
+| [<img src="docs/images/Popup-All.png" alt="Clipboard++ popup window" width="420">](docs/images/Popup-All.png) | [<img src="docs/images/Popup-Android.png" alt="Popup Android clipboard list" width="420">](docs/images/Popup-Android.png) |
 
-General settings:
-![General settings](docs/images/general.png)
+| General settings | Android sync settings |
+|---|---|
+| [<img src="docs/images/Settings-General.png" alt="General settings" width="420">](docs/images/Settings-General.png) | [<img src="docs/images/Settings-Android.png" alt="Android sync settings" width="420">](docs/images/Settings-Android.png) |
 
-Appearance settings (page 1):
-![Appearance settings page 1](docs/images/appearance-1.png)
+| Hotkey settings | Appearance settings |
+|---|---|
+| [<img src="docs/images/Settings-Hotkeys.png" alt="Hotkey settings" width="420">](docs/images/Settings-Hotkeys.png) | [<img src="docs/images/Settings-Appearance.png" alt="Appearance settings" width="420">](docs/images/Settings-Appearance.png) |
 
-Appearance settings (page 2):
-![Appearance settings page 2](docs/images/appearance-2.png)
-
-System tray popup:
-![System tray popup](docs/images/systray-popup.png)
-
-Android sync settings:
-![Android sync settings](docs/images/android-settings.png)
-
-Popup Android entry point:
-![Popup Android entry point](docs/images/android-popup-entry.png)
+| System tray popup |
+|---|
+| [<img src="docs/images/systray-popup.png" alt="System tray popup" width="300">](docs/images/systray-popup.png) |
 
 ---
 
@@ -56,14 +52,14 @@ Popup Android entry point:
 
 ### Android Clipboard Bridge
 - Companion Android app under `android/clipboardpp-android-api`
+- Android -> Windows: copy text on Android and Clipboard++ can sync it into the dedicated Android list in the Windows popup
+- Windows -> Android: right-click one or more Clipboard++ profile items and choose **Send to Android clipboard**
+- System-wide Windows -> Android: highlight text in any Windows app and press `Ctrl+Alt+Shift+Z` to send it to Android
 - Accessibility-triggered Android clipboard sync that lets Gboard or another keyboard remain active
 - Invisible foreground sync activity that briefly gives the companion app clipboard-read context, then pushes missing items to Windows
 - Clipboard++ Capture Keyboard / IME and floating sync button remain available as fallback/manual tools
-- Dedicated Android list in the Clipboard++ popup
 - Persistent Android endpoint setting in Settings -> Android
 - Manual sync and endpoint health-test controls from Clipboard++
-- Send one or many Clipboard++ profile items to Android from the item context menu
-- Send highlighted Windows text to Android with the configurable `Ctrl+Alt+Shift+Z` hotkey
 - Missing-item reconciliation so already captured Android items can be pushed again if Windows does not currently have them
 
 ### Clipboard Capture
@@ -250,7 +246,6 @@ docs/images/          Screenshots
 tools/                Build helpers
 
 build.ps1             Build script (all targets, Release/Debug, optional clean)
-release.ps1           Version bump + GitHub release automation
 SPEC.md               Feature specification
 AGENTS.md             Detailed implementation notes for coding agents
 ```
@@ -263,7 +258,6 @@ AGENTS.md             Detailed implementation notes for coding agents
 
 - Visual Studio 2022 (Community or higher) with **Desktop development with C++**
 - CMake 3.20+ (bundled with VS, or install separately)
-- `gh` CLI — for `release.ps1` only ([cli.github.com](https://cli.github.com))
 
 ### Build script (recommended)
 
@@ -328,28 +322,6 @@ cmake --build build/.cmake/sqlite_editor --config Release
 cmake -S jsonviewer -B build/.cmake/json_viewer
 cmake --build build/.cmake/json_viewer --config Release
 ```
-
-### Publishing a release
-
-```powershell
-# Bump version, build all, create GitHub release
-.\release.ps1 -Notes "What changed in this release."
-
-# Include debug symbol files (.pdb)
-.\release.ps1 -Notes "..." -IncludePdbs
-
-# Test the pipeline without pushing
-.\release.ps1 -DryRun
-```
-
-`release.ps1` will:
-1. Increment the beta build number in `VERSION` and `MainWindow.cpp`
-2. Build all three projects in both Release and Debug
-3. Rename debug executables with a `d` suffix (`clipboardppd.exe`, etc.)
-4. Commit + tag the version bump
-5. Push and create a GitHub pre-release with all six executables attached
-
----
 
 ## Fonts
 
