@@ -1,14 +1,14 @@
 #pragma once
 #include <windows.h>
 #include <d3d11.h>
-#include <chrono>
 #include <filesystem>
-#include <mutex>
 #include <memory>
 #include <string>
 #include <vector>
 #include "ConfigStore.h"
+#include "../android/AndroidIntegration.h"
 #include "../clipboard/ClipboardHistory.h"
+#include "../clipboard/ClipboardProfileManager.h"
 #include "../ui/Appearance.h"
 #include "../hotkeys/HotkeyManager.h"
 
@@ -19,7 +19,6 @@ class PopupWindow;
 class TrayPopupWindow;
 class TextEditorWindow;
 class DebugWindow;
-class AndroidSyncServer;
 enum class HotkeyAction : WPARAM;
 
 // Message IDs used across the app
@@ -36,14 +35,6 @@ struct ClipboardTextCommand {
     int position; // 0=top, -1=bottom, 1..kMaxClipboardHistoryItems=one-based history slot
     BOOL setSystemClipboard;
     wchar_t text[1];
-};
-
-struct AndroidClipboardEntry {
-    uint64_t id{};
-    std::string text;
-    std::string source;
-    std::chrono::system_clock::time_point capturedAt;
-    bool pinned{false};
 };
 
 class Application {
@@ -98,18 +89,21 @@ public:
     void ClearDeveloperEvents() { m_developerEvents.clear(); }
     bool GetNewItemsAtTop() const { return m_config.newItemsAtTop; }
     void SetNewItemsAtTop(bool value);
+    bool IsStartWithWindowsEnabled() const;
+    bool SetStartWithWindowsEnabled(bool enabled);
     bool GetAppendNewlineAfterPaste() const { return m_config.appendNewlineAfterPaste; }
     void SetAppendNewlineAfterPaste(bool value);
     ClipboardHistory::MoveTarget GetPasteMoveTarget() const;
     void SetPasteMoveTarget(ClipboardHistory::MoveTarget target);
-    const std::vector<ClipboardProfileConfig>& GetClipboardProfiles() const { return m_config.clipboards; }
+    const std::vector<ClipboardProfileConfig>& GetClipboardProfiles() const;
     const ClipboardProfileConfig* GetActiveClipboardProfile() const;
     void SetActiveClipboardProfile(const std::string& id);
     void SelectClipboardProfileSlot(int slot);
     void CreateClipboardProfile(const std::string& name, const std::string& processName = {});
     void RenameActiveClipboardProfile(const std::string& name);
     bool DeleteActiveClipboardProfile();
-    bool CanDeleteActiveClipboardProfile() const { return m_config.clipboards.size() > 1; }
+    bool CanDeleteActiveClipboardProfile() const;
+    const std::vector<std::string>& GetHistoryPersistenceErrors() const;
     void CreateClipboardFromForegroundProcess();
     void BindActiveClipboardToForegroundProcess();
     bool GetAutoSwitchClipboardByProcess() const { return m_config.autoSwitchClipboardByProcess; }
@@ -135,7 +129,7 @@ public:
     std::vector<AndroidClipboardEntry> GetAndroidClipboardEntries() const;
     bool RemoveAndroidClipboardEntry(uint64_t id);
     bool SetAndroidClipboardEntryPinned(uint64_t id, bool pinned);
-    const std::string& GetAndroidDeviceEndpoint() const { return m_androidDeviceEndpoint; }
+    const std::string& GetAndroidDeviceEndpoint() const;
     void SetAndroidDeviceEndpoint(const std::string& endpoint);
     bool SendTextItemsToAndroid(const std::vector<std::string>& texts, std::string* error = nullptr);
     bool RequestAndroidSyncToWindows(std::string* error = nullptr);
@@ -164,9 +158,6 @@ private:
                                    ClipboardItem imageItem,
                                    bool newAtTop);
     void SwitchClipboardForProcess(const std::string& processName);
-    ClipboardProfileConfig* FindClipboardForProcess(const std::string& processName);
-    void CreateClipboardForProcess(const std::string& processName);
-    ClipboardHistory* HistoryForActiveClipboard() const;
     ClipboardHistory* HistoryForProfile(const std::string& profileId) const;
 
     bool CreateD3D();
@@ -185,11 +176,11 @@ private:
     ID3D11RenderTargetView*    m_renderTarget{};
     ID3D11ShaderResourceView*  m_appIconSrv{};
 
+    AppConfig m_config{};
     std::unique_ptr<TrayIcon>         m_tray;
-    std::vector<std::unique_ptr<ClipboardHistory>> m_histories;
+    std::unique_ptr<ClipboardProfileManager> m_clipboardProfiles;
     mutable ClipboardHistory* m_history{};
     mutable std::string m_lastForegroundProcess;
-    std::string m_manualClipboardProcessOverride;
     std::unique_ptr<ImageStore>       m_imageStore;
     std::unique_ptr<ClipboardMonitor> m_monitor;
     std::unique_ptr<PopupWindow>      m_popup;
@@ -197,18 +188,13 @@ private:
     std::unique_ptr<TextEditorWindow> m_editor;
     std::unique_ptr<DebugWindow>      m_debugWindow;
     std::unique_ptr<HotkeyManager>    m_hotkeys;
-    std::unique_ptr<AndroidSyncServer> m_androidSyncServer;
-    mutable std::mutex m_androidClipboardMutex;
-    std::vector<AndroidClipboardEntry> m_androidClipboardEntries;
-    uint64_t m_nextAndroidClipboardEntryId{1};
-    std::string m_androidDeviceEndpoint;
+    std::unique_ptr<AndroidIntegration> m_androidIntegration;
 
     bool m_running{false};
     bool m_mainVisible{false};
     AppearanceSettings m_appearance{};
     bool m_appearanceDirty{true};
     HotkeySettings m_hotkeySettings{};
-    AppConfig m_config{};
     std::vector<std::string> m_developerEvents;
 
     static Application* s_instance;

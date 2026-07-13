@@ -7,7 +7,7 @@ A lightweight standalone SQLite database browser and editor for Windows, built w
 - **Table browser** — left panel lists all tables with row counts; click to load
 - **Data grid** — sortable columns, row selection, inline cell editing with commit/rollback
 - **SQL query panel** — write and run arbitrary SQL; results shown in a separate grid
-- **BLOB image preview** — automatically detects image columns and displays decoded images (PNG, JPEG, BMP, GIF, TIFF, raw DIB) in a resizable side panel with save-to-file support
+- **BLOB image preview** — automatically detects image columns and displays decoded images (PNG, JPEG, BMP, GIF, TIFF, raw DIB) in a resizable side panel with save-to-file support; Clipboard++ image BLOBs are decrypted in memory with current-user DPAPI
 - **Recent files** — up to 10 recently opened databases, persisted in `%APPDATA%\sqlite_editor_recents.txt`
 - **Drag and drop** — drop a `.db` or `.sqlite` file onto the window to open it
 - **Dark theme** — matches the Clipboard++ visual style (Dear ImGui + DWM dark title bar)

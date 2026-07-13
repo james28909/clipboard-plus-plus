@@ -19,6 +19,8 @@ set(IMGUI_SOURCES
 add_executable(sqlite_editor WIN32
     src/main.cpp
     src/DbViewer.cpp
+    src/ClipboardImageBlob.cpp
+    ../src/security/DpapiProtection.cpp
     ${SQLITE_DIR}/sqlite3.c
     ${IMGUI_SOURCES}
     res/sqlite_editor.rc
@@ -39,6 +41,7 @@ target_link_libraries(sqlite_editor PRIVATE
     comctl32.lib
     comdlg32.lib
     shlwapi.lib
+    crypt32.lib
 )
 
 target_compile_definitions(sqlite_editor PRIVATE
@@ -51,6 +54,24 @@ target_compile_definitions(sqlite_editor PRIVATE
 
 set_property(TARGET sqlite_editor PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+if(WIN32)
+    add_executable(sqlite_editor_image_tests
+        tests/ClipboardImageBlobTests.cpp
+        src/ClipboardImageBlob.cpp
+        ../src/security/DpapiProtection.cpp
+    )
+    target_include_directories(sqlite_editor_image_tests PRIVATE src)
+    target_link_libraries(sqlite_editor_image_tests PRIVATE crypt32.lib)
+    target_compile_definitions(sqlite_editor_image_tests PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+    set_property(TARGET sqlite_editor_image_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 target_compile_options(sqlite_editor PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W3 /permissive- /Zc:__cplusplus>)

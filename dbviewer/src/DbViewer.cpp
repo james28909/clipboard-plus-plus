@@ -1,4 +1,5 @@
 #include "DbViewer.h"
+#include "ClipboardImageBlob.h"
 #include "../../third_party/sqlite/sqlite3.h"
 
 #include <imgui.h>
@@ -412,6 +413,8 @@ void DbViewerApp::CloseDb() {
     m_cols.clear();
     m_rows.clear();
     m_blobCols.clear();
+    m_clipboardImageDataCol = -1;
+    m_clipboardImageProtectionCol = -1;
     m_totalRows      = 0;
     m_lastPreviewRow = -2;
     m_edit.reset();
@@ -452,6 +455,8 @@ void DbViewerApp::SelectTable(const std::string& name) {
     m_cols.clear();
     m_rows.clear();
     m_blobCols.clear();
+    m_clipboardImageDataCol = -1;
+    m_clipboardImageProtectionCol = -1;
     m_totalRows          = 0;
     m_dataOffset         = 0;
     m_sortCol            = -1;
@@ -488,6 +493,8 @@ void DbViewerApp::SelectTable(const std::string& name) {
         }
         sqlite3_finalize(stmt);
     }
+
+    DetectClipboardImageSchema();
 
     std::string countSql = "SELECT COUNT(*) FROM \"" + name + "\";";
     stmt = nullptr;
@@ -664,46 +671,113 @@ void DbViewerApp::ReleasePreview() {
     m_previewW       = 0;
     m_previewH       = 0;
     m_previewBlobSize = 0;
+    m_previewProtected = false;
     m_previewMsg.clear();
+}
+
+void DbViewerApp::DetectClipboardImageSchema() {
+    m_clipboardImageDataCol = -1;
+    m_clipboardImageProtectionCol = -1;
+    if (m_selectedTable != "images")
+        return;
+
+    bool hasId = false;
+    bool hasProfileId = false;
+    bool hasStoredFormat = false;
+    for (int i = 0; i < static_cast<int>(m_cols.size()); ++i) {
+        const std::string& name = m_cols[i].name;
+        hasId |= name == "id";
+        hasProfileId |= name == "profile_id";
+        hasStoredFormat |= name == "stored_format";
+        if (name == "data")
+            m_clipboardImageDataCol = i;
+        else if (name == "protection_version")
+            m_clipboardImageProtectionCol = i;
+    }
+
+    if (!hasId || !hasProfileId || !hasStoredFormat ||
+        m_clipboardImageDataCol < 0 || m_clipboardImageProtectionCol < 0) {
+        m_clipboardImageDataCol = -1;
+        m_clipboardImageProtectionCol = -1;
+    }
+}
+
+bool DbViewerApp::FetchSelectedBlob(int rowIdx, std::vector<uint8_t>& bytes,
+                                    bool& wasProtected, std::string& error) const {
+    bytes.clear();
+    wasProtected = false;
+    error.clear();
+    if (!m_db || m_blobCols.empty() || rowIdx < 0 || rowIdx >= static_cast<int>(m_rows.size())) {
+        error = "No data";
+        return false;
+    }
+
+    const int blobCol = m_blobCols[0];
+    if (blobCol < 0 || blobCol >= static_cast<int>(m_cols.size())) {
+        error = "Invalid BLOB column";
+        return false;
+    }
+
+    const bool clipboardImage = blobCol == m_clipboardImageDataCol &&
+                                m_clipboardImageProtectionCol >= 0;
+    const std::string where = PkWhereClause(rowIdx);
+    std::string sql = "SELECT \"" + m_cols[blobCol].name + "\"";
+    if (clipboardImage)
+        sql += ",\"protection_version\"";
+    sql += " FROM \"" + m_selectedTable + "\"";
+    if (!where.empty())
+        sql += " WHERE " + where + " LIMIT 1;";
+    else
+        sql += " LIMIT 1 OFFSET " + std::to_string(rowIdx) + ";";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        error = sqlite3_errmsg(m_db);
+        return false;
+    }
+
+    bool ok = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const void* blob = sqlite3_column_blob(stmt, 0);
+        const int size = sqlite3_column_bytes(stmt, 0);
+        if (blob && size > 0) {
+            const auto* begin = static_cast<const uint8_t*>(blob);
+            std::vector<uint8_t> storedBytes(begin, begin + size);
+            if (!clipboardImage) {
+                bytes = std::move(storedBytes);
+                ok = true;
+            } else {
+                const int version = sqlite3_column_int(stmt, 1);
+                const auto result = ClipboardImageBlob::Decode(version, storedBytes, bytes);
+                wasProtected = result == ClipboardImageBlob::DecodeResult::Decrypted;
+                if (result == ClipboardImageBlob::DecodeResult::UnsupportedVersion)
+                    error = "Unsupported Clipboard++ image protection version";
+                else if (result == ClipboardImageBlob::DecodeResult::DecryptionFailed)
+                    error = "DPAPI decryption failed for this Clipboard++ image";
+                else
+                    ok = true;
+            }
+        } else {
+            error = "NULL";
+        }
+    } else {
+        error = "No data";
+    }
+    sqlite3_finalize(stmt);
+    return ok;
 }
 
 void DbViewerApp::LoadBlobPreview(int rowIdx) {
     ReleasePreview();
-    if (!m_db || m_blobCols.empty() || rowIdx < 0 || rowIdx >= (int)m_rows.size()) return;
-
-    const int blobCol = m_blobCols[0];
-    if (blobCol >= (int)m_cols.size()) return;
-
-    const std::string where = PkWhereClause(rowIdx);
-    std::string sql;
-    if (!where.empty())
-        sql = "SELECT \"" + m_cols[blobCol].name + "\" FROM \"" + m_selectedTable
-            + "\" WHERE " + where + " LIMIT 1;";
-    else
-        sql = "SELECT \"" + m_cols[blobCol].name + "\" FROM \"" + m_selectedTable
-            + "\" LIMIT 1 OFFSET " + std::to_string(rowIdx) + ";";
-
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) return;
-
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        const void*  blob   = sqlite3_column_blob(stmt, 0);
-        const int    nbytes = sqlite3_column_bytes(stmt, 0);
-        m_previewBlobSize   = static_cast<size_t>(nbytes);
-
-        if (blob && nbytes > 0) {
-            const auto* ptr = static_cast<const uint8_t*>(blob);
-            std::vector<uint8_t> bytes(ptr, ptr + nbytes);
-            m_previewSrv = DecodeBytesToSrv(bytes);
-            if (!m_previewSrv)
-                m_previewMsg = "Not a decodable image";
-        } else {
-            m_previewMsg = "NULL";
-        }
-    } else {
-        m_previewMsg = "No data";
-    }
-    sqlite3_finalize(stmt);
+    std::vector<uint8_t> bytes;
+    if (!FetchSelectedBlob(rowIdx, bytes, m_previewProtected, m_previewMsg))
+        return;
+    m_previewBlobSize = bytes.size();
+    m_previewSrv = DecodeBytesToSrv(bytes);
+    if (!bytes.empty())
+        SecureZeroMemory(bytes.data(), bytes.size());
+    if (!m_previewSrv)
+        m_previewMsg = "Not a decodable image";
 }
 
 ID3D11ShaderResourceView* DbViewerApp::DecodeBytesToSrv(const std::vector<uint8_t>& bytes) {
@@ -1196,7 +1270,7 @@ void DbViewerApp::DrawImagePreview(float panelW, float availH) {
         ImGui::TextDisabled("Select a row to preview.");
     } else if (m_previewSrv) {
         // Reserve footer: dimensions line + size line + spacing + save button
-        constexpr float kFooterH = 78.0f;
+        const float kFooterH = m_previewProtected ? 98.0f : 78.0f;
         const float headerY = ImGui::GetCursorPosY();
         const float remainH = availH - headerY - kFooterH;
         const float maxH    = std::max(10.0f, remainH);
@@ -1226,8 +1300,14 @@ void DbViewerApp::DrawImagePreview(float panelW, float availH) {
         else
             ImGui::TextDisabled("%zu bytes", m_previewBlobSize);
 
+        if (m_previewProtected)
+            ImGui::TextDisabled("DPAPI protected - exporting creates a plaintext file");
+
         ImGui::Spacing();
-        if (ImGui::Button("Save image...", {cw, 0.0f})) {
+        const char* saveLabel = m_previewProtected
+            ? "Export decrypted image..."
+            : "Save image...";
+        if (ImGui::Button(saveLabel, {cw, 0.0f})) {
             wchar_t savePath[MAX_PATH]{};
             OPENFILENAMEW ofn{};
             ofn.lStructSize = sizeof(ofn);
@@ -1236,31 +1316,28 @@ void DbViewerApp::DrawImagePreview(float panelW, float availH) {
             ofn.lpstrFile   = savePath;
             ofn.nMaxFile    = MAX_PATH;
             ofn.Flags       = OFN_OVERWRITEPROMPT;
-            ofn.lpstrTitle  = L"Save Blob as Image";
+            ofn.lpstrTitle  = m_previewProtected
+                ? L"Export Decrypted Image (Plaintext)"
+                : L"Save Blob as Image";
             ofn.lpstrDefExt = L"png";
             if (GetSaveFileNameW(&ofn)) {
-                // Re-fetch blob and write to file
-                if (!m_blobCols.empty()) {
-                    const int bc = m_blobCols[0];
-                    const std::string where = PkWhereClause(m_selectedRow);
-                    std::string sql = "SELECT \"" + m_cols[bc].name + "\" FROM \""
-                        + m_selectedTable + "\" WHERE " + where + " LIMIT 1;";
-                    sqlite3_stmt* st = nullptr;
-                    if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &st, nullptr) == SQLITE_OK
-                        && sqlite3_step(st) == SQLITE_ROW) {
-                        const void* blob  = sqlite3_column_blob(st, 0);
-                        const int   nbytes = sqlite3_column_bytes(st, 0);
-                        if (blob && nbytes > 0) {
-                            FILE* fp = nullptr;
-                            _wfopen_s(&fp, savePath, L"wb");
-                            if (fp) {
-                                fwrite(blob, 1, nbytes, fp);
-                                fclose(fp);
-                                m_statusMsg = "Saved.";
-                            }
-                        }
+                std::vector<uint8_t> bytes;
+                bool wasProtected = false;
+                std::string fetchError;
+                if (FetchSelectedBlob(m_selectedRow, bytes, wasProtected, fetchError)) {
+                    FILE* fp = nullptr;
+                    _wfopen_s(&fp, savePath, L"wb");
+                    if (fp) {
+                        fwrite(bytes.data(), 1, bytes.size(), fp);
+                        fclose(fp);
+                        m_statusMsg = wasProtected ? "Exported plaintext image." : "Saved.";
+                    } else {
+                        m_statusMsg = "Could not create the output file.";
                     }
-                    if (st) sqlite3_finalize(st);
+                    if (!bytes.empty())
+                        SecureZeroMemory(bytes.data(), bytes.size());
+                } else {
+                    m_statusMsg = fetchError;
                 }
             }
         }

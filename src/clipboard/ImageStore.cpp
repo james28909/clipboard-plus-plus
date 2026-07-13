@@ -1,5 +1,6 @@
 #include "ImageStore.h"
 #include "../app/ConfigStore.h"
+#include "../security/DpapiProtection.h"
 #include "../../third_party/sqlite/sqlite3.h"
 
 #include <windows.h>
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <sstream>
 
@@ -22,6 +24,8 @@
 // GDI+ lifetime — reference-counted so multiple ImageStore instances are safe
 // ---------------------------------------------------------------------------
 namespace {
+
+constexpr int kImageProtectionVersion = 1;
 
 ULONG_PTR g_gdiplusToken    = 0;
 int       g_gdiplusRefCount = 0;
@@ -294,7 +298,11 @@ bool ImageStore::Open(const std::filesystem::path& dbPath) {
     sqlite3_exec(m_db, "PRAGMA journal_mode=WAL;",      nullptr, nullptr, nullptr);
     sqlite3_exec(m_db, "PRAGMA synchronous=NORMAL;",    nullptr, nullptr, nullptr);
 
-    return CreateSchema();
+    if (!CreateSchema() || !MigrateImageProtection()) {
+        Close();
+        return false;
+    }
+    return true;
 }
 
 void ImageStore::Close() {
@@ -315,6 +323,7 @@ bool ImageStore::CreateSchema() {
         "  captured_at  INTEGER NOT NULL,"
         "  byte_size    INTEGER NOT NULL,"
         "  stored_format INTEGER NOT NULL DEFAULT 1,"
+        "  protection_version INTEGER NOT NULL DEFAULT 1,"
         "  data         BLOB    NOT NULL"
         ");"
         "CREATE INDEX IF NOT EXISTS idx_images_profile  ON images(profile_id);"
@@ -329,8 +338,80 @@ bool ImageStore::CreateSchema() {
     sqlite3_exec(m_db,
         "ALTER TABLE images ADD COLUMN stored_format INTEGER NOT NULL DEFAULT 1;",
         nullptr, nullptr, nullptr);
+    sqlite3_exec(m_db,
+        "ALTER TABLE images ADD COLUMN protection_version INTEGER NOT NULL DEFAULT 0;",
+        nullptr, nullptr, nullptr);
 
     return true;
+}
+
+bool ImageStore::MigrateImageProtection() {
+    if (!m_db || sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
+        return false;
+
+    bool ok = true;
+    while (ok) {
+        sqlite3_stmt* select = nullptr;
+        if (sqlite3_prepare_v2(m_db,
+                "SELECT id,data FROM images WHERE protection_version=0 ORDER BY rowid LIMIT 1;",
+                -1, &select, nullptr) != SQLITE_OK) {
+            ok = false;
+            break;
+        }
+
+        std::string id;
+        std::vector<uint8_t> plaintext;
+        const int step = sqlite3_step(select);
+        if (step == SQLITE_ROW) {
+            const auto* idText = reinterpret_cast<const char*>(sqlite3_column_text(select, 0));
+            const void* blob = sqlite3_column_blob(select, 1);
+            const int size = sqlite3_column_bytes(select, 1);
+            if (idText)
+                id = idText;
+            if (blob && size > 0) {
+                plaintext.resize(static_cast<size_t>(size));
+                std::memcpy(plaintext.data(), blob, plaintext.size());
+            }
+        } else if (step != SQLITE_DONE) {
+            ok = false;
+        }
+        sqlite3_finalize(select);
+
+        if (!ok || step == SQLITE_DONE)
+            break;
+        if (id.empty() || plaintext.empty()) {
+            ok = false;
+            break;
+        }
+
+        std::vector<uint8_t> protectedData;
+        ok = DpapiProtection::Protect(plaintext, protectedData);
+        SecureZeroMemory(plaintext.data(), plaintext.size());
+        if (!ok || protectedData.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            ok = false;
+            break;
+        }
+
+        sqlite3_stmt* update = nullptr;
+        if (sqlite3_prepare_v2(m_db,
+                "UPDATE images SET data=?,protection_version=? WHERE id=? AND protection_version=0;",
+                -1, &update, nullptr) != SQLITE_OK) {
+            ok = false;
+            break;
+        }
+        sqlite3_bind_blob(update, 1, protectedData.data(),
+                          static_cast<int>(protectedData.size()), SQLITE_STATIC);
+        sqlite3_bind_int(update, 2, kImageProtectionVersion);
+        sqlite3_bind_text(update, 3, id.c_str(), -1, SQLITE_STATIC);
+        ok = sqlite3_step(update) == SQLITE_DONE && sqlite3_changes(m_db) == 1;
+        sqlite3_finalize(update);
+    }
+
+    if (ok)
+        ok = sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK;
+    if (!ok)
+        sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -459,10 +540,15 @@ std::string ImageStore::InsertBlob(const std::vector<uint8_t>& data, StoredForma
                                     int64_t capturedAtMs) {
     if (!m_db || data.empty()) return {};
 
+    std::vector<uint8_t> protectedData;
+    if (!DpapiProtection::Protect(data, protectedData) ||
+        protectedData.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return {};
+
     const std::string id = NewUuid();
     const char* sql =
-        "INSERT INTO images(id,profile_id,width,height,source_proc,captured_at,byte_size,stored_format,data)"
-        " VALUES(?,?,?,?,?,?,?,?,?);";
+        "INSERT INTO images(id,profile_id,width,height,source_proc,captured_at,byte_size,stored_format,protection_version,data)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?);";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return {};
@@ -475,7 +561,9 @@ std::string ImageStore::InsertBlob(const std::vector<uint8_t>& data, StoredForma
     sqlite3_bind_int64(stmt, 6, capturedAtMs);
     sqlite3_bind_int64(stmt, 7, static_cast<int64_t>(data.size()));
     sqlite3_bind_int  (stmt, 8, static_cast<int>(fmt));
-    sqlite3_bind_blob (stmt, 9, data.data(), static_cast<int>(data.size()), SQLITE_STATIC);
+    sqlite3_bind_int  (stmt, 9, kImageProtectionVersion);
+    sqlite3_bind_blob (stmt, 10, protectedData.data(),
+                       static_cast<int>(protectedData.size()), SQLITE_STATIC);
 
     const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
     sqlite3_finalize(stmt);
@@ -486,81 +574,89 @@ std::string ImageStore::InsertBlob(const std::vector<uint8_t>& data, StoredForma
 // Retrieval
 // ---------------------------------------------------------------------------
 
-std::vector<uint8_t> ImageStore::GetPng(const std::string& id) const {
-    if (!m_db) return {};
+bool ImageStore::ReadProtectedBlob(const std::string& id, std::vector<uint8_t>& data,
+                                   int* storedFormat) const {
+    data.clear();
+    if (!m_db)
+        return false;
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db,
-            "SELECT data, stored_format FROM images WHERE id=?;",
+            "SELECT data,stored_format,protection_version FROM images WHERE id=?;",
             -1, &stmt, nullptr) != SQLITE_OK)
-        return {};
-
+        return false;
     sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
 
-    std::vector<uint8_t> result;
+    std::vector<uint8_t> protectedData;
+    int format = static_cast<int>(StoredFormat::Png);
+    int protectionVersion = 0;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         const void* blob = sqlite3_column_blob(stmt, 0);
-        const int   sz   = sqlite3_column_bytes(stmt, 0);
-        const int   fmt  = sqlite3_column_int(stmt, 1);
-
-        if (blob && sz > 0) {
-            std::vector<uint8_t> data(static_cast<size_t>(sz));
-            std::memcpy(data.data(), blob, data.size());
-
-            if (fmt == static_cast<int>(StoredFormat::Png)) {
-                result = std::move(data);
-            } else if (fmt == static_cast<int>(StoredFormat::RawDib)) {
-                auto bmp = BitmapFromDib(data);
-                if (bmp) result = EncodePng(*bmp, false, 0);
-            } else { // JPEG or unknown
-                auto bmp = BitmapFromBytes(data);
-                if (bmp) result = EncodePng(*bmp, false, 0);
-            }
+        const int size = sqlite3_column_bytes(stmt, 0);
+        format = sqlite3_column_int(stmt, 1);
+        protectionVersion = sqlite3_column_int(stmt, 2);
+        if (blob && size > 0) {
+            protectedData.resize(static_cast<size_t>(size));
+            std::memcpy(protectedData.data(), blob, protectedData.size());
         }
     }
     sqlite3_finalize(stmt);
+
+    if (protectedData.empty() || protectionVersion != kImageProtectionVersion ||
+        !DpapiProtection::Unprotect(protectedData, data)) {
+        data.clear();
+        return false;
+    }
+    if (storedFormat)
+        *storedFormat = format;
+    return true;
+}
+
+std::vector<uint8_t> ImageStore::GetPng(const std::string& id) const {
+    std::vector<uint8_t> result;
+    std::vector<uint8_t> data;
+    int format{};
+    if (!ReadProtectedBlob(id, data, &format))
+        return {};
+    if (format == static_cast<int>(StoredFormat::Png))
+        result = std::move(data);
+    else if (format == static_cast<int>(StoredFormat::RawDib)) {
+        auto bmp = BitmapFromDib(data);
+        if (bmp) result = EncodePng(*bmp, false, 0);
+    } else {
+        auto bmp = BitmapFromBytes(data);
+        if (bmp) result = EncodePng(*bmp, false, 0);
+    }
     return result;
 }
 
 HGLOBAL ImageStore::GetDibForPaste(const std::string& id) const {
-    if (!m_db) return nullptr;
-
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(m_db,
-            "SELECT data, stored_format FROM images WHERE id=?;",
-            -1, &stmt, nullptr) != SQLITE_OK)
+    std::vector<uint8_t> data;
+    int format{};
+    if (!ReadProtectedBlob(id, data, &format))
         return nullptr;
 
-    sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
-
     HGLOBAL result = nullptr;
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        const void* blob = sqlite3_column_blob(stmt, 0);
-        const int   sz   = sqlite3_column_bytes(stmt, 0);
-        const int   fmt  = sqlite3_column_int(stmt, 1);
-
-        if (blob && sz > 0) {
-            std::vector<uint8_t> data(static_cast<size_t>(sz));
-            std::memcpy(data.data(), blob, data.size());
-
-            if (fmt == static_cast<int>(StoredFormat::RawDib)) {
-                // Return raw DIB bytes directly as HGLOBAL — no conversion needed
-                result = GlobalAlloc(GMEM_MOVEABLE, data.size());
-                if (result) {
-                    void* ptr = GlobalLock(result);
-                    if (ptr) {
-                        std::memcpy(ptr, data.data(), data.size());
-                        GlobalUnlock(result);
-                    }
-                }
+    if (format == static_cast<int>(StoredFormat::RawDib)) {
+        // Return raw DIB bytes directly as HGLOBAL — no conversion needed
+        result = GlobalAlloc(GMEM_MOVEABLE, data.size());
+        if (result) {
+            void* ptr = GlobalLock(result);
+            if (ptr) {
+                std::memcpy(ptr, data.data(), data.size());
+                GlobalUnlock(result);
             } else {
-                // PNG or JPEG — load via GDI+ and convert to DIB
-                auto bmp = BitmapFromBytes(data);
-                if (bmp) result = BitmapToDibGlobal(*bmp);
+                GlobalFree(result);
+                result = nullptr;
             }
         }
+    } else {
+        // PNG or JPEG — load via GDI+ and convert to DIB
+        auto bmp = BitmapFromBytes(data);
+        if (bmp) result = BitmapToDibGlobal(*bmp);
     }
-    sqlite3_finalize(stmt);
+    if (!data.empty())
+        SecureZeroMemory(data.data(), data.size());
     return result;
 }
 
@@ -723,28 +819,9 @@ ID3D11ShaderResourceView* ImageStore::CreateThumbnailSRV(const std::string& id,
     outW = outH = 0;
     if (!device || !m_db) return nullptr;
 
-    // Fetch stored data + format
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(m_db,
-            "SELECT data, stored_format FROM images WHERE id=?;",
-            -1, &stmt, nullptr) != SQLITE_OK)
-        return nullptr;
-
-    sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
-
     std::vector<uint8_t> data;
     int storedFmt = static_cast<int>(StoredFormat::Png);
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        const void* blob = sqlite3_column_blob(stmt, 0);
-        const int   sz   = sqlite3_column_bytes(stmt, 0);
-        storedFmt        = sqlite3_column_int(stmt, 1);
-        if (blob && sz > 0) {
-            data.resize(static_cast<size_t>(sz));
-            std::memcpy(data.data(), blob, data.size());
-        }
-    }
-    sqlite3_finalize(stmt);
-    if (data.empty()) return nullptr;
+    if (!ReadProtectedBlob(id, data, &storedFmt)) return nullptr;
 
     // Load into GDI+ Bitmap
     std::unique_ptr<Gdiplus::Bitmap> bmp;

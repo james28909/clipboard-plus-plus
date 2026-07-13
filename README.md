@@ -1,145 +1,147 @@
 # Clipboard++
 
-A lean, modern Windows clipboard manager built with C++17, Dear ImGui (docking branch), DirectX 11, and CMake. Runs as a system tray app with a main settings window, an always-on-top quick paste popup, configurable hotkeys, multiple named clipboard profiles, image capture, Android clipboard sync, and a CLI.
+Clipboard++ is a fast Windows clipboard manager with searchable history, a non-activating quick-paste popup, multiple clipboard profiles, image capture, configurable hotkeys, themes, Android sync, and command-line control.
 
-Clipboard++ can sync copied Android text into a dedicated Windows Android clipboard list, send any saved Clipboard++ item back to Android from the right-click item menu, and send highlighted Windows text to Android system-wide with the default `Ctrl+Alt+Shift+Z` hotkey.
+It is built in C++17 with Win32, Dear ImGui, DirectX 11, and CMake. The Windows executables use the static MSVC runtime, so no separate runtime installer is required.
 
-**Current release:** Beta 6  
-**Platform:** Windows 10 / 11 — no installer, no runtime required  
-**Developed by:** james28909 with AI-assisted development from OpenAI Codex and Claude
+**Current release:** `0.1.0-beta.6` · **Supported systems:** Windows 10 and Windows 11<br>
+**Author:** james28909, with AI-assisted development from OpenAI Codex and Claude
 
----
+[Releases](https://github.com/james28909/clipboard-plus-plus/releases) · [Build from source](#building-from-source) · [Keyboard shortcuts](#keyboard-shortcuts) · [Security and storage](#security-and-storage) · [Roadmap](TODO.md) · [Repository map](#repository-map)
 
-## Projects in this repository
+## At a glance
 
-This repository contains multiple Clipboard++ tools and companion projects that share the same build and configuration direction.
+- Captures text, rich text, HTML, images, files, folders, and other clipboard formats.
+- Opens a searchable quick-paste popup with `Ctrl+Shift+V` without taking focus from the target application.
+- Supports pinned items, ordered multi-selection, drag-and-drop reordering, filters, and stable keyboard slots.
+- Keeps separate named clipboard profiles and can switch profiles based on the foreground process.
+- Detects more than 30 content types, including URLs, code, JSON, paths, colors, and likely secrets.
+- Stores persistent history and image pixels with Windows DPAPI encryption.
+- Syncs clipboard text with the optional Android companion app.
+- Includes SQLite and JSON viewers plus a bundled editor target.
 
-| Project | Executable | Description |
-|---|---|---|
-| **Clipboard++** | `clipboardpp.exe` | Main clipboard manager — system tray app, popup, settings |
-| **Clipboard++ Android API** | Android APK | Companion Android app for Android clipboard capture and sync |
-| **Clipboard++ IDE** | `clipboardpp_ide.exe` | Bundled editor target for text/script workflows |
-| **SQLite Editor** | `sqlite_editor.exe` | Standalone SQLite database viewer and query tool |
-| **JSON Viewer** | `json_viewer.exe` | Standalone JSON file viewer with syntax highlighting and tree view |
+Clipboard++ observes the normal Windows clipboard with `AddClipboardFormatListener`. It does not replace `Ctrl+C`, hijack the Windows clipboard UI, or install a different clipboard implementation. A low-level keyboard hook is used for configured global hotkeys and for forwarding keyboard input to the popup, which intentionally does not take foreground focus.
 
-The Windows tools are built from the same repository root using a single build script. The viewer tools include context menu `.reg` templates for Windows Explorer shell integration.
+## Quick start
 
----
+1. Download `clipboardpp.exe` from [Releases](https://github.com/james28909/clipboard-plus-plus/releases), or build it from source.
+2. Run the executable. Clipboard++ lives in the system tray.
+3. Copy normally with `Ctrl+C`.
+4. Press `Ctrl+Shift+V` to open the quick-paste popup.
+5. Click an item or use a slot key to paste it into the application that was active before the popup opened.
+
+Use the tray menu or `Ctrl+Shift+,` to open Settings. The General page includes the **Start with Windows** option.
 
 ## Screenshots
 
-Click any preview to open the full-size image.
+<details>
+<summary>Show screenshots</summary>
 
-| Quick paste popup | Android clipboard list |
+| Quick-paste popup | Android clipboard list |
 |---|---|
-| [<img src="docs/images/Popup-All.png" alt="Clipboard++ popup window" width="420">](docs/images/Popup-All.png) | [<img src="docs/images/Popup-Android.png" alt="Popup Android clipboard list" width="420">](docs/images/Popup-Android.png) |
+| [<img src="docs/images/Popup-All.png" alt="Clipboard++ popup" width="420">](docs/images/Popup-All.png) | [<img src="docs/images/Popup-Android.png" alt="Android clipboard list" width="420">](docs/images/Popup-Android.png) |
 
-| General settings | Android sync settings |
+| General settings | Appearance settings |
 |---|---|
-| [<img src="docs/images/Settings-General.png" alt="General settings" width="420">](docs/images/Settings-General.png) | [<img src="docs/images/Settings-Android.png" alt="Android sync settings" width="420">](docs/images/Settings-Android.png) |
+| [<img src="docs/images/Settings-General.png" alt="General settings" width="420">](docs/images/Settings-General.png) | [<img src="docs/images/Settings-Appearance.png" alt="Appearance settings" width="420">](docs/images/Settings-Appearance.png) |
 
-| Hotkey settings | Appearance settings |
+| Hotkeys | Android settings |
 |---|---|
-| [<img src="docs/images/Settings-Hotkeys.png" alt="Hotkey settings" width="420">](docs/images/Settings-Hotkeys.png) | [<img src="docs/images/settings-appearance.png" alt="Appearance settings" width="420">](docs/images/settings-appearance.png) |
+| [<img src="docs/images/Settings-Hotkeys.png" alt="Hotkey settings" width="420">](docs/images/Settings-Hotkeys.png) | [<img src="docs/images/Settings-Android.png" alt="Android settings" width="420">](docs/images/Settings-Android.png) |
 
-| System tray popup |
-|---|
-| [<img src="docs/images/systray-popup.png" alt="System tray popup" width="300">](docs/images/systray-popup.png) |
+</details>
 
----
+## Core workflow
 
-## Features
+### Capture and organize
 
-### Android Clipboard Bridge
-- Companion Android app under `android/clipboardpp-android-api`
-- Android -> Windows: copy text on Android and Clipboard++ can sync it into the dedicated Android list in the Windows popup
-- Windows -> Android: right-click one or more Clipboard++ profile items and choose **Send to Android clipboard**
-- System-wide Windows -> Android: highlight text in any Windows app and press `Ctrl+Alt+Shift+Z` to send it to Android
-- Accessibility-triggered Android clipboard sync that lets Gboard or another keyboard remain active
-- Invisible foreground sync activity that briefly gives the companion app clipboard-read context, then pushes missing items to Windows
-- Clipboard++ Capture Keyboard / IME and floating sync button remain available as fallback/manual tools
-- Persistent Android endpoint setting in Settings -> Android
-- Manual sync and endpoint health-test controls from Clipboard++
-- Missing-item reconciliation so already captured Android items can be pushed again if Windows does not currently have them
+Clipboard++ continuously captures supported formats and deduplicates repeated content. Re-copying an existing item moves it according to the configured history order instead of creating another copy.
 
-### Clipboard Capture
-- Monitors the Windows clipboard continuously for text, images, file/folder paths, and structured content
-- Automatic deduplication — re-copying the same content moves it in the history rather than creating a duplicate
-- Image capture pipeline — screenshots and copied images are stored and viewable in-app
-- Configurable max history size (1–8192 items)
-- Optional history persistence across sessions
-- Source process tracking — each item records which application it came from
+History features include:
 
-### Quick Paste Popup (`Ctrl+Shift+V`)
-- Always-on-top overlay that does not steal focus from the target application
-- Keyboard slot paste — press `1-9`, `a-z` to instantly paste the corresponding item
-- Search bar with live filtering (`Ctrl+Shift+S` to open with search focused)
-- 10 content type filter buttons: All, Text, Image, URL, File, Code, Secret, JSON, Email, Color
-- Queue mode — select multiple items and paste them in sequence
-- Window opacity knob and outline strength knob, adjustable by mouse wheel
-- Animated multi-color outline effect with configurable speed, spread, sharpness, saturation
-- Drag-and-drop item reordering
-- Right-click item context menu
+- Pinned and regular sections with independent keyboard slots.
+- Named clipboard profiles with isolated histories.
+- Process bindings and optional automatic profile switching.
+- Search, content filters, custom filters, drag-and-drop ordering, and bulk actions.
+- Ordered multi-selection for pasting several items in a chosen order.
+- Configurable active-history limits and optional persistence.
+- Source-process tracking and timestamps.
 
-### Item Context Menu
-- Paste, Copy, Add/Remove from paste queue
-- Move to top / move to bottom, Pin / unpin, Delete
+### Quick-paste popup
 
-### Multiple Clipboard Profiles
-- Create any number of named clipboard profiles, each with its own independent history
-- Integrated combo input in the popup title bar — click to open list, type to name, Save to create
-- Right-click a profile in the picker to Duplicate or Delete it
-- Process-aware auto-switching — bind a profile to an application's executable name
+The popup uses `WS_EX_NOACTIVATE`, stays above ordinary windows, and forwards the selected item back to the application that was active when the popup opened. Search and filters operate on stable item IDs, so pasting and bulk actions continue to target the correct entries when the visible list changes.
 
-### Image Store
-- Captured images are stored on disk with automatic deduplication
-- In-app browser with thumbnail grid — click to copy back to clipboard
-- Images stored under `%APPDATA%\Clipboard++\images\`
-- Settings page for storage limits, quality, and format preferences
+Ten built-in filter buttons cover All, Text, Image, URL, File, Code, Secret, JSON, Email, and Color. Content detection also recognizes formats such as XML, HTML, CSV, Markdown, UUIDs, dates, logs, commands, scripts, archives, documents, audio, and video paths.
 
-### Content Type Detection
-30+ automatic content type tags:
+### Images
 
-| Category | Tags |
-|---|---|
-| Network | URL, Email, IP address |
-| Code | Code, SQL, Command, Script, Config |
-| Data | JSON, XML, HTML, CSV, Markdown, Base64, Hex color, UUID, Date, Log, Phone |
-| Security | Secret (AWS keys, GitHub tokens, JWTs, PEM blocks, Slack tokens, API keys) |
-| Files | File, Folder, Path, Image file, Document, Archive, Executable, Script, Config, Data, Audio, Video |
+Copied images and screenshots can be stored as PNG, JPEG, or raw DIB data. The image browser provides thumbnails, profile filtering, copying, deletion, and configurable quality, dimensions, and retention limits.
 
-Secret items are highlighted in red. Auto-discard of detected secrets is available.
+### Privacy controls
 
-### Appearance and Themes
-12 built-in themes: Dark Default, Dracula, Nord, Monokai, One Dark Pro, Tokyo Night, Solarized Dark, GitHub Dark, GitHub Light, Solarized Light, VS Light, Quiet Light
+- Likely-secret detection, highlighting, and optional automatic discard.
+- Clear history when Windows locks.
+- Per-process exclusions, with common password managers excluded by default.
+- Current-user DPAPI protection for persistent history and image pixels.
 
-Full appearance customization including:
-- Per-theme icon colors (board gradient, paper, margin line, ruled lines) — the in-app clipboard icon updates live with the theme
-- Title bar button base and hover colors (minimize, maximize, close)
-- 14 individually configurable UI colors
-- Animated outline, scrollbar controls, corner rounding, font import
-- Save and name unlimited custom themes
+## Keyboard shortcuts
 
-### Hotkeys
-All configurable from Settings → Hotkeys.
+All bindings can be changed in Settings → Hotkeys.
 
 | Action | Default |
 |---|---|
-| Toggle quick paste popup | `Ctrl+Shift+V` |
+| Toggle quick-paste popup | `Ctrl+Shift+V` |
 | Open popup with search focused | `Ctrl+Shift+S` |
-| Open settings | `Ctrl+Shift+,` |
-| Web search current clipboard | `Ctrl+Shift+G` |
-| Send highlighted selection to Android | `Ctrl+Alt+Shift+Z` |
-| Hidden paste — history slot | `Ctrl+Alt+1-9`, `A-Z`, `F1-F12` |
-| Hidden paste — pinned slot | `Ctrl+Shift+1-9`, `A-Z`, `F1-F12` |
-| Select clipboard profile slot | `Alt+Shift+1-9`, `A-Z`, `F1-F12` |
+| Open Settings | `Ctrl+Shift+,` |
+| Search the web for current clipboard text | `Ctrl+Shift+G` |
+| Send highlighted Windows text to Android | `Ctrl+Alt+Shift+Z` |
+| Paste a regular-history slot | `Ctrl+Alt+1–9`, `A–Z`, `F1–F12` |
+| Paste a pinned slot | `Ctrl+Shift+1–9`, `A–Z`, `F1–F12` |
+| Select a clipboard-profile slot | `Alt+Shift+1–9`, `A–Z`, `F1–F12` |
 
-### Privacy
-- Secret pattern detection with optional auto-discard
-- Clear history when Windows locks
-- Per-process exclusion list (KeePass, 1Password, Bitwarden included by default)
+## Android clipboard bridge
 
-### CLI
+The optional companion project is in [`android/clipboardpp-android-api`](android/clipboardpp-android-api). It supports:
+
+- Android-to-Windows clipboard capture into a dedicated Android list.
+- Sending one or more saved Windows items back to Android.
+- Sending highlighted text from any Windows application with `Ctrl+Alt+Shift+Z`.
+- Accessibility-triggered synchronization while keeping Gboard or another keyboard active.
+- Manual sync, endpoint testing, missing-item reconciliation, a capture IME, and a floating sync fallback.
+
+Setup and network details are in the [Android companion README](android/clipboardpp-android-api/README.md).
+
+## Security and storage
+
+Clipboard++ stores its user data under `%APPDATA%\Clipboard++`:
+
+| Path | Contents | Protection |
+|---|---|---|
+| `config.json` | Settings, profile definitions, hotkeys, and themes | Plaintext |
+| `history\<profile>.enc` | Text, paths, image references, source details, tags, and timestamps | Current-user Windows DPAPI |
+| `images.db` | Image metadata and image BLOBs | Image BLOBs use current-user DPAPI; query metadata remains plaintext |
+| `fonts\` | Imported fonts | Plain files |
+
+Legacy plaintext history JSON and image BLOBs are migrated automatically. History is written atomically and the plaintext file is removed only after the encrypted replacement has been verified. Image migration runs in one SQLite transaction, so a failure rolls back the complete migration rather than leaving a partially converted database.
+
+DPAPI binds protected data to the Windows user account that encrypted it. Copying the files to another account or computer does not make them readable there. This is encryption at rest; it does not protect data from software already running with access to the same signed-in Windows account.
+
+The bundled SQLite Editor recognizes the Clipboard++ image schema and can decrypt protected image BLOBs for preview under the same Windows account. Decryption occurs only in memory. Choosing **Export decrypted image** deliberately creates an unencrypted file and is labeled accordingly.
+
+## Themes and appearance
+
+Clipboard++ includes 12 built-in dark and light themes plus named custom themes. Appearance controls cover the main palette, title-bar buttons, popup animation, opacity, outlines, scrollbars, rounding, fonts, and the procedural clipboard icon. Theme changes update the main UI, popup contexts, and system-tray icon at runtime.
+
+Install the bundled font collection with:
+
+```powershell
+.\install-fonts.ps1
+```
+
+You can also import individual `.ttf` and `.otf` files from Settings → Appearance.
+
+## CLI examples
+
 ```powershell
 clipboardpp.exe status
 clipboardpp.exe status --format json
@@ -151,242 +153,114 @@ clipboardpp.exe --clipboard set "hello"
 clipboardpp.exe --clipboard insert "save this" --top
 ```
 
----
+The GUI is single-instance. CLI commands communicate with the running app through the Clipboard++ IPC window.
 
-## AwesomeMenu Integration
+## Companion projects
 
-[AwesomeMenu](https://github.com/james28909/AwesomeMenu) is a Windows context menu overlay that lets you load custom shell commands from `.reg` files placed in `%APPDATA%\AwesomeMenu\menus\`. It acts as a live overlay for the Windows registry — no reboot or re-login needed, changes are instant.
+| Directory | Output | Purpose |
+|---|---|---|
+| `.` | `clipboardpp.exe` | Main Windows clipboard manager |
+| `android/clipboardpp-android-api` | Android APK | Android clipboard companion |
+| `ide/` | `clipboardpp_ide.exe` | Bundled text/script editor |
+| `dbviewer/` | `sqlite_editor.exe` | SQLite browser, query editor, and image-BLOB previewer |
+| `jsonviewer/` | `json_viewer.exe` | JSON tree viewer and syntax highlighter |
 
-This repository ships `.reg` templates for each tool:
+The SQLite and JSON viewer directories include optional `.reg` templates for Explorer integration. They can be installed normally or loaded dynamically through [AwesomeMenu](https://github.com/james28909/AwesomeMenu). See the [SQLite Editor README](dbviewer/README.md) and [JSON Viewer README](jsonviewer/README.md) for tool-specific usage.
 
-| Template | Location |
-|---|---|
-| `dbviewer/sqlite_editor.reg` | Right-click `.db`, `.sqlite`, `.sqlite3` files → "Open with SQLite Editor" |
-| `jsonviewer/json-viewer.reg` | Right-click `.json` files → "Open with JSON Viewer" |
+## Building from source
 
-### Installing with AwesomeMenu
+### Requirements
 
-1. Build AwesomeMenu following its repo instructions. Copy the AwesomeMenu DLL into your shell.
-2. Copy the `.reg` file for the tool you want into `%APPDATA%\AwesomeMenu\menus\`.
-3. Right-click the file type — the menu item appears immediately In AwesomeMenu right-click context menu.
+- Visual Studio 2022 with **Desktop development with C++**
+- CMake 3.20 or newer
+- PowerShell
 
-No registry reboot required. AwesomeMenu handles loading and unloading dynamically.
-
-### Adding right-click handlers for other shell objects
-
-The `.reg` templates above use file extension keys (`HKCR\.db\shell\...`). Windows supports context menu entries for many other shell objects using different registry class names. Place the corresponding `.reg` file in the AwesomeMenu menus folder:
-
-| What you right-click | Registry class |
-|---|---|
-| A specific file extension | `HKCR\.ext\shell\` |
-| Any file (all types) | `HKCR\*\shell\` |
-| Any folder | `HKCR\Directory\shell\` |
-| Inside a folder (empty space) | `HKCR\Directory\Background\shell\` |
-| A drive (C:, D:, etc.) | `HKCR\Drive\shell\` |
-| Desktop background | `HKCR\DesktopBackground\shell\` |
-
-Example `.reg` to add "Open Terminal Here" when right-clicking any drive:
-
-```reg
-Windows Registry Editor Version 5.00
-
-[HKEY_CLASSES_ROOT\Drive\shell\OpenTerminal]
-@="Open Terminal Here"
-"Icon"="C:\\Windows\\System32\\cmd.exe,0"
-
-[HKEY_CLASSES_ROOT\Drive\shell\OpenTerminal\command]
-@="cmd.exe /k \"cd /d %1\""
-```
-
-Drop this in `%APPDATA%\AwesomeMenu\menus\` and right-click any drive — it appears instantly.
-
----
-
-## Platform
-
-- Windows 10 / 11
-- Visual Studio 2022 / MSVC
-- CMake 3.20+
-- C++17
-- No external runtime — static MSVC runtime linkage
-
----
-
-## Repository Layout
-
-```text
-src/                  Clipboard++ source
-  android/            Windows-side Android HTTP client and sync server
-  app/                Application lifetime, config, tray, main window ownership
-  clipboard/          Clipboard items, history, monitor, content detection, persistence
-  cli/                Command-line interface
-  filters/            Custom filter matching and routing
-  hotkeys/            Global keyboard/mouse hook and configurable bindings
-  ipc/                IPC helpers for CLI → GUI communication
-  ui/                 All windows (main, popup, tray popup, debug), appearance/theme engine
-
-android/              Android companion app project
-ide/                  Clipboard++ IDE/editor sub-project
-dbviewer/             SQLite Editor sub-project
-  src/                C++ source
-  res/                Windows resource file and manifest
-  sqlite_editor.reg   Right-click .db/.sqlite shell integration template
-
-jsonviewer/           JSON Viewer sub-project
-  src/                C++ source
-  res/                Windows resource file and manifest
-  json-viewer.reg     Right-click .json shell integration template
-
-resources/            Clipboard++ Windows resources (manifest, icon)
-icons/                SVG sources + ICO build tools (see icons/README.md)
-themes/               Built-in theme JSON presets
-third_party/          Vendored Dear ImGui, nlohmann/json, SQLite3, PCRE2, Scintilla
-assets/fonts/         Bundled fonts
-docs/images/          Screenshots
-tools/                Build helpers
-
-build.ps1             Build script (all targets, Release/Debug, optional clean)
-SPEC.md               Feature specification
-AGENTS.md             Detailed implementation notes for coding agents
-```
-
----
-
-## Build
-
-### Prerequisites
-
-- Visual Studio 2022 (Community or higher) with **Desktop development with C++**
-- CMake 3.20+ (bundled with VS, or install separately)
-
-### Build script (recommended)
+### Build script
 
 ```powershell
-# Build all Windows projects, Release
+# All Windows targets, Release
 .\build.ps1
 
-# Build a specific target
-.\build.ps1 -Target clipboardpp
-.\build.ps1 -Target clipboardpp_ide
-.\build.ps1 -Target sqlite_editor
-.\build.ps1 -Target json_viewer -Config Debug
+# One target, Debug
+.\build.ps1 -Target clipboardpp -Config Debug
+.\build.ps1 -Target sqlite_editor -Config Debug
 
-# Build all targets, both Release and Debug
+# Every target in both configurations
 .\build.ps1 -Config Both
 
 # Clean rebuild
-.\build.ps1 -Clean
-.\build.ps1 -Target clipboardpp -Clean -Config Both
+.\build.ps1 -Target clipboardpp -Config Debug -Clean
 ```
 
-Output paths:
+Executables are written to `build\<Config>\<target>\`.
+
+Available targets are `clipboardpp`, `clipboardpp_ide`, `sqlite_editor`, and `json_viewer`. The main Clipboard++ CMake target stops and restarts the matching executable after a successful build unless `CLIPBOARDPP_RESTART_AFTER_BUILD=OFF` is configured.
+
+### Manual CMake
+
+```powershell
+cmake -S . -B build/.cmake/clipboardpp -G "Visual Studio 17 2022" -A x64
+cmake --build build/.cmake/clipboardpp --config Debug
+
+cmake -S dbviewer -B build/.cmake/sqlite_editor -G "Visual Studio 17 2022" -A x64
+cmake --build build/.cmake/sqlite_editor --config Debug
 ```
-build\Release\clipboardpp\clipboardpp.exe
-build\Release\clipboardpp_ide\clipboardpp_ide.exe
-build\Release\sqlite_editor\sqlite_editor.exe
-build\Release\json_viewer\json_viewer.exe
 
-build\Debug\clipboardpp\clipboardpp.exe
-build\Debug\clipboardpp_ide\clipboardpp_ide.exe
-build\Debug\sqlite_editor\sqlite_editor.exe
-build\Debug\json_viewer\json_viewer.exe
-```
+Do not pass `CMAKE_BUILD_TYPE` when using the Visual Studio multi-configuration generator.
 
-### Android companion app
+### Android
 
-The Android companion is a separate Gradle project:
+Open `android/clipboardpp-android-api` in Android Studio, or build it with a local Gradle installation:
 
 ```powershell
 cd android\clipboardpp-android-api
 gradle :app:assembleDebug
 ```
 
-If Gradle is not on PATH, use your local Gradle install or open `android/clipboardpp-android-api` in Android Studio. See [android/clipboardpp-android-api/README.md](android/clipboardpp-android-api/README.md) for setup and endpoint details.
+## Repository map
 
-For normal Android-to-Windows capture, install the APK, open **Clipboard++ Android API**, tap **Enable Accessibility Sync**, and enable **Clipboard++ Clipboard Sync** in Android Accessibility settings. When Android reports a likely Copy/Cut action, the service launches a transparent foreground sync activity, reads the current primary clipboard, deduplicates the captured text, and pushes missing items to Clipboard++ over the existing LAN HTTP bridge. The activity is intentionally invisible and closes automatically.
-
-The companion still includes the Clipboard++ Capture Keyboard and floating sync button as fallback/manual sync options, but they are no longer required for the standard Gboard-friendly flow.
-
-### Manual CMake
-
-```powershell
-# Clipboard++
-cmake -S . -B build/.cmake/clipboardpp
-cmake --build build/.cmake/clipboardpp --config Release
-
-# SQLite Editor
-cmake -S dbviewer -B build/.cmake/sqlite_editor
-cmake --build build/.cmake/sqlite_editor --config Release
-
-# JSON Viewer
-cmake -S jsonviewer -B build/.cmake/json_viewer
-cmake --build build/.cmake/json_viewer --config Release
-```
-
-## Fonts
-
-A curated set of fonts is included in the repository as `fonts.zip`. To install them into the correct location automatically, run from the repo root:
-
-```powershell
-.\install-fonts.ps1
-```
-
-This extracts all fonts to `%APPDATA%\Clipboard++\fonts\` with no dependencies — just Windows built-in ZIP support. Once installed, select any font in Settings → Appearance → Font.
-
-You can also import any `.ttf` or `.otf` font manually from the Appearance settings page.
-
----
-
-## Configuration
+The main application is intentionally divided by responsibility so the central coordinator and UI windows remain manageable:
 
 ```text
-%APPDATA%\Clipboard++\config.json        Main settings
-%APPDATA%\Clipboard++\fonts\             Imported fonts (populated by install-fonts.ps1)
-%APPDATA%\Clipboard++\history\           Per-profile clipboard history (JSON)
-%APPDATA%\Clipboard++\images\            Captured images
+src/
+  app/          Application orchestration, config, tray icon, startup registration
+  android/      Windows-side Android client, sync server, integration coordinator
+  clipboard/    Monitor, items, histories, profile manager, persistence, image store
+  security/     Shared Windows DPAPI protection
+  hotkeys/      Global hotkeys and popup keyboard forwarding
+  filters/      Custom filter matching
+  ipc/          CLI-to-GUI IPC
+  ui/           Windows, themes, widgets, selection, paste diagnostics
+  util/         Shared Win32 helpers
 ```
 
-The Android device API endpoint is stored in the same config file under the `android.deviceEndpoint` setting.
+Large UI responsibilities are split into focused translation units:
 
----
+- `MainWindow*.cpp` contains one Settings page per file.
+- `PopupWindowHistory.cpp`, `PopupWindowImages.cpp`, `PopupWindowPaste.cpp`, and `PopupWindowAndroid.cpp` isolate popup subsystems.
+- `PopupSelectionModel` owns stable ordered item selection.
+- `PasteDiagnostics` centralizes paste and hotkey diagnostic formatting.
+- `ClipboardProfileManager` owns profile history lifetime, persistence, switching, duplication, and deletion.
+- `AndroidIntegration` owns Android connection, synchronization, and device coordination.
 
-## Development Status
+Other useful locations:
 
-**Stable and complete:**
-- Clipboard capture, deduplication, persistent history
-- Pinned entries with independent slot numbering
-- Multi-clipboard profiles with process binding and auto-switching
-- Quick paste popup: search, filter, queue, drag-drop, context menu
-- Configurable hotkeys including hidden paste slots
-- Full appearance editor: 12 built-in themes, custom saved themes
-- Theme-driven icon (updates live in-app and system tray on theme switch)
-- Title bar button color customization (base + hover for min/max/close)
-- Image capture, deduplication, and in-app browser
-- Animated outline effect with full parameter control
-- DPI-aware rendering with custom scrollbar theming
-- Privacy: secret detection, auto-discard, process exclusion, clear-on-lock
-- CLI/IPC interface
-- System tray popup menu
-- Android clipboard bridge: Android companion app, Windows sync server, dedicated popup list, endpoint persistence, and send-to-Android actions
-- Global send-selection-to-Android hotkey
-- Custom filters and filter matcher tests
-- Bundled editor/IDE target
-- SQLite Editor — standalone database viewer (sub-project)
-- JSON Viewer — standalone JSON viewer (sub-project)
+```text
+tests/          Main application tests
+dbviewer/       SQLite Editor and its tests
+jsonviewer/     JSON Viewer
+resources/      Windows resources and manifest
+icons/          SVG/ICO source and build tooling
+themes/         Theme presets
+docs/images/    README screenshots
+third_party/    Vendored dependencies
+SPEC.md         Detailed feature specification
+TODO.md         Current implementation roadmap
+AGENTS.md       Implementation notes and project gotchas
+```
 
-**Planned:**
-- Encrypted vault/archive (DPAPI-backed)
-- Full privacy exclusions UI
-- Richer developer tools (raw format inspection, transforms, export)
-- Expanded CLI coverage for profile and vault commands
+## License and acknowledgements
 
----
+License information has not been finalized.
 
-## License
-
-License information has not been finalized yet.
-
-## Acknowledgements
-
-Developed by james28909 with AI-assisted development from OpenAI Codex and Claude.
-See [CONTRIBUTORS.md](CONTRIBUTORS.md) for project attribution.
+Developed by james28909 with AI-assisted development from OpenAI Codex and Claude. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for attribution.

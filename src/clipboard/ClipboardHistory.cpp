@@ -4,11 +4,16 @@
 #include <cctype>
 #include <cstddef>
 #include <iterator>
+#include <unordered_set>
 #include <utility>
-
 ClipboardHistory::ClipboardHistory(int maxItems)
     : m_maxItems(maxItems)
 {}
+
+void ClipboardHistory::MarkChangedLocked() {
+    ++m_version;
+    if (m_changedCb) m_changedCb();
+}
 
 bool ClipboardHistory::Push(ClipboardItem item) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -41,7 +46,7 @@ bool ClipboardHistory::Push(ClipboardItem item) {
             else
                 m_items.push_back(std::move(existing));
             NormalizePinnedOrderLocked();
-            if (m_changedCb) m_changedCb();
+            MarkChangedLocked();
             return false; // was a duplicate
         }
     }
@@ -59,7 +64,7 @@ bool ClipboardHistory::Push(ClipboardItem item) {
 
     NormalizePinnedOrderLocked();
     TrimToLimit();
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
     return true;
 }
 
@@ -93,7 +98,7 @@ bool ClipboardHistory::Insert(ClipboardItem item, size_t index) {
     m_items.insert(m_items.begin() + static_cast<std::ptrdiff_t>(index), std::move(item));
     NormalizePinnedOrderLocked();
     TrimToLimit();
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
     return true;
 }
 
@@ -177,6 +182,7 @@ void ClipboardHistory::LoadSnapshot(std::vector<ClipboardItem> items, uint64_t n
     m_nextId = std::max<uint64_t>(nextId, 1);
     NormalizePinnedOrderLocked();
     TrimToLimit();
+    ++m_version;
 }
 
 std::vector<size_t> ClipboardHistory::Search(const std::string& query) const {
@@ -196,7 +202,7 @@ std::vector<size_t> ClipboardHistory::Search(const std::string& query) const {
 void ClipboardHistory::Clear() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_items.clear();
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
 }
 
 bool ClipboardHistory::RemoveItemById(uint64_t id) {
@@ -207,7 +213,26 @@ bool ClipboardHistory::RemoveItemById(uint64_t id) {
         return false;
 
     m_items.erase(it);
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
+    return true;
+}
+
+bool ClipboardHistory::RemoveItemsById(const std::vector<uint64_t>& ids) {
+    if (ids.empty())
+        return false;
+
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    const std::unordered_set<uint64_t> idSet(ids.begin(), ids.end());
+    const size_t before = m_items.size();
+    m_items.erase(std::remove_if(m_items.begin(), m_items.end(),
+        [&](const ClipboardItem& item) {
+            return idSet.find(item.id) != idSet.end();
+        }), m_items.end());
+
+    if (m_items.size() == before)
+        return false;
+
+    MarkChangedLocked();
     return true;
 }
 
@@ -236,7 +261,7 @@ bool ClipboardHistory::MoveItem(size_t index, MoveTarget target) {
         m_items.push_back(std::move(item));
 
     NormalizePinnedOrderLocked();
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
     return true;
 }
 
@@ -251,7 +276,7 @@ bool ClipboardHistory::MoveItemById(uint64_t id, MoveTarget target) {
     it->updatedAt = now;
 
     if (target == MoveTarget::None) {
-        if (m_changedCb) m_changedCb();
+        MarkChangedLocked();
         return true;
     }
 
@@ -269,7 +294,65 @@ bool ClipboardHistory::MoveItemById(uint64_t id, MoveTarget target) {
         m_items.push_back(std::move(item));
 
     NormalizePinnedOrderLocked();
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
+    return true;
+}
+
+bool ClipboardHistory::MoveItemsByIdToTop(const std::vector<uint64_t>& ids) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (ids.empty()) return false;
+
+    std::vector<ClipboardItem> moving;
+    moving.reserve(ids.size());
+    const auto now = std::chrono::system_clock::now();
+
+    for (uint64_t id : ids) {
+        auto it = std::find_if(m_items.begin(), m_items.end(),
+            [id](const ClipboardItem& e) { return e.id == id; });
+        if (it == m_items.end()) continue;
+
+        it->lastUsedAt = now;
+        it->updatedAt = now;
+        moving.push_back(std::move(*it));
+        m_items.erase(it);
+    }
+
+    if (moving.empty()) return false;
+
+    m_items.insert(m_items.begin(),
+                   std::make_move_iterator(moving.begin()),
+                   std::make_move_iterator(moving.end()));
+    NormalizePinnedOrderLocked();
+    MarkChangedLocked();
+    return true;
+}
+
+bool ClipboardHistory::MoveItemsByIdToBottom(const std::vector<uint64_t>& ids) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (ids.empty()) return false;
+
+    std::vector<ClipboardItem> moving;
+    moving.reserve(ids.size());
+    const auto now = std::chrono::system_clock::now();
+
+    for (uint64_t id : ids) {
+        auto it = std::find_if(m_items.begin(), m_items.end(),
+            [id](const ClipboardItem& e) { return e.id == id; });
+        if (it == m_items.end()) continue;
+
+        it->lastUsedAt = now;
+        it->updatedAt = now;
+        moving.push_back(std::move(*it));
+        m_items.erase(it);
+    }
+
+    if (moving.empty()) return false;
+
+    m_items.insert(m_items.end(),
+                   std::make_move_iterator(moving.begin()),
+                   std::make_move_iterator(moving.end()));
+    NormalizePinnedOrderLocked();
+    MarkChangedLocked();
     return true;
 }
 
@@ -301,7 +384,7 @@ bool ClipboardHistory::MoveItemsByIdBefore(const std::vector<uint64_t>& ids, uin
                    std::make_move_iterator(moving.begin()),
                    std::make_move_iterator(moving.end()));
     NormalizePinnedOrderLocked();
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
     return true;
 }
 
@@ -315,7 +398,33 @@ bool ClipboardHistory::SetPinnedById(uint64_t id, bool pinned) {
     it->pinned = pinned;
     it->updatedAt = std::chrono::system_clock::now();
     NormalizePinnedOrderLocked();
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
+    return true;
+}
+
+bool ClipboardHistory::SetPinnedByIdMany(const std::vector<uint64_t>& ids, bool pinned) {
+    if (ids.empty())
+        return false;
+
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    const std::unordered_set<uint64_t> idSet(ids.begin(), ids.end());
+    const auto now = std::chrono::system_clock::now();
+    bool changed = false;
+    for (ClipboardItem& item : m_items) {
+        if (idSet.find(item.id) == idSet.end())
+            continue;
+        if (item.pinned != pinned) {
+            item.pinned = pinned;
+            item.updatedAt = now;
+            changed = true;
+        }
+    }
+
+    if (!changed)
+        return false;
+
+    NormalizePinnedOrderLocked();
+    MarkChangedLocked();
     return true;
 }
 
@@ -338,7 +447,7 @@ bool ClipboardHistory::SetImageSourceFileByHash(uint64_t contentHash,
     if (!description.empty())
         it->text = description;
     it->updatedAt = std::chrono::system_clock::now();
-    if (m_changedCb) m_changedCb();
+    MarkChangedLocked();
     return true;
 }
 
@@ -361,6 +470,11 @@ void ClipboardHistory::SetOverflowCallback(OverflowCb cb) {
 void ClipboardHistory::SetChangedCallback(ChangedCb cb) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_changedCb = std::move(cb);
+}
+
+uint64_t ClipboardHistory::Version() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    return m_version;
 }
 
 size_t ClipboardHistory::CountPinnedLocked() const {

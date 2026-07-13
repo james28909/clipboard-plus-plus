@@ -1,15 +1,13 @@
 #include "Application.h"
 #include "IconPatcher.h"
+#include "StartupRegistration.h"
 #include "TrayIcon.h"
-#include "../android/AndroidDeviceClient.h"
-#include "../android/AndroidSyncServer.h"
 #include "../ui/MainWindow.h"
 #include "../ui/PopupWindow.h"
 #include "../ui/TrayPopupWindow.h"
 #include "../ui/TextEditorWindow.h"
 #include "../ui/DebugWindow.h"
 #include "../clipboard/ClipboardHistory.h"
-#include "../clipboard/ClipboardHistoryStore.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
 #include "../clipboard/ImageStore.h"
@@ -66,13 +64,6 @@ std::string NowIsoLocal() {
     localtime_s(&tm, &t);
     std::ostringstream out;
     out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-    return out.str();
-}
-
-std::string MakeClipboardId() {
-    static unsigned int sequence = 0;
-    std::ostringstream out;
-    out << "cb-" << std::hex << GetTickCount64() << "-" << ++sequence;
     return out.str();
 }
 
@@ -155,32 +146,6 @@ std::filesystem::path EditorTempPath(const EditorSettings& settings) {
     return dir / name.str();
 }
 
-bool HotkeyKeysReleased() {
-    return (GetAsyncKeyState(VK_CONTROL) & 0x8000) == 0 &&
-           (GetAsyncKeyState(VK_SHIFT) & 0x8000) == 0 &&
-           (GetAsyncKeyState(VK_MENU) & 0x8000) == 0 &&
-           (GetAsyncKeyState('Z') & 0x8000) == 0;
-}
-
-void SendCtrlC() {
-    INPUT in[4]{};
-    in[0].type = INPUT_KEYBOARD;
-    in[0].ki.wVk = VK_CONTROL;
-    in[0].ki.dwExtraInfo = kClipboardPasteMagic;
-    in[1].type = INPUT_KEYBOARD;
-    in[1].ki.wVk = 'C';
-    in[1].ki.dwExtraInfo = kClipboardPasteMagic;
-    in[2].type = INPUT_KEYBOARD;
-    in[2].ki.wVk = 'C';
-    in[2].ki.dwFlags = KEYEVENTF_KEYUP;
-    in[2].ki.dwExtraInfo = kClipboardPasteMagic;
-    in[3].type = INPUT_KEYBOARD;
-    in[3].ki.wVk = VK_CONTROL;
-    in[3].ki.dwFlags = KEYEVENTF_KEYUP;
-    in[3].ki.dwExtraInfo = kClipboardPasteMagic;
-    SendInput(4, in, sizeof(INPUT));
-}
-
 bool WriteUtf8File(const std::filesystem::path& path, const std::string& text) {
     std::ofstream out(path, std::ios::binary);
     if (!out)
@@ -222,7 +187,8 @@ void ReplaceAll(std::wstring& text, const std::wstring& from, const std::wstring
 // -- Construction / destruction ------------------------------------------------
 
 Application::Application(HINSTANCE hInstance)
-    : m_hInstance(hInstance)
+    : m_hInstance(hInstance),
+      m_androidIntegration(std::make_unique<AndroidIntegration>(*this))
 {
     s_instance = this;
 }
@@ -289,154 +255,67 @@ bool Application::InsertExternalClipboardText(const std::string& text,
 
 bool Application::AddAndroidClipboardText(const std::string& text,
                                           const std::string& source) {
-    if (text.empty())
-        return false;
-
-    std::lock_guard<std::mutex> lock(m_androidClipboardMutex);
-    auto existing = std::find_if(m_androidClipboardEntries.begin(), m_androidClipboardEntries.end(),
-        [&](const AndroidClipboardEntry& entry) {
-            return entry.text == text;
-        });
-
-    if (existing != m_androidClipboardEntries.end()) {
-        AndroidClipboardEntry entry = std::move(*existing);
-        entry.source = source.empty() ? entry.source : source;
-        entry.capturedAt = std::chrono::system_clock::now();
-        m_androidClipboardEntries.erase(existing);
-        m_androidClipboardEntries.insert(m_androidClipboardEntries.begin(), std::move(entry));
-        return false;
-    }
-
-    AndroidClipboardEntry entry;
-    entry.id = m_nextAndroidClipboardEntryId++;
-    entry.text = text;
-    entry.source = source.empty() ? "android" : source;
-    entry.capturedAt = std::chrono::system_clock::now();
-    m_androidClipboardEntries.insert(m_androidClipboardEntries.begin(), std::move(entry));
-    return true;
+    return m_androidIntegration &&
+           m_androidIntegration->AddClipboardText(text, source);
 }
 
 std::vector<AndroidClipboardEntry> Application::GetAndroidClipboardEntries() const {
-    std::lock_guard<std::mutex> lock(m_androidClipboardMutex);
-    return m_androidClipboardEntries;
+    return m_androidIntegration
+        ? m_androidIntegration->ClipboardEntries()
+        : std::vector<AndroidClipboardEntry>{};
 }
 
 bool Application::RemoveAndroidClipboardEntry(uint64_t id) {
-    std::lock_guard<std::mutex> lock(m_androidClipboardMutex);
-    auto it = std::find_if(m_androidClipboardEntries.begin(), m_androidClipboardEntries.end(),
-        [&](const AndroidClipboardEntry& entry) {
-            return entry.id == id;
-        });
-    if (it == m_androidClipboardEntries.end())
-        return false;
-    m_androidClipboardEntries.erase(it);
-    return true;
+    return m_androidIntegration &&
+           m_androidIntegration->RemoveClipboardEntry(id);
 }
 
 bool Application::SetAndroidClipboardEntryPinned(uint64_t id, bool pinned) {
-    std::lock_guard<std::mutex> lock(m_androidClipboardMutex);
-    auto it = std::find_if(m_androidClipboardEntries.begin(), m_androidClipboardEntries.end(),
-        [&](const AndroidClipboardEntry& entry) {
-            return entry.id == id;
-        });
-    if (it == m_androidClipboardEntries.end())
-        return false;
-    it->pinned = pinned;
-    std::stable_sort(m_androidClipboardEntries.begin(), m_androidClipboardEntries.end(),
-        [](const AndroidClipboardEntry& a, const AndroidClipboardEntry& b) {
-            if (a.pinned != b.pinned)
-                return a.pinned && !b.pinned;
-            return a.capturedAt > b.capturedAt;
-        });
-    return true;
+    return m_androidIntegration &&
+           m_androidIntegration->SetClipboardEntryPinned(id, pinned);
 }
 
-bool Application::SendTextItemsToAndroid(const std::vector<std::string>& texts, std::string* error) {
-    return androidsync::SendItemsToAndroid(m_androidDeviceEndpoint, texts, error);
+const std::string& Application::GetAndroidDeviceEndpoint() const {
+    static const std::string empty;
+    return m_androidIntegration ? m_androidIntegration->DeviceEndpoint() : empty;
+}
+
+bool Application::SendTextItemsToAndroid(const std::vector<std::string>& texts,
+                                         std::string* error) {
+    return m_androidIntegration &&
+           m_androidIntegration->SendTextItems(texts, error);
 }
 
 void Application::SendSelectionToAndroidClipboard() {
-    if (m_androidDeviceEndpoint.empty()) {
-        AddDeveloperEvent("send selection to Android failed: endpoint not set");
-        return;
-    }
-
-    std::thread([this]() {
-        for (int i = 0; i < 60 && !HotkeyKeysReleased(); ++i)
-            Sleep(25);
-
-        const bool hadText = IsClipboardFormatAvailable(CF_UNICODETEXT) != FALSE;
-        const std::string previousText = hadText ? win32util::ClipboardUnicodeText() : std::string{};
-        const DWORD beforeSeq = GetClipboardSequenceNumber();
-
-        if (m_monitor)
-            m_monitor->SuppressNextUpdate();
-        SendCtrlC();
-
-        bool changed = false;
-        for (int i = 0; i < 40; ++i) {
-            Sleep(25);
-            if (GetClipboardSequenceNumber() != beforeSeq) {
-                changed = true;
-                break;
-            }
-        }
-
-        const std::string selectedText = win32util::ClipboardUnicodeText();
-        if (hadText) {
-            const std::wstring wide = win32util::Utf8ToWide(previousText);
-            if (m_monitor)
-                m_monitor->SuppressNextUpdate();
-            win32util::SetClipboardUnicodeText(nullptr, wide.c_str(), wide.size());
-        }
-
-        if (!changed || selectedText.empty()) {
-            AddDeveloperEvent("send selection to Android skipped: no selected text copied");
-            return;
-        }
-
-        std::string error;
-        if (SendTextItemsToAndroid({selectedText}, &error))
-            AddDeveloperEvent("sent selected text to Android clipboard");
-        else
-            AddDeveloperEvent("send selection to Android failed: " +
-                              (error.empty() ? std::string("unknown error") : error));
-    }).detach();
+    if (m_androidIntegration)
+        m_androidIntegration->SendSelectionToDevice();
 }
 
 void Application::SetAndroidDeviceEndpoint(const std::string& endpoint) {
-    m_androidDeviceEndpoint = endpoint;
-    while (!m_androidDeviceEndpoint.empty() &&
-           std::isspace(static_cast<unsigned char>(m_androidDeviceEndpoint.front())))
-        m_androidDeviceEndpoint.erase(m_androidDeviceEndpoint.begin());
-    while (!m_androidDeviceEndpoint.empty() &&
-           std::isspace(static_cast<unsigned char>(m_androidDeviceEndpoint.back())))
-        m_androidDeviceEndpoint.pop_back();
-    if (!m_androidDeviceEndpoint.empty() &&
-        m_androidDeviceEndpoint.rfind("http://", 0) != 0 &&
-        m_androidDeviceEndpoint.rfind("https://", 0) != 0) {
-        m_androidDeviceEndpoint = "http://" + m_androidDeviceEndpoint;
-    }
-    m_config.android.deviceEndpoint = m_androidDeviceEndpoint;
+    if (!m_androidIntegration)
+        return;
+    m_androidIntegration->SetDeviceEndpoint(endpoint);
+    m_config.android.deviceEndpoint = m_androidIntegration->DeviceEndpoint();
     SaveConfig();
 }
 
 bool Application::RequestAndroidSyncToWindows(std::string* error) {
-    return androidsync::RequestAndroidSyncToWindows(m_androidDeviceEndpoint, error);
+    return m_androidIntegration &&
+           m_androidIntegration->RequestSyncToWindows(error);
 }
 
 bool Application::CheckAndroidDeviceHealth(std::string* error) {
-    return androidsync::CheckAndroidHealth(m_androidDeviceEndpoint, error);
+    return m_androidIntegration &&
+           m_androidIntegration->CheckDeviceHealth(error);
 }
 
 bool Application::IsAndroidSyncServerRunning() const {
-    return m_androidSyncServer && m_androidSyncServer->IsRunning();
+    return m_androidIntegration && m_androidIntegration->IsServerRunning();
 }
 
 unsigned short Application::AndroidSyncServerPort() const {
-    return m_androidSyncServer ? m_androidSyncServer->Port() : 8766;
+    return m_androidIntegration ? m_androidIntegration->ServerPort() : 8766;
 }
-
 void Application::OpenSettingsWindow() {
     if (m_popup) {
         m_popup->OpenSettingsWindow();
@@ -696,11 +575,25 @@ void Application::AddDeveloperEvent(const std::string& event) {
 
 void Application::SetNewItemsAtTop(bool value) {
     m_config.newItemsAtTop = value;
-    for (auto& history : m_histories) {
-        if (history)
-            history->SetNewItemsAtTop(value);
-    }
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SetNewItemsAtTop(value);
     SaveConfig();
+}
+
+bool Application::IsStartWithWindowsEnabled() const {
+    return StartupRegistration::IsEnabled();
+}
+
+bool Application::SetStartWithWindowsEnabled(bool enabled) {
+    LSTATUS error = ERROR_SUCCESS;
+    if (!StartupRegistration::SetEnabled(enabled, &error)) {
+        AddDeveloperEvent("failed to update Start with Windows: error=" +
+                          std::to_string(error));
+        return false;
+    }
+    AddDeveloperEvent(std::string("Start with Windows: ") +
+                      (enabled ? "on" : "off"));
+    return true;
 }
 
 void Application::SetAppendNewlineAfterPaste(bool value) {
@@ -730,99 +623,45 @@ void Application::SetPasteMoveTarget(ClipboardHistory::MoveTarget target) {
 }
 
 const ClipboardProfileConfig* Application::GetActiveClipboardProfile() const {
-    auto it = std::find_if(m_config.clipboards.begin(), m_config.clipboards.end(),
-        [&](const ClipboardProfileConfig& c) { return c.id == m_config.activeClipboardId; });
-    return it == m_config.clipboards.end() ? nullptr : &(*it);
+    return m_clipboardProfiles ? m_clipboardProfiles->ActiveProfile() : nullptr;
+}
+
+const std::vector<ClipboardProfileConfig>& Application::GetClipboardProfiles() const {
+    return m_clipboardProfiles ? m_clipboardProfiles->Profiles() : m_config.clipboards;
+}
+
+bool Application::CanDeleteActiveClipboardProfile() const {
+    return m_clipboardProfiles && m_clipboardProfiles->CanDeleteActiveProfile();
+}
+
+const std::vector<std::string>& Application::GetHistoryPersistenceErrors() const {
+    static const std::vector<std::string> empty;
+    return m_clipboardProfiles ? m_clipboardProfiles->PersistenceErrors() : empty;
 }
 
 void Application::SetActiveClipboardProfile(const std::string& id) {
-    auto it = std::find_if(m_config.clipboards.begin(), m_config.clipboards.end(),
-        [&](const ClipboardProfileConfig& c) { return c.id == id; });
-    if (it == m_config.clipboards.end())
-        return;
-
-    m_config.activeClipboardId = id;
-    m_history = HistoryForActiveClipboard();
-    m_manualClipboardProcessOverride = ForegroundProcessName();
-    SaveConfig();
-    AddDeveloperEvent("selected clipboard profile: " + it->name + " (" + it->id + ")");
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SetActiveProfile(id);
 }
 
 void Application::SelectClipboardProfileSlot(int slot) {
-    if (slot < 0)
-        return;
-
-    const size_t index = static_cast<size_t>(slot);
-    if (index >= m_config.clipboards.size())
-        return;
-
-    SetActiveClipboardProfile(m_config.clipboards[index].id);
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SelectProfileSlot(slot);
 }
 
-void Application::CreateClipboardProfile(const std::string& name, const std::string& processName) {
-    const std::string now = NowIsoLocal();
-    ClipboardProfileConfig profile;
-    profile.id = MakeClipboardId();
-    profile.name = name.empty() ? "New Clipboard" : name;
-    profile.createdAt = now;
-    profile.updatedAt = now;
-    profile.processName = processName;
-
-    m_config.clipboards.push_back(std::move(profile));
-    m_histories.push_back(std::make_unique<ClipboardHistory>(kMaxClipboardHistoryItems));
-    m_histories.back()->SetNewItemsAtTop(m_config.newItemsAtTop);
-    ClipboardHistoryStore::Load(m_config.clipboards.back().id, *m_histories.back());
-    const std::string savedId = m_config.clipboards.back().id;
-    m_histories.back()->SetChangedCallback([this, savedId]() {
-        SaveClipboardHistory(savedId);
-    });
-    m_config.activeClipboardId = m_config.clipboards.back().id;
-    m_history = m_histories.back().get();
-    m_manualClipboardProcessOverride = ForegroundProcessName();
-    SaveConfig();
-    SaveActiveClipboardHistory();
-    AddDeveloperEvent("created clipboard profile: " + m_config.clipboards.back().name);
+void Application::CreateClipboardProfile(const std::string& name,
+                                         const std::string& processName) {
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->CreateProfile(name, processName);
 }
 
 void Application::RenameActiveClipboardProfile(const std::string& name) {
-    if (name.empty())
-        return;
-
-    for (ClipboardProfileConfig& profile : m_config.clipboards) {
-        if (profile.id == m_config.activeClipboardId) {
-            profile.name = name;
-            profile.updatedAt = NowIsoLocal();
-            SaveConfig();
-            AddDeveloperEvent("renamed clipboard profile: " + profile.name);
-            return;
-        }
-    }
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->RenameActiveProfile(name);
 }
 
 bool Application::DeleteActiveClipboardProfile() {
-    if (m_config.clipboards.size() <= 1)
-        return false;
-
-    const std::string deletedId = m_config.activeClipboardId;
-    auto it = std::find_if(m_config.clipboards.begin(), m_config.clipboards.end(),
-        [&](const ClipboardProfileConfig& c) { return c.id == deletedId; });
-    if (it == m_config.clipboards.end())
-        return false;
-
-    const size_t index = static_cast<size_t>(std::distance(m_config.clipboards.begin(), it));
-    m_config.clipboards.erase(it);
-    if (index < m_histories.size())
-        m_histories.erase(m_histories.begin() + static_cast<std::ptrdiff_t>(index));
-
-    std::error_code ec;
-    std::filesystem::remove(ClipboardHistoryStore::PathForProfile(deletedId), ec);
-
-    const size_t nextIndex = std::min(index, m_config.clipboards.size() - 1);
-    m_config.activeClipboardId = m_config.clipboards[nextIndex].id;
-    m_history = HistoryForActiveClipboard();
-    SaveConfig();
-    AddDeveloperEvent("deleted clipboard profile: " + deletedId);
-    return true;
+    return m_clipboardProfiles && m_clipboardProfiles->DeleteActiveProfile();
 }
 
 void Application::CreateClipboardFromForegroundProcess() {
@@ -830,15 +669,8 @@ void Application::CreateClipboardFromForegroundProcess() {
     return;
 #else
     const std::string process = ForegroundProcessName();
-    if (process.empty())
-        return;
-
-    if (ClipboardProfileConfig* existing = FindClipboardForProcess(process)) {
-        SetActiveClipboardProfile(existing->id);
-        return;
-    }
-
-    CreateClipboardProfile(process, process);
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->CreateFromForegroundProcess(process);
 #endif
 }
 
@@ -847,18 +679,8 @@ void Application::BindActiveClipboardToForegroundProcess() {
     return;
 #else
     const std::string process = ForegroundProcessName();
-    if (process.empty())
-        return;
-
-    for (ClipboardProfileConfig& profile : m_config.clipboards) {
-        if (profile.id == m_config.activeClipboardId) {
-            profile.processName = process;
-            profile.updatedAt = NowIsoLocal();
-            SaveConfig();
-            AddDeveloperEvent("bound active clipboard to process: " + process);
-            return;
-        }
-    }
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->BindActiveToProcess(process);
 #endif
 }
 
@@ -899,16 +721,13 @@ void Application::CommitAppearanceChange() {
 }
 
 void Application::SaveClipboardHistory(const std::string& profileId) {
-    for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
-        if (m_config.clipboards[i].id == profileId && m_histories[i]) {
-            ClipboardHistoryStore::Save(profileId, *m_histories[i]);
-            return;
-        }
-    }
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SaveHistory(profileId);
 }
 
 void Application::SaveActiveClipboardHistory() {
-    SaveClipboardHistory(m_config.activeClipboardId);
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SaveActiveHistory();
 }
 
 void Application::AddScreenshotPair(ClipboardHistory* history,
@@ -976,7 +795,16 @@ void Application::ScheduleScreenshotPairAdd(ClipboardHistory* history,
 
 void Application::ApplyLoadedConfig(const AppConfig& config) {
     m_config = config;
-    m_androidDeviceEndpoint = m_config.android.deviceEndpoint;
+    if (!m_clipboardProfiles) {
+        m_clipboardProfiles = std::make_unique<ClipboardProfileManager>(
+            m_config,
+            [this]() { SaveConfig(); },
+            [this](const std::string& event) { AddDeveloperEvent(event); },
+            [this]() { return ForegroundProcessName(); },
+            [this](ClipboardHistory* history) { m_history = history; });
+    }
+    if (m_androidIntegration)
+        m_androidIntegration->SetDeviceEndpoint(m_config.android.deviceEndpoint);
     m_appearance = m_config.appearance;
     m_appearance.uiScale = 1.0f;
     m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
@@ -1095,89 +923,22 @@ void Application::SyncClipboardForWindow(HWND hwnd) {
 }
 
 void Application::RebuildClipboardHistories() {
-    if (m_config.clipboards.empty()) {
-        const std::string now = NowIsoLocal();
-        m_config.clipboards.push_back({"default", "Default", now, now, ""});
-        m_config.activeClipboardId = "default";
-    }
-
-    m_histories.clear();
-    m_histories.reserve(m_config.clipboards.size());
-    for (size_t i = 0; i < m_config.clipboards.size(); ++i) {
-        auto history = std::make_unique<ClipboardHistory>(kMaxClipboardHistoryItems);
-        history->SetNewItemsAtTop(m_config.newItemsAtTop);
-        ClipboardHistoryStore::Load(m_config.clipboards[i].id, *history);
-        const std::string savedId = m_config.clipboards[i].id;
-        history->SetChangedCallback([this, savedId]() {
-            SaveClipboardHistory(savedId);
-        });
-        m_histories.push_back(std::move(history));
-    }
-
-    m_history = HistoryForActiveClipboard();
-}
-
-ClipboardHistory* Application::HistoryForActiveClipboard() const {
-    for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
-        if (m_config.clipboards[i].id == m_config.activeClipboardId)
-            return m_histories[i].get();
-    }
-    return m_histories.empty() ? nullptr : m_histories.front().get();
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->Rebuild();
 }
 
 ClipboardHistory* Application::HistoryForProfile(const std::string& profileId) const {
-    for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
-        if (m_config.clipboards[i].id == profileId)
-            return m_histories[i].get();
-    }
-    return nullptr;
-}
-
-ClipboardProfileConfig* Application::FindClipboardForProcess(const std::string& processName) {
-    if (processName.empty())
-        return nullptr;
-
-    auto it = std::find_if(m_config.clipboards.begin(), m_config.clipboards.end(),
-        [&](const ClipboardProfileConfig& c) {
-            return !c.processName.empty() &&
-                   _stricmp(c.processName.c_str(), processName.c_str()) == 0;
-        });
-    return it == m_config.clipboards.end() ? nullptr : &(*it);
-}
-
-void Application::CreateClipboardForProcess(const std::string& processName) {
-    if (processName.empty())
-        return;
-
-    CreateClipboardProfile(processName, processName);
+    return m_clipboardProfiles
+        ? m_clipboardProfiles->HistoryForProfile(profileId)
+        : nullptr;
 }
 
 void Application::SwitchClipboardForProcess(const std::string& processName) {
 #ifdef NDEBUG
     (void)processName;
-    return;
 #else
-    if (!m_config.autoSwitchClipboardByProcess || processName.empty())
-        return;
-
-    if (!m_manualClipboardProcessOverride.empty()) {
-        if (_stricmp(m_manualClipboardProcessOverride.c_str(), processName.c_str()) == 0)
-            return;
-        m_manualClipboardProcessOverride.clear();
-    }
-
-    ClipboardProfileConfig* profile = FindClipboardForProcess(processName);
-    if (!profile && m_config.autoCreateClipboardByProcess) {
-        CreateClipboardForProcess(processName);
-        return;
-    }
-
-    if (!profile || profile->id == m_config.activeClipboardId)
-        return;
-
-    m_config.activeClipboardId = profile->id;
-    m_history = HistoryForActiveClipboard();
-    SaveConfig();
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SwitchForProcess(processName);
 #endif
 }
 
@@ -1407,8 +1168,7 @@ bool Application::Init() {
     m_hotkeys->Install(m_hwnd);
     m_hotkeys->ApplySettings(m_hotkeySettings);
 
-    m_androidSyncServer = std::make_unique<AndroidSyncServer>(*this);
-    if (m_androidSyncServer->Start())
+    if (m_androidIntegration && m_androidIntegration->StartServer())
         LogDebug("Android sync server listening on port 8766");
     else
         LogDebug("Android sync server failed to start on port 8766");
@@ -1421,10 +1181,8 @@ bool Application::Init() {
 }
 
 void Application::Shutdown() {
-    if (m_androidSyncServer) {
-        m_androidSyncServer->Stop();
-        m_androidSyncServer.reset();
-    }
+    if (m_androidIntegration)
+        m_androidIntegration->StopServer();
     if (m_hotkeys) m_hotkeys->Uninstall();
     if (m_debugWindow) m_debugWindow->Destroy();
     if (m_editor) m_editor->Destroy();
@@ -1863,6 +1621,14 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case HotkeyAction::PasteVisibleSlot:
             if (app->m_popup)
                 app->m_popup->PasteVisibleSlot(data);
+            break;
+        case HotkeyAction::PasteSelectedItems:
+            if (app->m_popup)
+                app->m_popup->PasteSelectedItems();
+            break;
+        case HotkeyAction::ClearSelectedItems:
+            if (app->m_popup)
+                app->m_popup->ClearSelectedItems();
             break;
         default: break;
         }

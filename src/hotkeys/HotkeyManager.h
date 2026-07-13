@@ -63,6 +63,8 @@ enum class HotkeyAction : WPARAM {
     ToggleDebugWindow = 11,
     ToggleEditorWindow = 12,
     SendSelectionToAndroid = 13,
+    PasteSelectedItems = 14,
+    ClearSelectedItems = 15,
 };
 
 struct KeyBinding {

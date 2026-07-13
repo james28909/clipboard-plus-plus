@@ -3,6 +3,7 @@
 #ifdef _WIN32
 #include "../app/Application.h"
 #include "../clipboard/ScreenshotTracker.h"
+#include "../ui/PasteDiagnostics.h"
 #include "../ui/PopupWindow.h"
 #endif
 
@@ -17,14 +18,12 @@
 
 // Appends to the same log file PopupWindow uses so all events are in one place.
 static void HkLog(const char* fmt, ...) {
-    static DWORD s_t0  = GetTickCount();
-    static bool  s_new = false; // PopupWindow writes the header; we just append
-    char msg[512]; va_list a; va_start(a, fmt); vsnprintf(msg, sizeof(msg), fmt, a); va_end(a);
-    char line[600]; snprintf(line, sizeof(line), "[%6ums] %s\n", GetTickCount() - s_t0, msg);
-    OutputDebugStringA(line);
-    wchar_t ap[MAX_PATH]{}; GetEnvironmentVariableW(L"APPDATA", ap, MAX_PATH);
-    std::wstring path = std::wstring(ap) + L"\\Clipboard++\\paste_debug.log";
-    if (FILE* f = _wfopen(path.c_str(), L"a")) { fputs(line, f); fclose(f); }
+    va_list args;
+    va_start(args, fmt);
+    char msg[512]{};
+    vsnprintf(msg, sizeof(msg), fmt, args);
+    va_end(args);
+    PasteDiagnostics::Log("%s", msg);
 }
 
 HotkeyManager* HotkeyManager::s_instance = nullptr;
@@ -255,6 +254,8 @@ const char* HotkeyManager::ActionName(HotkeyAction action) {
     case HotkeyAction::ToggleDebugWindow: return "Toggle debug output";
     case HotkeyAction::ToggleEditorWindow: return "Open text/script editor";
     case HotkeyAction::SendSelectionToAndroid: return "Send selection to Android";
+    case HotkeyAction::PasteSelectedItems: return "Paste selected items";
+    case HotkeyAction::ClearSelectedItems: return "Clear selected items";
     default:                            return "Unassigned";
     }
 }
@@ -483,6 +484,12 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
         if (vk == VK_ESCAPE) {
             if (!ConsumeActionPress(vk))
                 return true;
+            if (popup->HasMultipleSelectedItems()) {
+                HkLog("[HK-ESCAPE] clearing selected items");
+                PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                             static_cast<WPARAM>(HotkeyAction::ClearSelectedItems), 0);
+                return true;
+            }
             HkLog("[HK-ESCAPE] closing popup");
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(HotkeyAction::TogglePopup), 0);
@@ -532,6 +539,16 @@ bool HotkeyManager::HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
             HkLog("[HK-WEB-SEARCH] Shift+Enter with search active -> LaunchWebSearch");
             PostMessageW(m_msgTarget, WM_HOTKEYACTION,
                          static_cast<WPARAM>(HotkeyAction::LaunchWebSearch), 0);
+            return true;
+        }
+
+        if (ctrl && !shift && !alt && vk == 'V' &&
+            popup->HasMultipleSelectedItems() && !popup->IsTextEntryActive()) {
+            if (!ConsumeActionPress(vk))
+                return true;
+            HkLog("[HK-SELECTION-PASTE] Ctrl+V -> PasteSelectedItems");
+            PostMessageW(m_msgTarget, WM_HOTKEYACTION,
+                         static_cast<WPARAM>(HotkeyAction::PasteSelectedItems), 0);
             return true;
         }
 

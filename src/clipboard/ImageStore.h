@@ -83,6 +83,9 @@ public:
 
 private:
     bool CreateSchema();
+    bool MigrateImageProtection();
+    bool ReadProtectedBlob(const std::string& id, std::vector<uint8_t>& data,
+                           int* storedFormat = nullptr) const;
     void EnforceMaxImages();
     std::string InsertBlob(const std::vector<uint8_t>& data, StoredFormat fmt,
                            const std::string& profileId,

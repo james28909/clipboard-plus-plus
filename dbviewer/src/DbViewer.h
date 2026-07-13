@@ -82,6 +82,9 @@ private:
     // Blob / image preview -------------------------------------------------
     void LoadBlobPreview(int rowIdx);
     void ReleasePreview();
+    bool FetchSelectedBlob(int rowIdx, std::vector<uint8_t>& bytes,
+                           bool& wasProtected, std::string& error) const;
+    void DetectClipboardImageSchema();
     ID3D11ShaderResourceView* DecodeBytesToSrv(const std::vector<uint8_t>& bytes);
 
     // Recents --------------------------------------------------------------
@@ -117,6 +120,8 @@ private:
     std::vector<ColumnInfo>               m_cols;
     std::vector<std::vector<std::string>> m_rows;
     std::vector<int>                      m_blobCols;  // column indices declared BLOB
+    int                                   m_clipboardImageDataCol{-1};
+    int                                   m_clipboardImageProtectionCol{-1};
     int                                   m_totalRows{};
     int                                   m_dataOffset{};
     static constexpr int kPageSize = 500;
@@ -138,6 +143,7 @@ private:
     int                       m_previewW{};
     int                       m_previewH{};
     size_t                    m_previewBlobSize{};
+    bool                      m_previewProtected{};
     std::string               m_previewMsg;
     float                     m_previewPanelW{300.0f};
 

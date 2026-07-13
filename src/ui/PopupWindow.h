@@ -3,6 +3,7 @@
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ImageStore.h"
 #include "Appearance.h"
+#include "PopupSelectionModel.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <string>
@@ -37,6 +38,8 @@ public:
     void PasteHistorySlot(int slot, HWND targetWindow);
     void PastePinnedSlot(int slot, HWND targetWindow);
     void PasteVisibleSlot(int slot);
+    void PasteSelectedItems();
+    void ClearSelectedItems();
     void RequestSearchFocus();
     void LaunchWebSearch();
     void LaunchClipboardWebSearch();
@@ -45,6 +48,7 @@ public:
     void NoteExternalMouseDown(POINT screenPoint);
     bool GetAppendNewlineAfterPaste() const { return m_appendNewlineAfterPaste; }
     void SetAppendNewlineAfterPaste(bool value) { m_appendNewlineAfterPaste = value; }
+    bool HasMultipleSelectedItems() const { return m_itemSelection.HasMultiple(); }
     ClipboardHistory::MoveTarget GetPasteMoveTarget() const { return m_pasteMoveTarget; }
     void SetPasteMoveTarget(ClipboardHistory::MoveTarget target) { m_pasteMoveTarget = target; }
     void SetTheme(ThemeId theme) { m_appearance.theme = theme; }
@@ -54,7 +58,7 @@ public:
     float m_outlineStrength{0.65f};
     int   m_width{440};
     int   m_height{540};
-    int   m_queueDelayMs{50};
+    int   m_multiPasteDelayMs{50};
     bool  m_focusTestMode{false}; // test: let popup activate then restore focus to prev foreground
 
 private:
@@ -88,6 +92,8 @@ private:
     void DrawAndroidPanel();
     void DrawImageBrowser();
     bool ItemPassesFilter(const ClipboardItem& item) const;
+    void InvalidateVisibleHistoryCache() const;
+    void EnsureVisibleHistoryCache() const;
     std::vector<size_t> BuildVisibleHistoryIndices(bool pinnedOnly) const;
     std::vector<uint64_t> BuildVisibleItemIds() const;
     bool IsItemSelected(uint64_t itemId) const;
@@ -96,14 +102,14 @@ private:
     void SelectOnlyItem(uint64_t itemId);
     void ToggleItemSelection(uint64_t itemId);
     void SelectRangeTo(uint64_t itemId);
-    void DrawItemDragDrop(uint64_t itemId, int qpos);
-    bool DrawItemContextMenu(const ClipboardItem& item, int qpos);
+    void DrawItemDragDrop(uint64_t itemId);
+    bool DrawItemContextMenu(const ClipboardItem& item);
     void DrawTitleBar();
     void ClearThumbCache();
 
     // -- Paste -----------------------------------------------------------------
     void PasteItemKeepOpen(const ClipboardItem& item);
-    void PasteQueue();
+    void PasteSelectedItemsInOrder();
     void WriteToClipboard(const ClipboardItem& item, HWND targetWindow = nullptr) const;
     HWND ResolvePasteTarget() const;
     bool WaitForForeground(HWND target, DWORD timeoutMs) const;
@@ -145,7 +151,6 @@ private:
     int   m_lastRegionHeight{-1};
     int   m_lastRegionRadius{-1};
     bool  m_lastRegionMaximized{false};
-    bool  m_queueMode{false};
     bool  m_androidPanelOpen{false};
     bool  m_appendNewlineAfterPaste{false};
     ClipboardHistory::MoveTarget m_pasteMoveTarget{ClipboardHistory::MoveTarget::None};
@@ -164,14 +169,21 @@ private:
     HWND  m_activePasteTarget{};
     HWINEVENTHOOK m_foregroundHook{};
     std::string m_lastClipboardId;
-    std::vector<uint64_t> m_queue;
     std::vector<uint64_t> m_dragIds;
-    std::vector<uint64_t> m_selectedItemIds;
-    uint64_t m_selectionAnchorId{};
+    PopupSelectionModel m_itemSelection;
     char m_androidEndpointBuf[256]{};
     bool m_androidEndpointEditing{false};
     bool m_lastAndroidPanelOpen{false};
     std::string m_androidSyncStatus;
+    mutable bool m_visibleHistoryCacheValid{false};
+    mutable const ClipboardHistory* m_visibleHistoryCacheHistory{};
+    mutable uint64_t m_visibleHistoryCacheVersion{};
+    mutable int m_visibleHistoryCacheFilterMode{-1};
+    mutable std::string m_visibleHistoryCacheCustomFilterId;
+    mutable std::string m_visibleHistoryCacheSearch;
+    mutable std::vector<size_t> m_visiblePinnedIndices;
+    mutable std::vector<size_t> m_visibleRegularIndices;
+    mutable std::vector<uint64_t> m_visibleItemIds;
 
     // -- Image browser ---------------------------------------------------------
     struct ThumbEntry {

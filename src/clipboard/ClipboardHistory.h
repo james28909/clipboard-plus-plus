@@ -40,10 +40,14 @@ public:
 
     void Clear();
     bool RemoveItemById(uint64_t id);
+    bool RemoveItemsById(const std::vector<uint64_t>& ids);
     bool MoveItem(size_t index, MoveTarget target);
     bool MoveItemById(uint64_t id, MoveTarget target);
+    bool MoveItemsByIdToTop(const std::vector<uint64_t>& ids);
+    bool MoveItemsByIdToBottom(const std::vector<uint64_t>& ids);
     bool MoveItemsByIdBefore(const std::vector<uint64_t>& ids, uint64_t beforeId);
     bool SetPinnedById(uint64_t id, bool pinned);
+    bool SetPinnedByIdMany(const std::vector<uint64_t>& ids, bool pinned);
     bool SetImageSourceFileByHash(uint64_t contentHash,
                                   const std::string& sourceFilePath,
                                   const std::string& description);
@@ -53,8 +57,10 @@ public:
     void SetChangedCallback(ChangedCb cb);
 
     uint64_t NextId() const { return m_nextId; }
+    uint64_t Version() const;
 
 private:
+    void MarkChangedLocked();
     size_t CountPinnedLocked() const;
     void NormalizePinnedOrderLocked();
     void TrimToLimit();
@@ -64,6 +70,7 @@ private:
     int                        m_maxItems{100};
     bool                       m_newAtTop{true};
     uint64_t                   m_nextId{1};
+    uint64_t                   m_version{1};
     OverflowCb                 m_overflowCb;
     ChangedCb                  m_changedCb;
 };

@@ -39,6 +39,7 @@ set(IMGUI_SOURCES
 set(APP_SOURCES
     src/main.cpp
     src/android/AndroidDeviceClient.cpp
+    src/android/AndroidIntegration.cpp
     src/android/AndroidSyncServer.cpp
     src/cli/CLI.cpp
     src/ipc/IpcClient.cpp
@@ -46,11 +47,30 @@ set(APP_SOURCES
     src/app/Application.cpp
     src/app/ConfigStore.cpp
     src/app/IconPatcher.cpp
+    src/app/StartupRegistration.cpp
     src/app/TrayIcon.cpp
     src/filters/CustomFilter.cpp
+    src/security/DpapiProtection.cpp
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
+    src/ui/MainWindowGeneral.cpp
+    src/ui/MainWindowHotkeys.cpp
+    src/ui/MainWindowAppearance.cpp
+    src/ui/MainWindowHistory.cpp
+    src/ui/MainWindowFilters.cpp
+    src/ui/MainWindowEditor.cpp
+    src/ui/MainWindowImages.cpp
+    src/ui/MainWindowAndroid.cpp
+    src/ui/MainWindowPrivacy.cpp
+    src/ui/MainWindowDeveloper.cpp
+    src/ui/MainWindowAbout.cpp
     src/ui/PopupWindow.cpp
+    src/ui/PopupWindowAndroid.cpp
+    src/ui/PopupWindowHistory.cpp
+    src/ui/PopupWindowImages.cpp
+    src/ui/PopupWindowPaste.cpp
+    src/ui/PopupSelectionModel.cpp
+    src/ui/PasteDiagnostics.cpp
     src/ui/TrayPopupWindow.cpp
     src/ui/TextEditorWindow.cpp
     src/ui/ToastWindow.cpp
@@ -60,6 +80,7 @@ set(APP_SOURCES
     # Milestone 2 - clipboard core
     src/clipboard/ClipboardItem.cpp
     src/clipboard/ClipboardHistory.cpp
+    src/clipboard/ClipboardProfileManager.cpp
     src/clipboard/ClipboardHistoryStore.cpp
     src/clipboard/ClipboardMonitor.cpp
     src/clipboard/ContentDetector.cpp
@@ -108,6 +129,7 @@ if(WIN32)
         user32.lib
         gdi32.lib
         psapi.lib
+        crypt32.lib
         ws2_32.lib
     )
 
@@ -204,6 +226,77 @@ target_link_libraries(filter_matcher_tests PRIVATE pcre2-8-static)
 
 set_property(TARGET filter_matcher_tests PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+if(WIN32)
+    add_executable(dpapi_protection_tests
+        tests/dpapi_protection_tests.cpp
+        src/security/DpapiProtection.cpp
+    )
+    target_include_directories(dpapi_protection_tests PRIVATE src)
+    target_link_libraries(dpapi_protection_tests PRIVATE crypt32.lib)
+    target_compile_definitions(dpapi_protection_tests PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+    set_property(TARGET dpapi_protection_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    add_executable(history_encryption_tests
+        tests/history_encryption_tests.cpp
+        src/security/DpapiProtection.cpp
+        src/util/Win32Util.cpp
+        src/clipboard/ClipboardItem.cpp
+        src/clipboard/ClipboardHistory.cpp
+        src/clipboard/ClipboardHistoryStore.cpp
+    )
+    target_include_directories(history_encryption_tests PRIVATE
+        src
+        ${IMGUI_DIR}
+        ${NLOHMANN_DIR}
+    )
+    target_link_libraries(history_encryption_tests PRIVATE crypt32.lib)
+    target_compile_definitions(history_encryption_tests PRIVATE
+        CLIPBOARDPP_TESTING
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+    set_property(TARGET history_encryption_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    add_executable(image_encryption_tests
+        tests/image_encryption_tests.cpp
+        src/security/DpapiProtection.cpp
+        src/clipboard/ImageStore.cpp
+        ${SQLITE_DIR}/sqlite3.c
+    )
+    target_include_directories(image_encryption_tests PRIVATE
+        src
+        ${IMGUI_DIR}
+        ${SQLITE_DIR}
+    )
+    target_link_libraries(image_encryption_tests PRIVATE
+        crypt32.lib
+        d3d11.lib
+        gdi32.lib
+        gdiplus.lib
+        ole32.lib
+    )
+    target_compile_definitions(image_encryption_tests PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+        SQLITE_DEFAULT_FOREIGN_KEYS=1
+        SQLITE_OMIT_LOAD_EXTENSION
+    )
+    set_property(TARGET image_encryption_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # -- Compiler options ----------------------------------------------------------
 if(MSVC)

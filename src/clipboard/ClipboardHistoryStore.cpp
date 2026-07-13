@@ -1,13 +1,20 @@
 #include "ClipboardHistoryStore.h"
 #include "../app/ConfigStore.h"
+#include "../security/DpapiProtection.h"
 
 #include <json.hpp>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -35,56 +42,6 @@ std::string SafeProfileId(const std::string& id) {
         out += ok ? c : '_';
     }
     return out.empty() ? "default" : out;
-}
-
-std::string Base64Encode(const std::vector<uint8_t>& bytes) {
-    static constexpr char table[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string out;
-    out.reserve(((bytes.size() + 2) / 3) * 4);
-
-    for (size_t i = 0; i < bytes.size(); i += 3) {
-        const uint32_t b0 = bytes[i];
-        const uint32_t b1 = (i + 1 < bytes.size()) ? bytes[i + 1] : 0;
-        const uint32_t b2 = (i + 2 < bytes.size()) ? bytes[i + 2] : 0;
-        const uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
-
-        out += table[(triple >> 18) & 0x3f];
-        out += table[(triple >> 12) & 0x3f];
-        out += (i + 1 < bytes.size()) ? table[(triple >> 6) & 0x3f] : '=';
-        out += (i + 2 < bytes.size()) ? table[triple & 0x3f] : '=';
-    }
-
-    return out;
-}
-
-int Base64Value(char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
-}
-
-std::vector<uint8_t> Base64Decode(const std::string& text) {
-    std::vector<uint8_t> out;
-    int value = 0;
-    int bits = -8;
-
-    for (char c : text) {
-        if (c == '=') break;
-        int v = Base64Value(c);
-        if (v < 0) continue;
-        value = (value << 6) | v;
-        bits += 6;
-        if (bits >= 0) {
-            out.push_back(static_cast<uint8_t>((value >> bits) & 0xff));
-            bits -= 8;
-        }
-    }
-
-    return out;
 }
 
 ContentType TypeFromJson(const json& j) {
@@ -210,26 +167,51 @@ ClipboardItem ItemFromJson(const json& j, bool pinnedSection) {
     return item;
 }
 
-} // namespace
+constexpr std::array<uint8_t, 8> kEncryptedMagic = {
+    'C', 'P', 'P', 'H', 'I', 'S', 'T', '1'
+};
+constexpr uint32_t kEncryptedVersion = 1;
 
-namespace ClipboardHistoryStore {
+json HistoryToJson(const std::string& profileId,
+                   const ClipboardHistory& history) {
+    const std::vector<ClipboardItem> items = history.Snapshot();
+    json pinnedHistory = json::array();
+    json regularHistory = json::array();
+    uint64_t nextId = history.NextId();
+    for (const ClipboardItem& item : items) {
+        nextId = std::max(nextId, item.id + 1);
+        if (item.pinned)
+            pinnedHistory.push_back(ItemToJson(item));
+        else
+            regularHistory.push_back(ItemToJson(item));
+    }
 
-std::filesystem::path Directory() {
-    return ConfigStore::Directory() / "history";
+    return {
+        {"format", "clipboardpp-history"},
+        {"version", 1},
+        {"profileId", profileId},
+        {"nextId", nextId},
+        {"pinned-history", pinnedHistory},
+        {"regular-history", regularHistory},
+    };
 }
 
-std::filesystem::path PathForProfile(const std::string& profileId) {
-    return Directory() / (SafeProfileId(profileId) + ".json");
-}
-
-bool Load(const std::string& profileId, ClipboardHistory& history) {
-    const std::filesystem::path path = PathForProfile(profileId);
-    std::ifstream in(path);
-    if (!in)
-        return false;
-
+bool JsonToHistory(const std::string& text, ClipboardHistory& history,
+                   bool requireFormatMarker,
+                   const std::string& expectedProfileId = {}) {
     try {
-        json root = json::parse(in, nullptr, true, true);
+        json root = json::parse(text, nullptr, true, true);
+        if (!root.is_object())
+            return false;
+        if (requireFormatMarker &&
+            root.value("format", std::string{}) != "clipboardpp-history") {
+            return false;
+        }
+        if (requireFormatMarker &&
+            root.value("profileId", std::string{}) != expectedProfileId) {
+            return false;
+        }
+
         std::vector<ClipboardItem> items;
         uint64_t nextId = root.value("nextId", uint64_t{1});
 
@@ -264,38 +246,259 @@ bool Load(const std::string& profileId, ClipboardHistory& history) {
     }
 }
 
-bool Save(const std::string& profileId, const ClipboardHistory& history) {
-    std::error_code ec;
-    std::filesystem::create_directories(Directory(), ec);
-    if (ec)
+void AppendU32(std::vector<uint8_t>& output, uint32_t value) {
+    output.push_back(static_cast<uint8_t>(value));
+    output.push_back(static_cast<uint8_t>(value >> 8));
+    output.push_back(static_cast<uint8_t>(value >> 16));
+    output.push_back(static_cast<uint8_t>(value >> 24));
+}
+
+bool ReadU32(const std::vector<uint8_t>& input, size_t offset, uint32_t& value) {
+    if (offset > input.size() || input.size() - offset < 4)
         return false;
-
-    const std::vector<ClipboardItem> items = history.Snapshot();
-    json pinnedHistory = json::array();
-    json regularHistory = json::array();
-    uint64_t nextId = history.NextId();
-    for (const ClipboardItem& item : items) {
-        nextId = std::max(nextId, item.id + 1);
-        if (item.pinned)
-            pinnedHistory.push_back(ItemToJson(item));
-        else
-            regularHistory.push_back(ItemToJson(item));
-    }
-
-    json root = {
-        {"version", 1},
-        {"profileId", profileId},
-        {"nextId", nextId},
-        {"pinned-history", pinnedHistory},
-        {"regular-history", regularHistory},
-    };
-
-    std::ofstream out(PathForProfile(profileId));
-    if (!out)
-        return false;
-
-    out << root.dump(2);
+    value = static_cast<uint32_t>(input[offset]) |
+            (static_cast<uint32_t>(input[offset + 1]) << 8) |
+            (static_cast<uint32_t>(input[offset + 2]) << 16) |
+            (static_cast<uint32_t>(input[offset + 3]) << 24);
     return true;
 }
 
+std::vector<uint8_t> BuildEnvelope(const std::vector<uint8_t>& protectedData) {
+    if (protectedData.size() > UINT32_MAX)
+        return {};
+    std::vector<uint8_t> output;
+    output.reserve(kEncryptedMagic.size() + 8 + protectedData.size());
+    output.insert(output.end(), kEncryptedMagic.begin(), kEncryptedMagic.end());
+    AppendU32(output, kEncryptedVersion);
+    AppendU32(output, static_cast<uint32_t>(protectedData.size()));
+    output.insert(output.end(), protectedData.begin(), protectedData.end());
+    return output;
+}
+
+bool ParseEnvelope(const std::vector<uint8_t>& input,
+                   std::vector<uint8_t>& protectedData) {
+    constexpr size_t headerSize = 16;
+    if (input.size() < headerSize ||
+        !std::equal(kEncryptedMagic.begin(), kEncryptedMagic.end(), input.begin())) {
+        return false;
+    }
+    uint32_t version{};
+    uint32_t payloadSize{};
+    if (!ReadU32(input, 8, version) || !ReadU32(input, 12, payloadSize) ||
+        version != kEncryptedVersion || payloadSize != input.size() - headerSize) {
+        return false;
+    }
+    protectedData.assign(input.begin() + headerSize, input.end());
+    return true;
+}
+
+bool ReadBytes(const std::filesystem::path& path, std::vector<uint8_t>& bytes) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return false;
+    bytes.assign(std::istreambuf_iterator<char>(input),
+                 std::istreambuf_iterator<char>());
+    return input.good() || input.eof();
+}
+
+bool WriteBytesAtomically(const std::filesystem::path& path,
+                          const std::vector<uint8_t>& bytes) {
+    std::filesystem::path temporary = path;
+    temporary += ".tmp";
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output)
+            return false;
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+        output.flush();
+        if (!output.good()) {
+            output.close();
+            std::error_code removeError;
+            std::filesystem::remove(temporary, removeError);
+            return false;
+        }
+    }
+
+#ifdef _WIN32
+    if (!MoveFileExW(temporary.c_str(), path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::error_code removeError;
+        std::filesystem::remove(temporary, removeError);
+        return false;
+    }
+#else
+    std::error_code renameError;
+    std::filesystem::rename(temporary, path, renameError);
+    if (renameError) {
+        std::error_code removeError;
+        std::filesystem::remove(temporary, removeError);
+        return false;
+    }
+#endif
+    return true;
+}
+
+ClipboardHistoryStore::LoadResult LoadEncryptedFile(
+    const std::filesystem::path& path, const std::string& profileId,
+    ClipboardHistory& history) {
+    std::vector<uint8_t> envelope;
+    if (!ReadBytes(path, envelope))
+        return ClipboardHistoryStore::LoadResult::IoError;
+
+    std::vector<uint8_t> protectedData;
+    if (!ParseEnvelope(envelope, protectedData))
+        return ClipboardHistoryStore::LoadResult::InvalidFormat;
+
+    std::vector<uint8_t> plaintext;
+    if (!DpapiProtection::Unprotect(protectedData, plaintext))
+        return ClipboardHistoryStore::LoadResult::DecryptionFailed;
+
+    const std::string jsonText(plaintext.begin(), plaintext.end());
+#ifdef _WIN32
+    if (!plaintext.empty())
+        SecureZeroMemory(plaintext.data(), plaintext.size());
+#endif
+    return JsonToHistory(jsonText, history, true, profileId)
+        ? ClipboardHistoryStore::LoadResult::Loaded
+        : ClipboardHistoryStore::LoadResult::InvalidFormat;
+}
+
+} // namespace
+
+namespace ClipboardHistoryStore {
+
+#ifdef CLIPBOARDPP_TESTING
+namespace {
+std::filesystem::path g_testDirectory;
+}
+#endif
+
+std::filesystem::path Directory() {
+#ifdef CLIPBOARDPP_TESTING
+    return g_testDirectory;
+#else
+    return ConfigStore::Directory() / "history";
+#endif
+}
+
+#ifdef CLIPBOARDPP_TESTING
+void SetDirectoryForTesting(const std::filesystem::path& directory) {
+    g_testDirectory = directory;
+}
+#endif
+
+std::filesystem::path PathForProfile(const std::string& profileId) {
+#ifdef _WIN32
+    return Directory() / (SafeProfileId(profileId) + ".enc");
+#else
+    return LegacyPathForProfile(profileId);
+#endif
+}
+
+std::filesystem::path LegacyPathForProfile(const std::string& profileId) {
+    return Directory() / (SafeProfileId(profileId) + ".json");
+}
+
+LoadResult Load(const std::string& profileId, ClipboardHistory& history) {
+#ifdef _WIN32
+    const std::filesystem::path encryptedPath = PathForProfile(profileId);
+    std::error_code existsError;
+    const bool encryptedExists = std::filesystem::exists(encryptedPath, existsError);
+    if (existsError)
+        return LoadResult::IoError;
+    if (encryptedExists) {
+        const LoadResult result = LoadEncryptedFile(encryptedPath, profileId, history);
+        if (result == LoadResult::Loaded) {
+            std::error_code removeError;
+            std::filesystem::remove(LegacyPathForProfile(profileId), removeError);
+        }
+        return result;
+    }
+
+    const std::filesystem::path legacyPath = LegacyPathForProfile(profileId);
+    const bool legacyExists = std::filesystem::exists(legacyPath, existsError);
+    if (existsError)
+        return LoadResult::IoError;
+    if (!legacyExists)
+        return LoadResult::NotFound;
+
+    std::vector<uint8_t> legacyBytes;
+    if (!ReadBytes(legacyPath, legacyBytes))
+        return LoadResult::IoError;
+    const std::string legacyJson(legacyBytes.begin(), legacyBytes.end());
+    if (!JsonToHistory(legacyJson, history, false))
+        return LoadResult::InvalidFormat;
+
+    if (!Save(profileId, history))
+        return LoadResult::LoadedLegacy;
+
+    ClipboardHistory verified;
+    if (LoadEncryptedFile(encryptedPath, profileId, verified) != LoadResult::Loaded) {
+        std::error_code removeError;
+        std::filesystem::remove(encryptedPath, removeError);
+        return LoadResult::LoadedLegacy;
+    }
+
+    std::error_code removeError;
+    std::filesystem::remove(legacyPath, removeError);
+    return LoadResult::Migrated;
+#else
+    const std::filesystem::path legacyPath = LegacyPathForProfile(profileId);
+    std::vector<uint8_t> bytes;
+    if (!ReadBytes(legacyPath, bytes))
+        return std::filesystem::exists(legacyPath)
+            ? LoadResult::IoError
+            : LoadResult::NotFound;
+    return JsonToHistory(std::string(bytes.begin(), bytes.end()), history, false)
+        ? LoadResult::Loaded
+        : LoadResult::InvalidFormat;
+#endif
+}
+
+const char* LoadResultName(LoadResult result) {
+    switch (result) {
+    case LoadResult::Loaded:          return "loaded";
+    case LoadResult::NotFound:        return "not found";
+    case LoadResult::Migrated:        return "migrated";
+    case LoadResult::LoadedLegacy:    return "loaded legacy";
+    case LoadResult::DecryptionFailed:return "decryption failed";
+    case LoadResult::InvalidFormat:   return "invalid format";
+    case LoadResult::IoError:         return "I/O error";
+    default:                          return "unknown";
+    }
+}
+
+bool AllowsPersistence(LoadResult result) {
+    return result == LoadResult::Loaded ||
+           result == LoadResult::NotFound ||
+           result == LoadResult::Migrated ||
+           result == LoadResult::LoadedLegacy;
+}
+
+bool Save(const std::string& profileId, const ClipboardHistory& history) {
+    std::error_code directoryError;
+    std::filesystem::create_directories(Directory(), directoryError);
+    if (directoryError)
+        return false;
+
+    const std::string jsonText = HistoryToJson(profileId, history).dump();
+    std::vector<uint8_t> plaintext(jsonText.begin(), jsonText.end());
+
+#ifdef _WIN32
+    std::vector<uint8_t> protectedData;
+    const bool protectedOk = DpapiProtection::Protect(plaintext, protectedData);
+    if (!plaintext.empty())
+        SecureZeroMemory(plaintext.data(), plaintext.size());
+    if (!protectedOk)
+        return false;
+
+    std::vector<uint8_t> envelope = BuildEnvelope(protectedData);
+    if (envelope.empty())
+        return false;
+    return WriteBytesAtomically(PathForProfile(profileId), envelope);
+#else
+    return WriteBytesAtomically(LegacyPathForProfile(profileId), plaintext);
+#endif
+}
 } // namespace ClipboardHistoryStore
