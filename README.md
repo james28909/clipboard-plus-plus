@@ -52,6 +52,10 @@ Use the tray menu or `Ctrl+Shift+,` to open Settings. The General page includes 
 |---|---|
 | [<img src="docs/images/Settings-Hotkeys.png" alt="Hotkey settings" width="420">](docs/images/Settings-Hotkeys.png) | [<img src="docs/images/Settings-Android.png" alt="Android settings" width="420">](docs/images/Settings-Android.png) |
 
+| Systray |
+|---|---|
+| [<img src="docs/images/Systray-Popup.png" alt="Systray-Popup" width="420">](docs/images/Systray-Popup.png) |
+
 </details>
 
 ## Core workflow
