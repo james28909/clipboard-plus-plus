@@ -1,6 +1,7 @@
 #include "ImageStore.h"
 #include "../app/ConfigStore.h"
 #include "../security/DpapiProtection.h"
+#include "../security/EncryptedSqliteVfs.h"
 #include "../../third_party/sqlite/sqlite3.h"
 
 #include <windows.h>
@@ -21,7 +22,7 @@
 #pragma comment(lib, "ole32.lib")
 
 // ---------------------------------------------------------------------------
-// GDI+ lifetime — reference-counted so multiple ImageStore instances are safe
+// GDI+ lifetime - reference-counted so multiple ImageStore instances are safe
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -119,7 +120,7 @@ std::unique_ptr<Gdiplus::Bitmap> BitmapFromDib(const std::vector<uint8_t>& dib) 
 }
 
 // ---------------------------------------------------------------------------
-// Proportional scale — returns new unique_ptr if scaling needed, null if not.
+// Proportional scale - returns new unique_ptr if scaling needed, null if not.
 // ---------------------------------------------------------------------------
 
 std::unique_ptr<Gdiplus::Bitmap> ScaleIfNeeded(Gdiplus::Bitmap& src, bool doScale, int maxDim) {
@@ -287,10 +288,14 @@ bool ImageStore::Open(const std::filesystem::path& dbPath) {
     std::error_code ec;
     std::filesystem::create_directories(dbPath.parent_path(), ec);
 
-    const std::string pathUtf8 = dbPath.u8string();
-    if (sqlite3_open_v2(pathUtf8.c_str(), &m_db,
-                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
-                        SQLITE_OPEN_FULLMUTEX, nullptr) != SQLITE_OK) {
+    std::string encryptionError;
+    if (!EncryptedSqliteVfs::MigratePlaintextDatabase(dbPath, &encryptionError) ||
+        EncryptedSqliteVfs::Open(
+            dbPath, &m_db,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+            &encryptionError) != SQLITE_OK) {
+        if (m_db)
+            sqlite3_close(m_db);
         m_db = nullptr;
         return false;
     }
@@ -333,7 +338,7 @@ bool ImageStore::CreateSchema() {
         return false;
 
     // Migrate older DBs that lack the stored_format column.
-    // SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS — just attempt the add
+    // SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS - just attempt the add
     // and ignore the error if the column already exists ("duplicate column name").
     sqlite3_exec(m_db,
         "ALTER TABLE images ADD COLUMN stored_format INTEGER NOT NULL DEFAULT 1;",
@@ -430,8 +435,13 @@ void ImageStore::SetSettings(const ImageSettings& s) {
     m_maxImages       = s.maxImages;
 }
 
+void ImageStore::SetProtectedImageIdsProvider(
+    ProtectedImageIdsProvider provider) {
+    m_protectedImageIdsProvider = std::move(provider);
+}
+
 // ---------------------------------------------------------------------------
-// StoreImage — unified capture entry point
+// StoreImage - unified capture entry point
 // ---------------------------------------------------------------------------
 
 std::string ImageStore::StoreImage(const std::vector<uint8_t>& rawBytes, bool isPng,
@@ -525,7 +535,7 @@ std::string ImageStore::StoreImage(const std::vector<uint8_t>& rawBytes, bool is
     }
 
     if (!id.empty())
-        EnforceMaxImages();
+        EnforceMaxImages(id);
     return id;
 }
 
@@ -630,6 +640,16 @@ std::vector<uint8_t> ImageStore::GetPng(const std::string& id) const {
     return result;
 }
 
+bool ImageStore::GetStoredBytes(const std::string& id,
+                                std::vector<uint8_t>& bytes,
+                                StoredFormat& format) const {
+    int storedFormat = static_cast<int>(StoredFormat::Png);
+    if (!ReadProtectedBlob(id, bytes, &storedFormat))
+        return false;
+    format = static_cast<StoredFormat>(storedFormat);
+    return true;
+}
+
 HGLOBAL ImageStore::GetDibForPaste(const std::string& id) const {
     std::vector<uint8_t> data;
     int format{};
@@ -638,7 +658,7 @@ HGLOBAL ImageStore::GetDibForPaste(const std::string& id) const {
 
     HGLOBAL result = nullptr;
     if (format == static_cast<int>(StoredFormat::RawDib)) {
-        // Return raw DIB bytes directly as HGLOBAL — no conversion needed
+        // Return raw DIB bytes directly as HGLOBAL - no conversion needed
         result = GlobalAlloc(GMEM_MOVEABLE, data.size());
         if (result) {
             void* ptr = GlobalLock(result);
@@ -651,7 +671,7 @@ HGLOBAL ImageStore::GetDibForPaste(const std::string& id) const {
             }
         }
     } else {
-        // PNG or JPEG — load via GDI+ and convert to DIB
+        // PNG or JPEG - load via GDI+ and convert to DIB
         auto bmp = BitmapFromBytes(data);
         if (bmp) result = BitmapToDibGlobal(*bmp);
     }
@@ -661,7 +681,7 @@ HGLOBAL ImageStore::GetDibForPaste(const std::string& id) const {
 }
 
 // ---------------------------------------------------------------------------
-// Static helper — kept for backward compat with any callers
+// Static helper - kept for backward compat with any callers
 // ---------------------------------------------------------------------------
 
 HGLOBAL ImageStore::PngToDibGlobal(const std::vector<uint8_t>& imageBytes) {
@@ -783,10 +803,10 @@ void ImageStore::DeleteAll() {
 }
 
 // ---------------------------------------------------------------------------
-// Max-images enforcement — purges oldest rows when limit is exceeded
+// Max-images enforcement - purges oldest rows when limit is exceeded
 // ---------------------------------------------------------------------------
 
-void ImageStore::EnforceMaxImages() {
+void ImageStore::EnforceMaxImages(const std::string& newlyStoredId) {
     if (!m_db || m_maxImages <= 0) return;
 
     sqlite3_stmt* stmt = nullptr;
@@ -800,12 +820,42 @@ void ImageStore::EnforceMaxImages() {
 
     if (count <= m_maxImages) return;
 
-    const int64_t toDelete = count - m_maxImages;
-    const std::string sql =
-        "DELETE FROM images WHERE id IN"
-        " (SELECT id FROM images ORDER BY captured_at ASC LIMIT " +
-        std::to_string(toDelete) + ");";
-    sqlite3_exec(m_db, sql.c_str(), nullptr, nullptr, nullptr);
+    std::unordered_set<std::string> protectedIds;
+    if (m_protectedImageIdsProvider)
+        protectedIds = m_protectedImageIdsProvider();
+    if (!newlyStoredId.empty())
+        protectedIds.insert(newlyStoredId);
+
+    int64_t toDelete = count - m_maxImages;
+    if (sqlite3_prepare_v2(m_db,
+            "SELECT id FROM images ORDER BY captured_at ASC;",
+            -1, &stmt, nullptr) != SQLITE_OK)
+        return;
+    std::vector<std::string> deletions;
+    while (toDelete > 0 && sqlite3_step(stmt) == SQLITE_ROW) {
+        const auto* text = sqlite3_column_text(stmt, 0);
+        if (!text) continue;
+        const std::string id(reinterpret_cast<const char*>(text));
+        if (protectedIds.find(id) != protectedIds.end())
+            continue;
+        deletions.push_back(id);
+        --toDelete;
+    }
+    sqlite3_finalize(stmt);
+
+    if (deletions.empty()) return;
+    sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
+    if (sqlite3_prepare_v2(m_db, "DELETE FROM images WHERE id=?;",
+                           -1, &stmt, nullptr) == SQLITE_OK) {
+        for (const std::string& id : deletions) {
+            sqlite3_reset(stmt);
+            sqlite3_clear_bindings(stmt);
+            sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(stmt);
+        }
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr);
 }
 
 // ---------------------------------------------------------------------------

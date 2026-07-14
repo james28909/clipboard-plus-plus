@@ -4,10 +4,14 @@
 #include "ScreenshotTracker.h"
 #include "../util/Win32Util.h"
 #include <shellapi.h>   // DragQueryFileW
+#include <cctype>
 #include <chrono>
+#include <cstring>
+#include <cwchar>
 #include <fstream>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <vector>
 
 static constexpr wchar_t kMonitorClass[] = L"CPPClipboardMonitor";
@@ -18,6 +22,112 @@ namespace {
 
 constexpr uint64_t kFnvOffset = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
+constexpr uint64_t kMaxPreservedFormatBytes = 16ull * 1024ull * 1024ull;
+constexpr uint64_t kMaxPreservedBundleBytes = 32ull * 1024ull * 1024ull;
+
+std::string ClipboardFormatName(UINT format) {
+    switch (format) {
+    case CF_TEXT: return "CF_TEXT";
+    case CF_BITMAP: return "CF_BITMAP";
+    case CF_METAFILEPICT: return "CF_METAFILEPICT";
+    case CF_SYLK: return "CF_SYLK";
+    case CF_DIF: return "CF_DIF";
+    case CF_TIFF: return "CF_TIFF";
+    case CF_OEMTEXT: return "CF_OEMTEXT";
+    case CF_DIB: return "CF_DIB";
+    case CF_PALETTE: return "CF_PALETTE";
+    case CF_PENDATA: return "CF_PENDATA";
+    case CF_RIFF: return "CF_RIFF";
+    case CF_WAVE: return "CF_WAVE";
+    case CF_UNICODETEXT: return "CF_UNICODETEXT";
+    case CF_ENHMETAFILE: return "CF_ENHMETAFILE";
+    case CF_HDROP: return "CF_HDROP";
+    case CF_LOCALE: return "CF_LOCALE";
+    case CF_DIBV5: return "CF_DIBV5";
+    case CF_OWNERDISPLAY: return "CF_OWNERDISPLAY";
+    case CF_DSPTEXT: return "CF_DSPTEXT";
+    case CF_DSPBITMAP: return "CF_DSPBITMAP";
+    case CF_DSPMETAFILEPICT: return "CF_DSPMETAFILEPICT";
+    case CF_DSPENHMETAFILE: return "CF_DSPENHMETAFILE";
+    default: break;
+    }
+
+    if (format >= 0xC000) {
+        wchar_t name[256]{};
+        const int length = GetClipboardFormatNameW(format, name, 256);
+        if (length > 0)
+            return win32util::WideToUtf8(name, length);
+    }
+    if (format >= CF_PRIVATEFIRST && format <= CF_PRIVATELAST)
+        return "CF_PRIVATE+" + std::to_string(format - CF_PRIVATEFIRST);
+    if (format >= CF_GDIOBJFIRST && format <= CF_GDIOBJLAST)
+        return "CF_GDIOBJ+" + std::to_string(format - CF_GDIOBJFIRST);
+    return "Format " + std::to_string(format);
+}
+
+bool EqualsFormatName(const std::string& value, const char* expected) {
+    if (value.size() != std::strlen(expected))
+        return false;
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(value[i])) !=
+            std::tolower(static_cast<unsigned char>(expected[i])))
+            return false;
+    }
+    return true;
+}
+
+bool IsSafeHGlobalFormat(UINT format, const std::string& name) {
+    if (format == CF_UNICODETEXT || format == CF_DIB || format == CF_DIBV5 ||
+        format == CF_HDROP || format == CF_LOCALE)
+        return true;
+    return EqualsFormatName(name, "HTML Format") ||
+           EqualsFormatName(name, "Rich Text Format") ||
+           EqualsFormatName(name, "PNG") ||
+           EqualsFormatName(name, "JFIF");
+}
+
+void CaptureFormatBundle(ClipboardItem& item) {
+    uint64_t preservedBytes = 0;
+    UINT format = 0;
+    uint32_t order = 0;
+    while ((format = EnumClipboardFormats(format)) != 0) {
+        ClipboardFormatRecord record;
+        record.formatId = format;
+        record.name = ClipboardFormatName(format);
+        record.order = order++;
+        record.replaySafe = IsSafeHGlobalFormat(format, record.name);
+        record.status = ClipboardFormatStatus::MetadataOnly;
+
+        if (record.replaySafe) {
+            HANDLE handle = GetClipboardData(format);
+            if (!handle) {
+                record.status = ClipboardFormatStatus::ReadFailed;
+            } else {
+                const SIZE_T size = GlobalSize(handle);
+                record.byteSize = static_cast<uint64_t>(size);
+                if (size == 0) {
+                    record.status = ClipboardFormatStatus::ReadFailed;
+                } else if (record.byteSize > kMaxPreservedFormatBytes ||
+                           preservedBytes > kMaxPreservedBundleBytes -
+                                                std::min(record.byteSize, kMaxPreservedBundleBytes)) {
+                    record.status = ClipboardFormatStatus::TooLarge;
+                } else {
+                    const auto* bytes = static_cast<const uint8_t*>(GlobalLock(handle));
+                    if (!bytes) {
+                        record.status = ClipboardFormatStatus::ReadFailed;
+                    } else {
+                        record.data.assign(bytes, bytes + size);
+                        GlobalUnlock(handle);
+                        record.status = ClipboardFormatStatus::Preserved;
+                        preservedBytes += record.byteSize;
+                    }
+                }
+            }
+        }
+
+        item.formats.push_back(std::move(record));
+    }
+}
 
 uint64_t StableImageHash(const std::vector<uint8_t>& bytes, int width, int height, bool pngDirect) {
     uint64_t hash = kFnvOffset;
@@ -115,7 +225,60 @@ void ClipboardMonitor::Stop() {
 }
 
 void ClipboardMonitor::SuppressNextUpdate() {
-    m_ignoreUntilTick = GetTickCount64() + 250;
+    m_suppressNextBaseline.store(GetClipboardSequenceNumber());
+    m_suppressNextArmed.store(true);
+}
+
+void ClipboardMonitor::BeginSelfWrite() {
+    if (m_selfWriteDepth.fetch_add(1) == 0) {
+        static std::atomic<uint64_t> nextToken{1};
+        m_selfWriteStartSeq.store(GetClipboardSequenceNumber());
+        m_selfWriteToken.store(nextToken.fetch_add(1));
+    }
+}
+
+void ClipboardMonitor::MarkSelfWrite() {
+    if (m_selfWriteDepth.load() <= 0)
+        return;
+
+    const UINT format = RegisterClipboardFormatW(L"Clipboard++ Self Write Token v1");
+    if (!format)
+        return;
+
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(uint64_t));
+    if (!memory)
+        return;
+    void* data = GlobalLock(memory);
+    if (!data) {
+        GlobalFree(memory);
+        return;
+    }
+    *static_cast<uint64_t*>(data) = m_selfWriteToken.load();
+    GlobalUnlock(memory);
+    if (!SetClipboardData(format, memory))
+        GlobalFree(memory);
+}
+
+void ClipboardMonitor::EndSelfWrite() {
+    const int previousDepth = m_selfWriteDepth.fetch_sub(1);
+    if (previousDepth <= 0) {
+        m_selfWriteDepth.store(0);
+        return;
+    }
+    if (previousDepth != 1)
+        return;
+
+    const DWORD finalSeq = GetClipboardSequenceNumber();
+    if (finalSeq != m_selfWriteStartSeq.load())
+        m_suppressedSelfSeq.store(finalSeq);
+}
+
+void ClipboardMonitor::SetCaptureEnabled(bool enabled) {
+    m_captureEnabled = enabled;
+    m_lastSeq = GetClipboardSequenceNumber();
+    m_suppressNextArmed.store(false);
+    m_suppressedSelfSeq.store(0);
+    m_selfWriteDepth.store(0);
 }
 
 // -- Private: Win32 message handler -------------------------------------------
@@ -145,10 +308,25 @@ void ClipboardMonitor::OnClipboardUpdate() {
     if (seq == m_lastSeq) return;
     m_lastSeq = seq;
 
-    if (m_ignoreUntilTick && GetTickCount64() <= m_ignoreUntilTick) {
+    if (!m_captureEnabled)
+        return;
+
+    if (m_selfWriteDepth.load() > 0)
+        return;
+
+    // A token survives additional sequence changes caused by delayed or
+    // incrementally rendered formats, unlike a one-notification flag.
+    if (ClipboardHasCurrentSelfWriteToken())
+        return;
+
+    if (seq == m_suppressedSelfSeq.exchange(0))
+        return;
+
+    if (m_suppressNextArmed.load() &&
+        seq != m_suppressNextBaseline.load() &&
+        m_suppressNextArmed.exchange(false)) {
         return;
     }
-    m_ignoreUntilTick = 0;
 
     ClipboardItem item = ReadClipboard();
     if (item.IsEmpty()) return;
@@ -174,6 +352,25 @@ void ClipboardMonitor::OnClipboardUpdate() {
 
     if (m_callback)
         m_callback(std::move(item));
+}
+
+bool ClipboardMonitor::ClipboardHasCurrentSelfWriteToken() const {
+    const uint64_t expected = m_selfWriteToken.load();
+    if (expected == 0)
+        return false;
+    const UINT format = RegisterClipboardFormatW(L"Clipboard++ Self Write Token v1");
+    if (!format || !IsClipboardFormatAvailable(format) || !OpenClipboard(m_hwnd))
+        return false;
+
+    bool matches = false;
+    if (HANDLE handle = GetClipboardData(format)) {
+        if (const void* data = GlobalLock(handle)) {
+            matches = *static_cast<const uint64_t*>(data) == expected;
+            GlobalUnlock(handle);
+        }
+    }
+    CloseClipboard();
+    return matches;
 }
 
 // -- Private: clipboard reading ------------------------------------------------
@@ -272,6 +469,7 @@ ClipboardItem ClipboardMonitor::ReadClipboard() const {
     else if (IsImageAvailable()) {
         ReadImageFormats(item);
     }
+    CaptureFormatBundle(item);
     CloseClipboard();
 
     if (item.IsEmpty()) return item; // nothing readable
@@ -308,7 +506,7 @@ void ClipboardMonitor::ReadImageFormats(ClipboardItem& item) const {
     std::vector<uint8_t> rawBytes; // DIB bytes (for GDI+ path) or PNG bytes directly
     bool isPngDirect = false;      // true when rawBytes already contains a PNG
 
-    // Priority 1: PNG clipboard format — already perfect, no conversion needed
+    // Priority 1: PNG clipboard format - already perfect, no conversion needed
     if (IsClipboardFormatAvailable(CF_PNG)) {
         HANDLE h = GetClipboardData(CF_PNG);
         if (h) {
@@ -322,7 +520,7 @@ void ClipboardMonitor::ReadImageFormats(ClipboardItem& item) const {
         }
     }
 
-    // Priority 2: CF_DIBV5 — higher quality DIB with alpha + ICC profile
+    // Priority 2: CF_DIBV5 - higher quality DIB with alpha + ICC profile
     if (rawBytes.empty() && IsClipboardFormatAvailable(CF_DIBV5)) {
         HANDLE h = GetClipboardData(CF_DIBV5);
         if (h) {
@@ -338,7 +536,7 @@ void ClipboardMonitor::ReadImageFormats(ClipboardItem& item) const {
         }
     }
 
-    // Priority 3: CF_DIB — standard DIB
+    // Priority 3: CF_DIB - standard DIB
     if (rawBytes.empty() && IsClipboardFormatAvailable(CF_DIB)) {
         HANDLE h = GetClipboardData(CF_DIB);
         if (h) {
@@ -354,7 +552,7 @@ void ClipboardMonitor::ReadImageFormats(ClipboardItem& item) const {
         }
     }
 
-    // Priority 4: CF_BITMAP — legacy HBITMAP, convert to DIB
+    // Priority 4: CF_BITMAP - legacy HBITMAP, convert to DIB
     if (rawBytes.empty() && IsClipboardFormatAvailable(CF_BITMAP)) {
         HBITMAP hbmp = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP));
         if (hbmp) {

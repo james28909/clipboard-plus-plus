@@ -1,5 +1,7 @@
 #pragma once
 
+struct ClipboardItem;
+
 class MainWindow {
 public:
     // Pixel dimensions shared with Application's WM_NCHITTEST handler
@@ -9,6 +11,7 @@ public:
     // Draw all panels. Called once per frame when the window is visible.
     static void Draw(bool& open);
     static void RequestFocus();
+    static void OpenDiffView(const ClipboardItem& left, const ClipboardItem& right);
 
 private:
     static void DrawTitleBar();
@@ -24,4 +27,5 @@ private:
     static void DrawPrivacy();
     static void DrawDeveloper();
     static void DrawAbout();
+    static void DrawDiffView();
 };

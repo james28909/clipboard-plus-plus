@@ -57,15 +57,15 @@ void MainWindow::DrawAbout() {
     ImGui::Spacing();
 
     ImGui::TextDisabled("Built with:");
-    ImGui::BulletText("Dear ImGui (docking branch)  —  ocornut/imgui");
+    ImGui::BulletText("Dear ImGui (docking branch)  -  ocornut/imgui");
     ImGui::BulletText("nlohmann/json v3.11.3");
     ImGui::BulletText("SQLite 3.45.0");
     ImGui::BulletText("DirectX 11 / WIC / Win32 API");
 
     ImGui::Spacing();
     ImGui::TextDisabled("Tools:");
-    ImGui::BulletText("SQLite Editor  —  standalone database browser");
-    ImGui::BulletText("JSON Viewer    —  standalone JSON file viewer");
+    ImGui::BulletText("SQLite Editor  -  standalone database browser");
+    ImGui::BulletText("JSON Viewer    -  standalone JSON file viewer");
 
     ImGui::Spacing();
     ImGui::TextDisabled("License: MIT");

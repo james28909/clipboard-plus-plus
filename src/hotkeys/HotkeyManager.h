@@ -39,6 +39,7 @@ static constexpr UINT VK_END = 0x23;
 static constexpr UINT VK_PRIOR = 0x21;
 static constexpr UINT VK_NEXT = 0x22;
 #endif
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,47 @@ enum class HotkeyAction : WPARAM {
     SendSelectionToAndroid = 13,
     PasteSelectedItems = 14,
     ClearSelectedItems = 15,
+    PasteNamedSlot = 16,
+};
+
+enum class ModifierSide : uint8_t {
+    Any = 0,
+    Left = 1,
+    Right = 2,
+};
+
+struct ModifierState {
+    static constexpr uint8_t LeftCtrlBit = 1u << 0;
+    static constexpr uint8_t RightCtrlBit = 1u << 1;
+    static constexpr uint8_t LeftShiftBit = 1u << 2;
+    static constexpr uint8_t RightShiftBit = 1u << 3;
+    static constexpr uint8_t LeftAltBit = 1u << 4;
+    static constexpr uint8_t RightAltBit = 1u << 5;
+    bool leftCtrl{};
+    bool rightCtrl{};
+    bool leftShift{};
+    bool rightShift{};
+    bool leftAlt{};
+    bool rightAlt{};
+
+    bool Ctrl() const { return leftCtrl || rightCtrl; }
+    bool Shift() const { return leftShift || rightShift; }
+    bool Alt() const { return leftAlt || rightAlt; }
+    uint8_t Mask() const {
+        return static_cast<uint8_t>(
+            (leftCtrl ? LeftCtrlBit : 0) |
+            (rightCtrl ? RightCtrlBit : 0) |
+            (leftShift ? LeftShiftBit : 0) |
+            (rightShift ? RightShiftBit : 0) |
+            (leftAlt ? LeftAltBit : 0) |
+            (rightAlt ? RightAltBit : 0));
+    }
+    static ModifierState FromMask(uint8_t mask) {
+        return {
+            (mask & LeftCtrlBit) != 0, (mask & RightCtrlBit) != 0,
+            (mask & LeftShiftBit) != 0, (mask & RightShiftBit) != 0,
+            (mask & LeftAltBit) != 0, (mask & RightAltBit) != 0};
+    }
 };
 
 struct KeyBinding {
@@ -74,10 +116,54 @@ struct KeyBinding {
     UINT         vkey{0};
     HotkeyAction action{HotkeyAction::None};
     int          data{0};
+    ModifierSide ctrlSide{ModifierSide::Any};
+    ModifierSide shiftSide{ModifierSide::Any};
+    ModifierSide altSide{ModifierSide::Any};
+    uint8_t physicalModifiers{0};
+    bool exactModifiers{false};
 
-    bool Matches(bool c, bool s, bool a, UINT vk) const {
-        return ctrl == c && shift == s && alt == a && vkey == vk;
+    static bool SideMatches(ModifierSide side, bool left, bool right) {
+        return side == ModifierSide::Any ||
+               (side == ModifierSide::Left && left) ||
+               (side == ModifierSide::Right && right);
     }
+    static bool SidesOverlap(ModifierSide a, ModifierSide b) {
+        return a == ModifierSide::Any || b == ModifierSide::Any || a == b;
+    }
+    bool ModifiersMatch(const ModifierState& state) const {
+        if (exactModifiers)
+            return physicalModifiers == state.Mask();
+        return ctrl == state.Ctrl() && shift == state.Shift() &&
+               alt == state.Alt() &&
+               (!ctrl || SideMatches(ctrlSide, state.leftCtrl, state.rightCtrl)) &&
+               (!shift || SideMatches(shiftSide, state.leftShift, state.rightShift)) &&
+               (!alt || SideMatches(altSide, state.leftAlt, state.rightAlt));
+    }
+    bool Matches(const ModifierState& state, UINT vk) const {
+        return vkey == vk && ModifiersMatch(state);
+    }
+    bool Overlaps(const KeyBinding& other) const {
+        if (vkey != other.vkey)
+            return false;
+        if (exactModifiers && other.exactModifiers)
+            return physicalModifiers == other.physicalModifiers;
+        if (exactModifiers)
+            return other.Matches(ModifierState::FromMask(physicalModifiers), vkey);
+        if (other.exactModifiers)
+            return Matches(ModifierState::FromMask(other.physicalModifiers), vkey);
+        return ctrl == other.ctrl && shift == other.shift && alt == other.alt &&
+               (!ctrl || SidesOverlap(ctrlSide, other.ctrlSide)) &&
+               (!shift || SidesOverlap(shiftSide, other.shiftSide)) &&
+               (!alt || SidesOverlap(altSide, other.altSide));
+    }
+};
+
+struct SlotBankSettings {
+    bool enabled{true};
+    KeyBinding chord{};
+    bool numberKeys{true};
+    bool letterKeys{true};
+    bool functionKeys{false};
 };
 
 struct HotkeySettings {
@@ -87,6 +173,14 @@ struct HotkeySettings {
     bool hiddenPasteShift{false};
     bool hiddenPasteAlt{true};
     bool hiddenPasteFunctionKeys{true};
+    uint8_t hiddenPasteCtrlSides{3};
+    uint8_t hiddenPasteShiftSides{0};
+    uint8_t hiddenPasteAltSides{3};
+    SlotBankSettings popupHistoryBank{};
+    SlotBankSettings globalHistoryBank{};
+    SlotBankSettings pinnedHistoryBank{};
+    SlotBankSettings profileBank{};
+    bool hotkeyDoubleTaps{false};
 };
 
 class HotkeyManager {
@@ -104,6 +198,7 @@ public:
     const HotkeySettings& GetSettings() const { return m_settings; }
 
     void BeginCapture();
+    void BeginModifierCapture();
     void CancelCapture();
     bool IsCapturing() const { return m_captureActive; }
     bool ConsumeCapturedBinding(KeyBinding& binding);
@@ -111,6 +206,7 @@ public:
     bool IsCtrlDown() const { return m_ctrlDown; }
     bool IsShiftDown() const { return m_shiftDown; }
     bool IsAltDown() const { return m_altDown; }
+    bool IsLeftAltDown() const { return m_leftAltDown; }
 
     // Default bindings returned as a starting point for settings UI.
     static std::vector<KeyBinding> DefaultBindings();
@@ -120,7 +216,47 @@ public:
     static std::string SlotLabelText(int slot);
     static const char* ActionName(HotkeyAction action);
     static std::string BindingText(const KeyBinding& binding);
-    static std::string ModifiersText(bool ctrl, bool shift, bool alt);
+    static std::string ModifierChordText(const KeyBinding& binding);
+    static int BankSlotFromVKey(const SlotBankSettings& bank, UINT vk) {
+        if (bank.numberKeys && vk >= '1' && vk <= '9')
+            return static_cast<int>(vk - '1');
+        if (bank.letterKeys && vk >= 'A' && vk <= 'Z')
+            return 9 + static_cast<int>(vk - 'A');
+        if (bank.functionKeys && vk >= VK_F1 && vk <= VK_F12)
+            return 35 + static_cast<int>(vk - VK_F1);
+        return -1;
+    }
+    static HotkeyAction ResolveSlotBank(const HotkeySettings& settings,
+                                        const ModifierState& modifiers,
+                                        UINT vk, bool popupAvailable,
+                                        int& slot) {
+        struct Candidate {
+            const SlotBankSettings* bank;
+            HotkeyAction action;
+            bool available;
+        };
+        const Candidate candidates[] = {
+            {&settings.globalHistoryBank, HotkeyAction::PasteHistorySlot, true},
+            {&settings.pinnedHistoryBank, HotkeyAction::PastePinnedSlot, true},
+            {&settings.profileBank, HotkeyAction::SelectClipboardProfileSlot, true},
+            {&settings.popupHistoryBank, HotkeyAction::PasteVisibleSlot, popupAvailable},
+        };
+        for (const Candidate& candidate : candidates) {
+            if (!candidate.available || !candidate.bank->enabled ||
+                !candidate.bank->chord.ModifiersMatch(modifiers))
+                continue;
+            const int resolved = BankSlotFromVKey(*candidate.bank, vk);
+            if (resolved < 0) continue;
+            slot = resolved;
+            return candidate.action;
+        }
+        slot = -1;
+        return HotkeyAction::None;
+    }
+    static std::string ModifiersText(bool ctrl, bool shift, bool alt,
+                                     ModifierSide ctrlSide = ModifierSide::Any,
+                                     ModifierSide shiftSide = ModifierSide::Any,
+                                     ModifierSide altSide = ModifierSide::Any);
 
 private:
     static LRESULT CALLBACK LLProc(int nCode, WPARAM wParam, LPARAM lParam);
@@ -128,7 +264,10 @@ private:
 
     // Called on WM_KEYDOWN / WM_SYSKEYDOWN.
     // Returns true if the key should be consumed.
-    bool HandleKeyDown(UINT vk, bool ctrl, bool shift, bool alt);
+    bool HandleKeyDown(UINT vk, const ModifierState& modifiers);
+    bool HandleKeyUp(UINT vk, const ModifierState& modifiers);
+    void ClearPendingDoubleTap();
+    void DispatchPendingSingleTap();
 
     // Forward a raw key event to the popup's HWND so ImGui can process it.
     void ForwardKeyToPopup(UINT vk, bool shift) const;
@@ -143,11 +282,30 @@ private:
     HotkeySettings          m_settings;
     bool                    m_captureActive{false};
     bool                    m_captureReady{false};
+    bool                    m_modifierCaptureMode{false};
+    uint8_t                 m_modifierCaptureMask{};
     KeyBinding              m_capturedBinding{};
     bool                    m_ctrlDown{false};
     bool                    m_shiftDown{false};
     bool                    m_altDown{false};
+    bool                    m_leftCtrlDown{false};
+    bool                    m_rightCtrlDown{false};
+    bool                    m_leftShiftDown{false};
+    bool                    m_rightShiftDown{false};
+    bool                    m_leftAltDown{false};
+    bool                    m_rightAltDown{false};
     bool                    m_actionKeyDown[256]{};
+    bool                    m_pendingDoubleTap{false};
+    bool                    m_pendingTriggerReleased{false};
+    UINT                    m_pendingTrigger{};
+    uint8_t                 m_pendingModifierMask{};
+    HotkeyAction            m_pendingSingleAction{HotkeyAction::None};
+    int                     m_pendingSingleData{};
+    HotkeyAction            m_pendingDoubleAction{HotkeyAction::None};
+    int                     m_pendingDoubleData{};
+    bool                    m_completedDoubleTap{false};
+    UINT                    m_completedDoubleTrigger{};
+    uint8_t                 m_completedDoubleModifierMask{};
 
     static HotkeyManager*   s_instance;
 };

@@ -41,7 +41,7 @@ static std::wstring Utf8ToWide(const std::string& s) {
 }
 
 // ---------------------------------------------------------------------------
-// Value parser — infers JSON type from a text buffer
+// Value parser - infers JSON type from a text buffer
 // ---------------------------------------------------------------------------
 static nlohmann::ordered_json ParseValue(const char* buf) {
     std::string s = buf;
@@ -51,7 +51,7 @@ static nlohmann::ordered_json ParseValue(const char* buf) {
     if (s == "true")  return true;
     if (s == "false") return false;
     if (s == "null")  return nullptr;
-    // JSON object/array — try to parse
+    // JSON object/array - try to parse
     if (s.front() == '{' || s.front() == '[') {
         try { return nlohmann::ordered_json::parse(s); } catch (...) {}
     }
@@ -1138,7 +1138,7 @@ void JsonViewerApp::DrawJsonNode(const std::string& key, nlohmann::ordered_json&
 }
 
 // ---------------------------------------------------------------------------
-// ContainsMatch — lsearch must be pre-lowercased by the caller
+// ContainsMatch - lsearch must be pre-lowercased by the caller
 // ---------------------------------------------------------------------------
 bool JsonViewerApp::ContainsMatch(const nlohmann::ordered_json& node,
                                   const std::string& lsearch) {
@@ -1202,7 +1202,7 @@ void JsonViewerApp::DrawRawPanel(float height) {
 }
 
 // ---------------------------------------------------------------------------
-// Detail panel — shows and edits the selected node's key and value
+// Detail panel - shows and edits the selected node's key and value
 // ---------------------------------------------------------------------------
 void JsonViewerApp::DrawDetailPanel(float panelW, float availH) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{0.090f, 0.090f, 0.095f, 1.0f});
@@ -1304,7 +1304,7 @@ void JsonViewerApp::DrawDetailPanel(float panelW, float availH) {
     snprintf(valId, sizeof(valId), "##dval%d", m_selGeneration);
 
     if (!isContainer) {
-        // Scalar value — editable
+        // Scalar value - editable
         ImGui::InputTextMultiline(valId, m_detailValBuf, sizeof(m_detailValBuf),
             {-1.0f, valH});
         const bool valDeact = ImGui::IsItemDeactivatedAfterEdit();
@@ -1343,7 +1343,7 @@ void JsonViewerApp::DrawDetailPanel(float panelW, float availH) {
             } catch (...) {}
         }
     } else {
-        // Container — read-only display
+        // Container - read-only display
         ImGui::InputTextMultiline(valId,
             const_cast<char*>(m_selValue.c_str()), m_selValue.size() + 1,
             {-1.0f, valH}, ImGuiInputTextFlags_ReadOnly);

@@ -15,9 +15,9 @@ struct ClipboardProfileConfig {
     std::string processName;
 };
 
-// Values are persisted in config.json — do not renumber existing entries.
+// Values are persisted in config.json - do not renumber existing entries.
 enum class ImageFormat {
-    PNG  = 0,  // convert to PNG (lossless, much smaller than raw DIB) — default
+    PNG  = 0,  // convert to PNG (lossless, much smaller than raw DIB) - default
     JPEG = 1,  // convert to JPEG (lossy, smallest file size)
     Raw  = 2   // store exact clipboard bytes with no GDI+ conversion
 };
@@ -82,10 +82,15 @@ struct AppConfig {
     std::vector<CustomFilter> customFilters;
     std::vector<std::string> popupButtonOrder;
     bool newItemsAtTop{true};
+    int activeHistoryLimit{500};
+    bool deduplicateHistory{true};
+    bool vaultUnlimited{true};
+    int vaultLimitMB{256};
     bool appendNewlineAfterPaste{false};
     bool hidePopupOnOutsideClick{false};
     int pasteMoveTarget{0}; // 0=keep, 1=top, 2=bottom
     std::string activeClipboardId{"default"};
+    bool profilesStoredInDatabase{false};
 #ifdef NDEBUG
     bool autoSwitchClipboardByProcess{false};
     bool autoCreateClipboardByProcess{false};

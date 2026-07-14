@@ -29,7 +29,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "clipboard-plus-plus"
-            VALUE "FileDescription",  "SQLite Editor — Clipboard++ Tool"
+            VALUE "FileDescription",  "SQLite Editor - Clipboard++ Tool"
             VALUE "FileVersion",      "1.0.0.0"
             VALUE "InternalName",     "sqlite_editor"
             VALUE "OriginalFilename", "sqlite_editor.exe"

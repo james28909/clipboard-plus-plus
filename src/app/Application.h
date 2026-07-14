@@ -8,9 +8,11 @@
 #include "ConfigStore.h"
 #include "../android/AndroidIntegration.h"
 #include "../clipboard/ClipboardHistory.h"
+#include "../clipboard/ClipboardDatabase.h"
 #include "../clipboard/ClipboardProfileManager.h"
 #include "../ui/Appearance.h"
 #include "../hotkeys/HotkeyManager.h"
+#include "../ipc/IpcProtocol.h"
 
 class TrayIcon;
 class ClipboardMonitor;
@@ -28,14 +30,6 @@ constexpr UINT WM_SHOWPOPUP     = WM_APP + 3;
 constexpr UINT WM_HOTKEYACTION  = WM_APP + 4;
 constexpr UINT WM_RELOAD_CONFIG = WM_APP + 5;
 constexpr UINT WM_SHOWTRAYPOPUP = WM_APP + 6;
-
-constexpr ULONG_PTR CD_CLIPBOARD_TEXT = 0x43505031; // "CPP1"
-
-struct ClipboardTextCommand {
-    int position; // 0=top, -1=bottom, 1..kMaxClipboardHistoryItems=one-based history slot
-    BOOL setSystemClipboard;
-    wchar_t text[1];
-};
 
 class Application {
 public:
@@ -85,12 +79,40 @@ public:
     bool GetHidePopupOnOutsideClick() const { return m_config.hidePopupOnOutsideClick; }
     void SetHidePopupOnOutsideClick(bool value);
     void AddDeveloperEvent(const std::string& event);
+    void RecordGeneratedPaste(const std::string& sourceProcess,
+                              const std::string& destinationProcess);
     const std::vector<std::string>& GetDeveloperEvents() const { return m_developerEvents; }
+    const std::string& GetLastGeneratedPasteSource() const { return m_lastGeneratedPasteSource; }
+    const std::string& GetLastGeneratedPasteDestination() const { return m_lastGeneratedPasteDestination; }
     void ClearDeveloperEvents() { m_developerEvents.clear(); }
     bool GetNewItemsAtTop() const { return m_config.newItemsAtTop; }
     void SetNewItemsAtTop(bool value);
+    int GetActiveHistoryLimit() const { return m_config.activeHistoryLimit; }
+    void SetActiveHistoryLimit(int value);
+    bool IsHistoryDeduplicationEnabled() const { return m_config.deduplicateHistory; }
+    void SetHistoryDeduplicationEnabled(bool enabled);
+    bool IsVaultUnlimited() const { return m_config.vaultUnlimited; }
+    int GetVaultLimitMB() const { return m_config.vaultLimitMB; }
+    void SetVaultLimit(bool unlimited, int limitMB);
+    size_t GetVaultCount() const;
+    std::vector<ClipboardVaultEntry> SearchVault(const std::string& query) const;
+    bool PromoteVaultItem(int64_t archiveId);
+    bool DeleteVaultItem(int64_t archiveId);
+    std::vector<NamedClipboardSlot> GetNamedSlots() const;
+    bool SaveNamedSlot(NamedClipboardSlot& slot);
+    bool DeleteNamedSlot(int64_t slotId);
+    std::vector<RegexTransformDefinition> GetRegexTransforms() const;
+    bool SaveRegexTransform(RegexTransformDefinition& transform);
+    bool DeleteRegexTransform(int64_t transformId);
+    std::vector<PasteTemplateDefinition> GetPasteTemplates() const;
+    bool SavePasteTemplate(PasteTemplateDefinition& value);
+    bool DeletePasteTemplate(int64_t templateId);
+    bool CopyTextToClipboard(const std::string& text);
     bool IsStartWithWindowsEnabled() const;
     bool SetStartWithWindowsEnabled(bool enabled);
+    bool IsIncognito() const { return m_incognito; }
+    void SetIncognito(bool enabled);
+    void ToggleIncognito();
     bool GetAppendNewlineAfterPaste() const { return m_config.appendNewlineAfterPaste; }
     void SetAppendNewlineAfterPaste(bool value);
     ClipboardHistory::MoveTarget GetPasteMoveTarget() const;
@@ -146,6 +168,7 @@ private:
     bool HasRenderableUi() const;
     void ApplyLoadedConfig(const AppConfig& config);
     bool HandleClipboardTextCommand(const COPYDATASTRUCT& cds);
+    bool HandleHistoryMutationCommand(const COPYDATASTRUCT& cds);
     bool LaunchExternalEditor();
     void RebuildClipboardHistories();
     void SaveClipboardHistory(const std::string& profileId);
@@ -192,10 +215,13 @@ private:
 
     bool m_running{false};
     bool m_mainVisible{false};
+    bool m_incognito{false};
     AppearanceSettings m_appearance{};
     bool m_appearanceDirty{true};
     HotkeySettings m_hotkeySettings{};
     std::vector<std::string> m_developerEvents;
+    std::string m_lastGeneratedPasteSource;
+    std::string m_lastGeneratedPasteDestination;
 
     static Application* s_instance;
 };

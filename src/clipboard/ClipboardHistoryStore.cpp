@@ -31,6 +31,69 @@ std::chrono::system_clock::time_point MsToTime(int64_t ms) {
     return std::chrono::system_clock::time_point(std::chrono::milliseconds(ms));
 }
 
+std::string Base64Encode(const std::vector<uint8_t>& bytes) {
+    static constexpr char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string output;
+    output.reserve(((bytes.size() + 2) / 3) * 4);
+    for (size_t i = 0; i < bytes.size(); i += 3) {
+        const uint32_t a = bytes[i];
+        const uint32_t b = i + 1 < bytes.size() ? bytes[i + 1] : 0;
+        const uint32_t c = i + 2 < bytes.size() ? bytes[i + 2] : 0;
+        const uint32_t value = (a << 16) | (b << 8) | c;
+        output.push_back(alphabet[(value >> 18) & 63]);
+        output.push_back(alphabet[(value >> 12) & 63]);
+        output.push_back(i + 1 < bytes.size() ? alphabet[(value >> 6) & 63] : '=');
+        output.push_back(i + 2 < bytes.size() ? alphabet[value & 63] : '=');
+    }
+    return output;
+}
+
+bool Base64Decode(const std::string& text, std::vector<uint8_t>& bytes) {
+    auto valueOf = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    if (text.size() % 4 != 0)
+        return false;
+    bytes.clear();
+    bytes.reserve((text.size() / 4) * 3);
+    for (size_t i = 0; i < text.size(); i += 4) {
+        const int a = valueOf(text[i]);
+        const int b = valueOf(text[i + 1]);
+        const int c = text[i + 2] == '=' ? 0 : valueOf(text[i + 2]);
+        const int d = text[i + 3] == '=' ? 0 : valueOf(text[i + 3]);
+        if (a < 0 || b < 0 || c < 0 || d < 0 ||
+            (text[i + 2] == '=' && text[i + 3] != '=') ||
+            (i + 4 != text.size() && (text[i + 2] == '=' || text[i + 3] == '='))) {
+            bytes.clear();
+            return false;
+        }
+        const uint32_t value = (static_cast<uint32_t>(a) << 18) |
+                               (static_cast<uint32_t>(b) << 12) |
+                               (static_cast<uint32_t>(c) << 6) |
+                               static_cast<uint32_t>(d);
+        bytes.push_back(static_cast<uint8_t>(value >> 16));
+        if (text[i + 2] != '=') bytes.push_back(static_cast<uint8_t>(value >> 8));
+        if (text[i + 3] != '=') bytes.push_back(static_cast<uint8_t>(value));
+    }
+    return true;
+}
+
+ClipboardFormatStatus FormatStatusFromJson(const json& value) {
+    if (value.is_number_integer())
+        return static_cast<ClipboardFormatStatus>(value.get<int>());
+    const std::string name = value.is_string() ? value.get<std::string>() : std::string{};
+    if (name == "preserved") return ClipboardFormatStatus::Preserved;
+    if (name == "too-large") return ClipboardFormatStatus::TooLarge;
+    if (name == "read-failed") return ClipboardFormatStatus::ReadFailed;
+    return ClipboardFormatStatus::MetadataOnly;
+}
+
 std::string SafeProfileId(const std::string& id) {
     std::string out;
     out.reserve(id.size());
@@ -104,6 +167,23 @@ json ItemToJson(const ClipboardItem& item) {
         out["sourceFilePath"] = item.sourceFilePath;
     if (!item.sourceKind.empty())
         out["sourceKind"] = item.sourceKind;
+    if (!item.formats.empty()) {
+        json formats = json::array();
+        for (const ClipboardFormatRecord& format : item.formats) {
+            json entry = {
+                {"formatId", format.formatId},
+                {"name", format.name},
+                {"order", format.order},
+                {"byteSize", format.byteSize},
+                {"status", ClipboardFormatStatusName(format.status)},
+                {"replaySafe", format.replaySafe},
+            };
+            if (!format.data.empty())
+                entry["dataBase64"] = Base64Encode(format.data);
+            formats.push_back(std::move(entry));
+        }
+        out["formats"] = std::move(formats);
+    }
 
     json timestamps = TimestampsToJson(item);
     if (!timestamps.empty())
@@ -144,6 +224,26 @@ ClipboardItem ItemFromJson(const json& j, bool pinnedSection) {
     item.sourceProcess = j.value("sourceProcess", std::string{});
     item.sourceFilePath = j.value("sourceFilePath", std::string{});
     item.sourceKind = j.value("sourceKind", std::string{});
+    if (j.contains("formats") && j["formats"].is_array()) {
+        for (const json& entry : j["formats"]) {
+            if (!entry.is_object())
+                continue;
+            ClipboardFormatRecord format;
+            format.formatId = entry.value("formatId", uint32_t{});
+            format.name = entry.value("name", std::string{});
+            format.order = entry.value("order", uint32_t{});
+            format.byteSize = entry.value("byteSize", uint64_t{});
+            format.status = entry.contains("status")
+                ? FormatStatusFromJson(entry["status"])
+                : ClipboardFormatStatus::MetadataOnly;
+            format.replaySafe = entry.value("replaySafe", false);
+            if (entry.contains("dataBase64") && entry["dataBase64"].is_string()) {
+                if (!Base64Decode(entry["dataBase64"].get<std::string>(), format.data))
+                    format.status = ClipboardFormatStatus::ReadFailed;
+            }
+            item.formats.push_back(std::move(format));
+        }
+    }
     LoadTimestamps(j, item);
 
     switch (item.type) {
@@ -152,7 +252,7 @@ ClipboardItem ItemFromJson(const json& j, bool pinnedSection) {
         item.imageH       = j.value("height", j.value("imageH", 0));
         item.imageStoreId = j.value("imageStoreId", std::string{});
         item.text         = j.value("description", j.value("text", std::string{}));
-        // Legacy: dibBase64 field is ignored — old inline images are dropped on first save
+        // Legacy: dibBase64 field is ignored - old inline images are dropped on first save
         break;
     case ContentType::FilePaths:
         item.text = j.value("pathsText", j.value("text", std::string{}));
@@ -500,5 +600,15 @@ bool Save(const std::string& profileId, const ClipboardHistory& history) {
 #else
     return WriteBytesAtomically(LegacyPathForProfile(profileId), plaintext);
 #endif
+}
+
+std::string Serialize(const std::string& profileId,
+                      const ClipboardHistory& history) {
+    return HistoryToJson(profileId, history).dump();
+}
+
+bool Deserialize(const std::string& profileId, const std::string& payload,
+                 ClipboardHistory& history) {
+    return JsonToHistory(payload, history, true, profileId);
 }
 } // namespace ClipboardHistoryStore

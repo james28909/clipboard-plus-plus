@@ -29,7 +29,7 @@
 
 using namespace MainWindowInternal;
 
-// -- Section: Appearance ------------------------------------------------------
+// -- Section: Customize -------------------------------------------------------
 
 static bool ColorControl(const char* label, ImVec4& color) {
     ImGui::SetNextItemWidth(220.0f);
@@ -131,7 +131,7 @@ static void DrawSettingsPreview(const AppearanceSettings& draft) {
     dl->AddRectFilled(sideA, sideB, ImGui::GetColorU32(preview.panelBg), 4.0f);
     dl->AddRectFilled({sideA.x + 8.0f, sideA.y + 10.0f}, {sideB.x - 8.0f, sideA.y + 34.0f},
                       ImGui::GetColorU32(toggles.on), 3.0f);
-    PreviewText(dl, {sideA.x + 14.0f, sideA.y + 14.0f}, {sideB.x - 10.0f, sideA.y + 32.0f}, text, "Appearance");
+    PreviewText(dl, {sideA.x + 14.0f, sideA.y + 14.0f}, {sideB.x - 10.0f, sideA.y + 32.0f}, text, "Customize");
     PreviewText(dl, {sideA.x + 14.0f, sideA.y + 44.0f}, {sideB.x - 10.0f, sideA.y + 62.0f}, muted, "General");
 
     ImVec2 paneA = {sideB.x + 14.0f, sideA.y};
@@ -153,9 +153,7 @@ void MainWindow::DrawAppearance() {
     Application* app = Application::Get();
     if (!app) return;
 
-    ImGui::TextDisabled("Appearance");
-    ImGui::Separator();
-    ImGui::Spacing();
+    PageHeader("Customize", "Personalize themes, popup effects, window layout, fonts, icons, and colors.");
 
     static AppearanceSettings draft = app->GetAppearance();
     static char fontPath[512]{};
@@ -171,7 +169,6 @@ void MainWindow::DrawAppearance() {
         initialized = true;
     }
 
-    SectionHeader("Theme");
     auto syncThemeName = [&]() {
         std::snprintf(customName, sizeof(customName), "%s",
                       draft.customColors ? draft.customThemeName.c_str() : ThemeName(draft.theme));
@@ -290,6 +287,41 @@ void MainWindow::DrawAppearance() {
         syncThemeName();
     };
 
+    enum CustomizeTab {
+        TAB_THEMES,
+        TAB_POPUP,
+        TAB_WINDOW,
+        TAB_FONT_ICON,
+        TAB_COLORS,
+    };
+    static int customizeTab = TAB_THEMES;
+    if (ImGui::BeginTabBar("##customize_tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
+        if (ImGui::BeginTabItem("Themes")) {
+            customizeTab = TAB_THEMES;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Popup")) {
+            customizeTab = TAB_POPUP;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Window & Layout")) {
+            customizeTab = TAB_WINDOW;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Font & Icon")) {
+            customizeTab = TAB_FONT_ICON;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Colors")) {
+            customizeTab = TAB_COLORS;
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::TextDisabled("Changes apply and save automatically unless an Apply button is shown.");
+
+    if (customizeTab == TAB_THEMES) {
+    SectionHeader("Theme");
     const std::string preThemeName = TrimAscii(customName);
     const std::string preSelectedThemeName = draft.customColors
         ? draft.customThemeName
@@ -429,6 +461,9 @@ void MainWindow::DrawAppearance() {
         ImGui::EndPopup();
     }
 
+    }
+
+    if (customizeTab == TAB_POPUP) {
     SectionHeader("Popup");
     ImGui::Text("Popup opacity");
     ImGui::SetNextItemWidth(240.0f);
@@ -511,14 +546,6 @@ void MainWindow::DrawAppearance() {
                         static_cast<long>(livePopupSize.cx),
                         static_cast<long>(livePopupSize.cy));
     ImGui::Spacing();
-    if (PopupWindow* pw = app->GetPopup()) {
-        SectionHeader("Focus Behavior (Test)");
-        bool focusTest = pw->m_focusTestMode;
-        if (ImGui::Checkbox("Restore focus to caller on show", &focusTest))
-            pw->m_focusTestMode = focusTest;
-        HelpTooltip("Removes WS_EX_NOACTIVATE so the popup activates normally,\nthen immediately returns foreground focus to the window\nthat was active when the popup was opened.\nTakes effect on the next popup show.");
-    }
-    ImGui::Spacing();
     if (PaddedButton("Use current as default", 180.0f)) {
         app->UseCurrentPopupSizeAsDefault();
         draft = app->GetAppearance();
@@ -544,6 +571,9 @@ void MainWindow::DrawAppearance() {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
 
+    }
+
+    if (customizeTab == TAB_WINDOW) {
     SectionHeader("Default Settings Window Size");
     bool mainSizeChanged = false;
     ImGui::SetNextItemWidth(IntInputWidth(9999));
@@ -575,6 +605,9 @@ void MainWindow::DrawAppearance() {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
 
+    }
+
+    if (customizeTab == TAB_FONT_ICON) {
     SectionHeader("Font");
     auto applyFont = [&]() {
         AppearanceSettings next = app->GetAppearance();
@@ -660,6 +693,9 @@ void MainWindow::DrawAppearance() {
     else if (iconDeactivated)
         draft.exeIconPath = iconPathBuf;
 
+    }
+
+    if (customizeTab == TAB_WINDOW) {
     SectionHeader("Scrollbars");
     bool scrollbarChanged = false;
     scrollbarChanged |= ImGui::Checkbox("Show scrollbars", &draft.showScrollbars);
@@ -704,6 +740,9 @@ void MainWindow::DrawAppearance() {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
 
+    }
+
+    if (customizeTab == TAB_COLORS) {
     SectionHeader("Colors");
     const AppearanceSettings reset = ThemeDefaults(draft.theme);
     bool colorsChanged = ImGui::Checkbox("Enable custom colors", &draft.customColors);
@@ -787,6 +826,9 @@ void MainWindow::DrawAppearance() {
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
 
+    }
+
+    if (customizeTab == TAB_WINDOW) {
     ImGui::Spacing(); ImGui::SeparatorText("Advanced shape");
     ImGui::SetNextItemWidth(240.0f);
     bool shapeChanged = SliderFloatWheel("Popup corner rounding", &draft.popupRounding,
@@ -808,5 +850,6 @@ void MainWindow::DrawAppearance() {
         draft = app->GetAppearance();
         syncThemeName();
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    }
     }
 }

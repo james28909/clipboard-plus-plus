@@ -42,6 +42,9 @@ set(APP_SOURCES
     src/android/AndroidIntegration.cpp
     src/android/AndroidSyncServer.cpp
     src/cli/CLI.cpp
+    src/cli/CliStorage.cpp
+    src/cli/HistoryCli.cpp
+    src/cli/VaultCli.cpp
     src/ipc/IpcClient.cpp
     src/util/Win32Util.cpp
     src/app/Application.cpp
@@ -50,7 +53,12 @@ set(APP_SOURCES
     src/app/StartupRegistration.cpp
     src/app/TrayIcon.cpp
     src/filters/CustomFilter.cpp
+    src/transforms/RegexTransform.cpp
+    src/templates/PasteTemplate.cpp
+    src/formatting/StructuredFormatter.cpp
+    src/diff/TextDiff.cpp
     src/security/DpapiProtection.cpp
+    src/security/EncryptedSqliteVfs.cpp
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
     src/ui/MainWindowGeneral.cpp
@@ -80,6 +88,7 @@ set(APP_SOURCES
     # Milestone 2 - clipboard core
     src/clipboard/ClipboardItem.cpp
     src/clipboard/ClipboardHistory.cpp
+    src/clipboard/ClipboardDatabase.cpp
     src/clipboard/ClipboardProfileManager.cpp
     src/clipboard/ClipboardHistoryStore.cpp
     src/clipboard/ClipboardMonitor.cpp
@@ -130,6 +139,7 @@ if(WIN32)
         gdi32.lib
         psapi.lib
         crypt32.lib
+        bcrypt.lib
         ws2_32.lib
     )
 
@@ -213,6 +223,10 @@ add_executable(filter_matcher_tests
     tests/filter_matcher_tests.cpp
     src/util/Win32Util.cpp
     src/filters/CustomFilter.cpp
+    src/transforms/RegexTransform.cpp
+    src/templates/PasteTemplate.cpp
+    src/formatting/StructuredFormatter.cpp
+    src/diff/TextDiff.cpp
     src/clipboard/ClipboardItem.cpp
     src/clipboard/ContentDetector.cpp
 )
@@ -220,6 +234,7 @@ add_executable(filter_matcher_tests
 target_include_directories(filter_matcher_tests PRIVATE
     src
     ${PCRE2_DIR}/src
+    ${NLOHMANN_DIR}
 )
 
 target_link_libraries(filter_matcher_tests PRIVATE pcre2-8-static)
@@ -267,9 +282,70 @@ if(WIN32)
     set_property(TARGET history_encryption_tests PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+    add_executable(encrypted_sqlite_vfs_tests
+        tests/encrypted_sqlite_vfs_tests.cpp
+        src/security/DpapiProtection.cpp
+        src/security/EncryptedSqliteVfs.cpp
+        ${SQLITE_DIR}/sqlite3.c
+    )
+    target_include_directories(encrypted_sqlite_vfs_tests PRIVATE
+        src
+        ${SQLITE_DIR}
+    )
+    target_link_libraries(encrypted_sqlite_vfs_tests PRIVATE
+        crypt32.lib
+        bcrypt.lib
+    )
+    target_compile_definitions(encrypted_sqlite_vfs_tests PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+        SQLITE_DEFAULT_FOREIGN_KEYS=1
+        SQLITE_OMIT_LOAD_EXTENSION
+    )
+    set_property(TARGET encrypted_sqlite_vfs_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    add_executable(clipboard_database_tests
+        tests/clipboard_database_tests.cpp
+        src/security/DpapiProtection.cpp
+        src/security/EncryptedSqliteVfs.cpp
+        src/util/Win32Util.cpp
+        src/clipboard/ClipboardItem.cpp
+        src/clipboard/ClipboardHistory.cpp
+        src/clipboard/ClipboardHistoryStore.cpp
+        src/clipboard/ClipboardDatabase.cpp
+        ${SQLITE_DIR}/sqlite3.c
+    )
+    target_include_directories(clipboard_database_tests PRIVATE
+        src
+        ${IMGUI_DIR}
+        ${NLOHMANN_DIR}
+        ${SQLITE_DIR}
+    )
+    target_link_libraries(clipboard_database_tests PRIVATE
+        crypt32.lib
+        bcrypt.lib
+    )
+    target_compile_definitions(clipboard_database_tests PRIVATE
+        CLIPBOARDPP_TESTING
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+        SQLITE_DEFAULT_FOREIGN_KEYS=1
+        SQLITE_OMIT_LOAD_EXTENSION
+    )
+    set_property(TARGET clipboard_database_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
     add_executable(image_encryption_tests
         tests/image_encryption_tests.cpp
         src/security/DpapiProtection.cpp
+        src/security/EncryptedSqliteVfs.cpp
         src/clipboard/ImageStore.cpp
         ${SQLITE_DIR}/sqlite3.c
     )
@@ -280,6 +356,7 @@ if(WIN32)
     )
     target_link_libraries(image_encryption_tests PRIVATE
         crypt32.lib
+        bcrypt.lib
         d3d11.lib
         gdi32.lib
         gdiplus.lib

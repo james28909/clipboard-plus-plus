@@ -56,9 +56,9 @@ void MainWindow::DrawImages() {
     ImGui::SeparatorText("Storage format");
     int fmt = static_cast<int>(s.format);
     bool fmtChanged = false;
-    fmtChanged |= ImGui::RadioButton("PNG — convert to PNG (lossless, ~40-80%% smaller than raw DIB)", &fmt, 0);
-    fmtChanged |= ImGui::RadioButton("JPEG — convert to JPEG (lossy, smallest file size)", &fmt, 1);
-    fmtChanged |= ImGui::RadioButton("Raw — store exact clipboard bytes, no GDI+ conversion", &fmt, 2);
+    fmtChanged |= ImGui::RadioButton("PNG - convert to PNG (lossless, ~40-80%% smaller than raw DIB)", &fmt, 0);
+    fmtChanged |= ImGui::RadioButton("JPEG - convert to JPEG (lossy, smallest file size)", &fmt, 1);
+    fmtChanged |= ImGui::RadioButton("Raw - store exact clipboard bytes, no GDI+ conversion", &fmt, 2);
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
     HelpTooltip("Raw: DIB clipboard data is stored as-is.\n"
                 "PNG clipboard data (from browsers, Snipping Tool) is stored as PNG.\n"
@@ -125,7 +125,7 @@ void MainWindow::DrawImages() {
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
     HelpTooltip("Oldest images are purged when this limit is exceeded.\nSet to 0 for unlimited.");
     if (s.maxImages == 0)
-        ImGui::TextDisabled("Unlimited storage — images accumulate until manually cleared.");
+        ImGui::TextDisabled("Unlimited storage - images accumulate until manually cleared.");
     else
         ImGui::TextDisabled("Oldest images are removed when the limit is reached.");
 

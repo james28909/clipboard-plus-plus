@@ -21,6 +21,7 @@ add_executable(sqlite_editor WIN32
     src/DbViewer.cpp
     src/ClipboardImageBlob.cpp
     ../src/security/DpapiProtection.cpp
+    ../src/security/EncryptedSqliteVfs.cpp
     ${SQLITE_DIR}/sqlite3.c
     ${IMGUI_SOURCES}
     res/sqlite_editor.rc
@@ -42,6 +43,7 @@ target_link_libraries(sqlite_editor PRIVATE
     comdlg32.lib
     shlwapi.lib
     crypt32.lib
+    bcrypt.lib
 )
 
 target_compile_definitions(sqlite_editor PRIVATE

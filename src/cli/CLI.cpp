@@ -1,4 +1,6 @@
 #include "CLI.h"
+#include "HistoryCli.h"
+#include "VaultCli.h"
 
 #include "app/Application.h"
 #include "app/ConfigStore.h"
@@ -60,7 +62,9 @@ LR"(Clipboard++ command line
 Usage:
   clipboardpp.exe [command] [options]
   clipboardpp.exe config <operation> [value]
+  clipboardpp.exe get <operation> [options]
   clipboardpp.exe set <operation> [value]
+  clipboardpp.exe vault <operation> [options]
 
 Window commands:
   --show
@@ -163,16 +167,57 @@ Configuration command:
         history.newAtTop
           true/false. Controls whether new clipboard items go to the top.
 
+        history.deduplicate
+          true/false. Consolidates repeated content when enabled.
+
         paste.newline
           true/false. Appends a newline after pasted text.
 
         paste.move
           keep, top, or bottom.
 
+History commands:
+  get --list [--profile <id-or-name>] [--limit N] [--format text|json]
+      List items in the current stored history order.
+
+  get --search <query> [--profile <id-or-name>] [--limit N]
+               [--format text|json]
+      Search active history while preserving each item's original list number.
+
+  get --item <n> [--profile <id-or-name>] [--format text|json]
+      Print the full stored text for the one-based item number. JSON includes
+      metadata as well as the full text field.
+
 Clipboard command:
+  set --delete <n> [--profile <id-or-name>]
+      Delete the item at the current one-based history position.
+
+  set --pin <n> [--profile <id-or-name>]
+  set --unpin <n> [--profile <id-or-name>]
+      Change the pin state of the item at the current history position.
+
+  set --clear [--profile <id-or-name>]
+      Clear active history for one profile. The vault is not changed.
+
   set --clipboard <text-or-paths> [--top|--bottom|--index 1-500] [--system]
       Insert text or existing file/folder path lists into Clipboard++ history.
       Requires the Clipboard++ tray app to be running.
+
+Vault commands:
+  vault count [--profile <id-or-name>] [--format text|json]
+      Count archived items in the active or selected profile.
+
+  vault search <query> [--profile <id-or-name>] [--limit N]
+               [--format text|json]
+      Search archived text, paths, and source metadata.
+
+  vault export --output <path> [--format files|json|binary]
+               [--profile <id-or-name>] [--search <query>]
+      Export decrypted stored payloads. Image bytes retain their exact stored
+      PNG, JPEG, or DIB representation.
+
+  vault backup --output <empty-directory>
+      Create consistent encrypted backups of clipboard.db and images.db.
 
   set --clipboard-file <path> [--top|--bottom|--index 1-500] [--system]
       Read a UTF-8 text file and insert its contents into Clipboard++ history.
@@ -187,8 +232,7 @@ Current scope:
   The --clipboard commands insert text or file-drop path lists into history.
   Use --system when you also want the real Windows clipboard changed.
   History insert commands fail if the Clipboard++ tray app is not running.
-  Direct history/vault commands are planned in SPEC.md, but require the encrypted
-  history/vault IPC layer before they can be safely exposed here.
+  Vault queries read the encrypted SQLite database through the Clipboard++ VFS.
 
 Help:
   --help, -h, /?
@@ -215,6 +259,15 @@ Examples:
   .\clipboardpp.exe --set font.size=16
   .\clipboardpp.exe --set paste.move=bottom
   .\clipboardpp.exe status --format json
+  .\clipboardpp.exe get --list --limit 20
+  .\clipboardpp.exe get --search "invoice"
+  .\clipboardpp.exe get --item 3 --format json
+  .\clipboardpp.exe set --pin 3
+  .\clipboardpp.exe set --delete 5
+  .\clipboardpp.exe vault count
+  .\clipboardpp.exe vault search "invoice" --limit 20
+  .\clipboardpp.exe vault export --output "C:\Temp\vault-export" --format files
+  .\clipboardpp.exe vault backup --output "D:\Backups\Clipboard++"
 
 Notes:
   Running clipboardpp.exe with no arguments starts the tray app.
@@ -434,6 +487,8 @@ std::wstring ConfigValue(const AppConfig& config, const std::wstring& rawKey, bo
         return std::to_wstring(config.appearance.fontSize);
     if (key == L"history.newattop" || key == L"historynewattop")
         return BoolText(config.newItemsAtTop);
+    if (key == L"history.deduplicate" || key == L"historydeduplicate")
+        return BoolText(config.deduplicateHistory);
     if (key == L"paste.newline" || key == L"pastenewline")
         return BoolText(config.appendNewlineAfterPaste);
     if (key == L"paste.move" || key == L"pastemove")
@@ -466,6 +521,7 @@ void PrintConfigList(const AppConfig& config) {
         L"font.size",
         L"font.dir",
         L"history.newAtTop",
+        L"history.deduplicate",
         L"paste.newline",
         L"paste.move",
 #ifndef NDEBUG
@@ -559,6 +615,13 @@ bool ApplySet(AppConfig& config, const std::wstring& assignment, std::wstring& e
                 return false;
             }
             config.newItemsAtTop = b;
+        } else if (key == L"history.deduplicate" || key == L"historydeduplicate") {
+            bool b{};
+            if (!ParseBool(value, b)) {
+                error = L"history.deduplicate expects true/false.";
+                return false;
+            }
+            config.deduplicateHistory = b;
         } else if (key == L"paste.newline" || key == L"pastenewline") {
             bool b{};
             if (!ParseBool(value, b)) {
@@ -719,6 +782,13 @@ int RunSetCommand(int argc, wchar_t** argv) {
         return 0;
     }
 
+    if (win32util::EqW(argv[2], L"--delete") ||
+        win32util::EqW(argv[2], L"--pin") ||
+        win32util::EqW(argv[2], L"--unpin") ||
+        win32util::EqW(argv[2], L"--clear")) {
+        return RunHistoryMutationCli(argc, argv);
+    }
+
     if (win32util::EqW(argv[2], L"--clipboard")) {
         if (argc < 4) {
             std::wcerr << L"set --clipboard requires text. See --help.\n";
@@ -838,6 +908,16 @@ int RunCLI(int argc, wchar_t** argv) {
     }
     if (win32util::EqW(argv[1], L"config")) {
         result = RunConfigCommand(argc, argv);
+        DetachConsoleForCli();
+        return result;
+    }
+    if (win32util::EqW(argv[1], L"vault")) {
+        result = RunVaultCli(argc, argv);
+        DetachConsoleForCli();
+        return result;
+    }
+    if (win32util::EqW(argv[1], L"get")) {
+        result = RunHistoryCli(argc, argv);
         DetachConsoleForCli();
         return result;
     }

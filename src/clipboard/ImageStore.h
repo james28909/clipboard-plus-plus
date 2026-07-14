@@ -5,6 +5,8 @@
 #include <vector>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <unordered_set>
 
 struct sqlite3;
 struct ImageSettings;
@@ -29,6 +31,8 @@ struct ImageRecord {
 
 class ImageStore {
 public:
+    using ProtectedImageIdsProvider =
+        std::function<std::unordered_set<std::string>()>;
     ImageStore();
     ~ImageStore();
 
@@ -38,8 +42,9 @@ public:
 
     // Apply user settings. Call at startup and whenever settings change.
     void SetSettings(const ImageSettings& settings);
+    void SetProtectedImageIdsProvider(ProtectedImageIdsProvider provider);
 
-    // Unified capture entry point — applies current settings (format, scale-down,
+    // Unified capture entry point - applies current settings (format, scale-down,
     // min-size filter, max-count enforcement).
     // rawBytes: raw DIB bytes OR raw PNG bytes depending on isPng.
     // Returns assigned UUID, or empty string if capture is disabled / filtered out.
@@ -51,12 +56,14 @@ public:
 
     // Retrieve PNG bytes for display (converts from stored format transparently).
     std::vector<uint8_t> GetPng(const std::string& id) const;
+    bool GetStoredBytes(const std::string& id, std::vector<uint8_t>& bytes,
+                        StoredFormat& format) const;
 
-    // Build a CF_DIB HGLOBAL for SetClipboardData — handles all stored formats.
+    // Build a CF_DIB HGLOBAL for SetClipboardData - handles all stored formats.
     // Caller owns the returned HGLOBAL; returns NULL on failure.
     HGLOBAL GetDibForPaste(const std::string& id) const;
 
-    // Metadata only — no pixel data loaded.
+    // Metadata only - no pixel data loaded.
     bool GetRecord(const std::string& id, ImageRecord& out) const;
 
     // All records for a profile, newest first.
@@ -86,7 +93,7 @@ private:
     bool MigrateImageProtection();
     bool ReadProtectedBlob(const std::string& id, std::vector<uint8_t>& data,
                            int* storedFormat = nullptr) const;
-    void EnforceMaxImages();
+    void EnforceMaxImages(const std::string& newlyStoredId);
     std::string InsertBlob(const std::vector<uint8_t>& data, StoredFormat fmt,
                            const std::string& profileId,
                            int width, int height,
@@ -106,4 +113,5 @@ private:
     int   m_minWidth{32};
     int   m_minHeight{32};
     int   m_maxImages{0};
+    ProtectedImageIdsProvider m_protectedImageIdsProvider;
 };

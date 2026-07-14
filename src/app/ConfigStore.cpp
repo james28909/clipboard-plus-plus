@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -22,6 +23,17 @@ namespace {
 
 std::filesystem::path ResolveConfigPath() {
 #ifdef _WIN32
+#ifndef NDEBUG
+    const DWORD testPathChars = GetEnvironmentVariableW(
+        L"CLIPBOARDPP_TEST_DATA_DIR", nullptr, 0);
+    if (testPathChars > 1) {
+        std::vector<wchar_t> testPath(testPathChars);
+        const DWORD written = GetEnvironmentVariableW(
+            L"CLIPBOARDPP_TEST_DATA_DIR", testPath.data(), testPathChars);
+        if (written > 0 && written < testPathChars)
+            return std::filesystem::path(testPath.data()) / "config.json";
+    }
+#endif
     PWSTR roaming = nullptr;
     std::filesystem::path base;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &roaming))) {
@@ -199,6 +211,11 @@ json BindingToJson(const KeyBinding& b) {
         {"vkey", b.vkey},
         {"action", static_cast<int>(b.action)},
         {"data", b.data},
+        {"ctrlSide", static_cast<int>(b.ctrlSide)},
+        {"shiftSide", static_cast<int>(b.shiftSide)},
+        {"altSide", static_cast<int>(b.altSide)},
+        {"physicalModifiers", b.physicalModifiers},
+        {"exactModifiers", b.exactModifiers},
     };
 }
 
@@ -210,7 +227,43 @@ KeyBinding BindingFromJson(const json& j, const KeyBinding& fallback) {
     b.vkey = j.value("vkey", b.vkey);
     b.action = static_cast<HotkeyAction>(j.value("action", static_cast<int>(b.action)));
     b.data = j.value("data", b.data);
+    b.ctrlSide = static_cast<ModifierSide>(std::clamp(
+        j.value("ctrlSide", static_cast<int>(b.ctrlSide)), 0, 2));
+    b.shiftSide = static_cast<ModifierSide>(std::clamp(
+        j.value("shiftSide", static_cast<int>(b.shiftSide)), 0, 2));
+    const int legacyAltSide = j.value("leftAlt", false)
+        ? static_cast<int>(ModifierSide::Left)
+        : static_cast<int>(b.altSide);
+    b.altSide = static_cast<ModifierSide>(std::clamp(
+        j.value("altSide", legacyAltSide), 0, 2));
+    b.physicalModifiers = static_cast<uint8_t>(std::clamp(
+        j.value("physicalModifiers", static_cast<int>(b.physicalModifiers)), 0, 63));
+    b.exactModifiers = j.value("exactModifiers", b.exactModifiers);
     return b;
+}
+
+json SlotBankToJson(const SlotBankSettings& bank) {
+    return {
+        {"enabled", bank.enabled},
+        {"chord", BindingToJson(bank.chord)},
+        {"numberKeys", bank.numberKeys},
+        {"letterKeys", bank.letterKeys},
+        {"functionKeys", bank.functionKeys},
+    };
+}
+
+SlotBankSettings SlotBankFromJson(const json& value,
+                                  const SlotBankSettings& fallback) {
+    SlotBankSettings bank = fallback;
+    if (!value.is_object()) return bank;
+    bank.enabled = value.value("enabled", bank.enabled);
+    if (value.contains("chord") && value["chord"].is_object())
+        bank.chord = BindingFromJson(value["chord"], bank.chord);
+    bank.chord.vkey = 0;
+    bank.numberKeys = value.value("numberKeys", bank.numberKeys);
+    bank.letterKeys = value.value("letterKeys", bank.letterKeys);
+    bank.functionKeys = value.value("functionKeys", bank.functionKeys);
+    return bank;
 }
 
 KeyBinding DefaultBindingForAction(HotkeyAction action) {
@@ -296,6 +349,65 @@ void LoadHotkeys(const json& root, AppConfig& config) {
     config.hotkeys.hiddenPasteShift = h.value("hiddenPasteShift", defaults.hiddenPasteShift);
     config.hotkeys.hiddenPasteAlt = h.value("hiddenPasteAlt", defaults.hiddenPasteAlt);
     config.hotkeys.hiddenPasteFunctionKeys = h.value("hiddenPasteFunctionKeys", defaults.hiddenPasteFunctionKeys);
+    config.hotkeys.hiddenPasteCtrlSides = static_cast<uint8_t>(std::clamp(
+        h.value("hiddenPasteCtrlSides",
+                config.hotkeys.hiddenPasteCtrl ? 3 : 0), 0, 3));
+    config.hotkeys.hiddenPasteShiftSides = static_cast<uint8_t>(std::clamp(
+        h.value("hiddenPasteShiftSides",
+                config.hotkeys.hiddenPasteShift ? 3 : 0), 0, 3));
+    config.hotkeys.hiddenPasteAltSides = static_cast<uint8_t>(std::clamp(
+        h.value("hiddenPasteAltSides",
+                config.hotkeys.hiddenPasteAlt ? 3 : 0), 0, 3));
+    config.hotkeys.hiddenPasteCtrl = config.hotkeys.hiddenPasteCtrlSides != 0;
+    config.hotkeys.hiddenPasteShift = config.hotkeys.hiddenPasteShiftSides != 0;
+    config.hotkeys.hiddenPasteAlt = config.hotkeys.hiddenPasteAltSides != 0;
+    const json& banks = h.value("slotBanks", json::object());
+    config.hotkeys.popupHistoryBank = SlotBankFromJson(
+        banks.value("popupHistory", json::object()), defaults.popupHistoryBank);
+    config.hotkeys.globalHistoryBank = SlotBankFromJson(
+        banks.value("globalHistory", json::object()), defaults.globalHistoryBank);
+    config.hotkeys.pinnedHistoryBank = SlotBankFromJson(
+        banks.value("pinnedHistory", json::object()), defaults.pinnedHistoryBank);
+    config.hotkeys.profileBank = SlotBankFromJson(
+        banks.value("profiles", json::object()), defaults.profileBank);
+    config.hotkeys.hotkeyDoubleTaps =
+        h.value("hotkeyDoubleTaps", defaults.hotkeyDoubleTaps);
+    if (!h.contains("slotBanks")) {
+        KeyBinding migrated;
+        migrated.ctrl = config.hotkeys.hiddenPasteCtrl;
+        migrated.shift = config.hotkeys.hiddenPasteShift;
+        migrated.alt = config.hotkeys.hiddenPasteAlt;
+        auto migrateFamily = [&](uint8_t sides, uint8_t leftBit,
+                                 uint8_t rightBit, ModifierSide& side) {
+            if (sides == 1) {
+                migrated.physicalModifiers |= leftBit;
+                side = ModifierSide::Left;
+            } else if (sides == 2) {
+                migrated.physicalModifiers |= rightBit;
+                side = ModifierSide::Right;
+            } else if (sides == 3) {
+                migrated.exactModifiers = false;
+                side = ModifierSide::Any;
+            }
+        };
+        migrated.exactModifiers = true;
+        migrateFamily(config.hotkeys.hiddenPasteCtrlSides,
+                      ModifierState::LeftCtrlBit, ModifierState::RightCtrlBit,
+                      migrated.ctrlSide);
+        migrateFamily(config.hotkeys.hiddenPasteShiftSides,
+                      ModifierState::LeftShiftBit, ModifierState::RightShiftBit,
+                      migrated.shiftSide);
+        migrateFamily(config.hotkeys.hiddenPasteAltSides,
+                      ModifierState::LeftAltBit, ModifierState::RightAltBit,
+                      migrated.altSide);
+        config.hotkeys.globalHistoryBank.chord = migrated;
+        config.hotkeys.globalHistoryBank.enabled =
+            config.hotkeys.hiddenPasteCtrlSides != 0 ||
+            config.hotkeys.hiddenPasteShiftSides != 0 ||
+            config.hotkeys.hiddenPasteAltSides != 0;
+        config.hotkeys.globalHistoryBank.functionKeys =
+            config.hotkeys.hiddenPasteFunctionKeys;
+    }
     config.hotkeys.passthroughHotkeys.clear();
     if (h.contains("passthroughHotkeys") && h["passthroughHotkeys"].is_array()) {
         for (const json& item : h["passthroughHotkeys"]) {
@@ -314,8 +426,12 @@ void LoadHotkeys(const json& root, AppConfig& config) {
 
     for (const json& item : h["bindings"]) {
         HotkeyAction action = static_cast<HotkeyAction>(item.value("action", 0));
+        const int data = item.value("data", 0);
         auto it = std::find_if(config.hotkeys.bindings.begin(), config.hotkeys.bindings.end(),
-            [&](const KeyBinding& b) { return b.action == action; });
+            [&](const KeyBinding& b) {
+                return b.action == action &&
+                       (action != HotkeyAction::PasteNamedSlot || b.data == data);
+            });
         if (it != config.hotkeys.bindings.end())
             *it = BindingFromJson(item, *it);
         else if (action != HotkeyAction::None)
@@ -485,6 +601,8 @@ void EnsureClipboardProfiles(AppConfig& config) {
 }
 
 void LoadClipboards(const json& root, AppConfig& config) {
+    config.profilesStoredInDatabase =
+        root.value("profileStorage", std::string{}) == "encrypted-sqlite";
     config.activeClipboardId = root.value("activeClipboardId", config.activeClipboardId);
     config.autoSwitchClipboardByProcess =
         root.value("autoSwitchClipboardByProcess", config.autoSwitchClipboardByProcess);
@@ -539,6 +657,17 @@ AppConfig Load() {
         LoadCustomFilters(root, config);
         LoadPopupButtonOrder(root, config);
         config.newItemsAtTop = root.value("newItemsAtTop", config.newItemsAtTop);
+        if (root.contains("history") && root["history"].is_object()) {
+            const json& history = root["history"];
+            config.activeHistoryLimit = std::clamp(
+                history.value("activeLimit", config.activeHistoryLimit),
+                1, 500);
+            config.deduplicateHistory =
+                history.value("deduplicate", config.deduplicateHistory);
+            config.vaultUnlimited = history.value("vaultUnlimited", config.vaultUnlimited);
+            config.vaultLimitMB = std::clamp(
+                history.value("vaultLimitMB", config.vaultLimitMB), 1, 102400);
+        }
         config.appendNewlineAfterPaste = root.value("appendNewlineAfterPaste", config.appendNewlineAfterPaste);
         config.hidePopupOnOutsideClick = root.value("hidePopupOnOutsideClick", config.hidePopupOnOutsideClick);
         config.pasteMoveTarget = std::clamp(root.value("pasteMoveTarget", config.pasteMoveTarget), 0, 2);
@@ -564,20 +693,28 @@ bool Save(const AppConfig& config) {
       json passthroughHotkeys = json::array();
       for (const std::string& value : config.hotkeys.passthroughHotkeys)
           passthroughHotkeys.push_back(value);
+      json slotBanks = {
+          {"popupHistory", SlotBankToJson(config.hotkeys.popupHistoryBank)},
+          {"globalHistory", SlotBankToJson(config.hotkeys.globalHistoryBank)},
+          {"pinnedHistory", SlotBankToJson(config.hotkeys.pinnedHistoryBank)},
+          {"profiles", SlotBankToJson(config.hotkeys.profileBank)},
+      };
 
     json savedThemes = json::array();
     for (const SavedAppearanceTheme& saved : config.appearance.savedThemes)
         savedThemes.push_back(SavedThemeToJson(saved));
 
     json clipboards = json::array();
-    for (const ClipboardProfileConfig& profile : config.clipboards) {
-        clipboards.push_back({
-            {"id", profile.id},
-            {"name", profile.name},
-            {"createdAt", profile.createdAt},
-            {"updatedAt", profile.updatedAt},
-            {"processName", profile.processName},
-        });
+    if (!config.profilesStoredInDatabase) {
+        for (const ClipboardProfileConfig& profile : config.clipboards) {
+            clipboards.push_back({
+                {"id", profile.id},
+                {"name", profile.name},
+                {"createdAt", profile.createdAt},
+                {"updatedAt", profile.updatedAt},
+                {"processName", profile.processName},
+            });
+        }
     }
 
     json customFilters = json::array();
@@ -620,7 +757,12 @@ bool Save(const AppConfig& config) {
              {"hiddenPasteCtrl", config.hotkeys.hiddenPasteCtrl},
             {"hiddenPasteShift", config.hotkeys.hiddenPasteShift},
             {"hiddenPasteAlt", config.hotkeys.hiddenPasteAlt},
-            {"hiddenPasteFunctionKeys", config.hotkeys.hiddenPasteFunctionKeys},
+             {"hiddenPasteFunctionKeys", config.hotkeys.hiddenPasteFunctionKeys},
+             {"hiddenPasteCtrlSides", config.hotkeys.hiddenPasteCtrlSides},
+             {"hiddenPasteShiftSides", config.hotkeys.hiddenPasteShiftSides},
+             {"hiddenPasteAltSides", config.hotkeys.hiddenPasteAltSides},
+             {"slotBanks", slotBanks},
+             {"hotkeyDoubleTaps", config.hotkeys.hotkeyDoubleTaps},
          }},
         {"ui", {
             {"showHelperText", config.ui.showHelperText},
@@ -667,16 +809,26 @@ bool Save(const AppConfig& config) {
             {"maxImages",       config.images.maxImages},
         }},
         {"newItemsAtTop", config.newItemsAtTop},
+        {"history", {
+            {"activeLimit", config.activeHistoryLimit},
+            {"deduplicate", config.deduplicateHistory},
+            {"vaultUnlimited", config.vaultUnlimited},
+            {"vaultLimitMB", config.vaultLimitMB},
+        }},
         {"appendNewlineAfterPaste", config.appendNewlineAfterPaste},
         {"hidePopupOnOutsideClick", config.hidePopupOnOutsideClick},
         {"pasteMoveTarget", config.pasteMoveTarget},
-        {"activeClipboardId", config.activeClipboardId},
+        {"profileStorage", config.profilesStoredInDatabase
+            ? "encrypted-sqlite" : "config"},
         {"autoSwitchClipboardByProcess", config.autoSwitchClipboardByProcess},
         {"autoCreateClipboardByProcess", config.autoCreateClipboardByProcess},
-        {"clipboards", clipboards},
         {"customFilters", customFilters},
         {"popupButtonOrder", popupButtonOrder},
     };
+    if (!config.profilesStoredInDatabase) {
+        root["activeClipboardId"] = config.activeClipboardId;
+        root["clipboards"] = std::move(clipboards);
+    }
     root["appearance"].update(SaveColorFields(config.appearance));
 
     std::ofstream out(path);

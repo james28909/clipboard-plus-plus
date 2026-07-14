@@ -113,10 +113,10 @@ bool IconPatcher::PatchExeIcon(const std::wstring& exePath, const std::wstring& 
     };
 
     // Windows will not allow BeginUpdateResource or MoveFileEx(REPLACE_EXISTING) on a
-    // running process's own image — even from a child process running the same exe.
+    // running process's own image - even from a child process running the same exe.
     // Solution:
     //   1. CopyFile exe → AppData temp (writable, no permission issues)
-    //   2. Patch the temp copy with UpdateResource (copy was never loaded — always works)
+    //   2. Patch the temp copy with UpdateResource (copy was never loaded - always works)
     //   3. Spawn powershell.exe (a different image) to do the final copy+replace after we exit,
     //      then call SHChangeNotify so Explorer refreshes the icon immediately.
 
@@ -157,7 +157,7 @@ bool IconPatcher::PatchExeIcon(const std::wstring& exePath, const std::wstring& 
         }
     }
 
-    // Patch the temp copy (never been loaded — BeginUpdateResource always succeeds on it)
+    // Patch the temp copy (never been loaded - BeginUpdateResource always succeeds on it)
     const WORD langId = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
     HANDLE hUpdate = BeginUpdateResourceW(tmp.c_str(), FALSE);
     if (!hUpdate) {
@@ -191,7 +191,7 @@ bool IconPatcher::PatchExeIcon(const std::wstring& exePath, const std::wstring& 
     }
 
     // Temp copy is fully patched. Spawn powershell.exe (different image) to do the final
-    // swap once all clipboardpp processes exit — we cannot replace our own running image.
+    // swap once all clipboardpp processes exit - we cannot replace our own running image.
     // Copy-Item handles cross-volume moves (AppData → exe dir) correctly.
     const std::wstring scriptPath = std::wstring(appData) + L"\\Clipboard++\\patch_finalize.ps1";
 

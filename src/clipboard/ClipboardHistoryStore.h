@@ -26,4 +26,8 @@ namespace ClipboardHistoryStore {
     const char* LoadResultName(LoadResult result);
     bool AllowsPersistence(LoadResult result);
     bool Save(const std::string& profileId, const ClipboardHistory& history);
+    std::string Serialize(const std::string& profileId,
+                          const ClipboardHistory& history);
+    bool Deserialize(const std::string& profileId, const std::string& payload,
+                     ClipboardHistory& history);
 }

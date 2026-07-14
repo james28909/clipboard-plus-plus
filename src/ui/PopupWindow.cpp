@@ -368,6 +368,8 @@ void PopupWindow::Render() {
     ImGui::Separator();
     if (m_androidPanelOpen)
         DrawAndroidPanel();
+    else if (m_namedSlotsPanelOpen)
+        DrawNamedSlots();
     else {
         m_lastAndroidPanelOpen = false;
         DrawItemList();
@@ -748,7 +750,7 @@ void PopupWindow::DrawTitleBar() {
             m_clipboardDropdownOpen = false;
     }
 
-    // Profile context menu — parented to ##popup so input routing works correctly
+    // Profile context menu - parented to ##popup so input routing works correctly
     if (m_openProfileContextMenu) {
         ImGui::SetNextWindowPos({m_contextMenuX, m_contextMenuY}, ImGuiCond_Always);
         ImGui::OpenPopup("##profile_ctx_menu");
@@ -779,7 +781,7 @@ void PopupWindow::DrawTitleBar() {
         ImGui::EndPopup();
     }
 
-    // Delete confirmation modal — parented to the main ##popup window
+    // Delete confirmation modal - parented to the main ##popup window
     if (m_openDeleteConfirm) {
         ImGui::OpenPopup("##confirm_delete");
         m_openDeleteConfirm = false;
@@ -864,7 +866,7 @@ void PopupWindow::DrawFilterStrip() {
         "filter:all", "filter:text", "filter:url", "filter:file", "filter:code",
         "filter:secret", "filter:json", "filter:email", "filter:color", "filter:cmd",
         "break",
-        "filter:image", "action:android",
+        "filter:image", "action:android", "action:slots",
         "action:newline", "action:move", "action:settings",
     };
     const float buttonColumnGap = std::clamp(m_appearance.popupButtonColumnPadding, 0.0f, 16.0f);
@@ -887,7 +889,8 @@ void PopupWindow::DrawFilterStrip() {
     };
     auto isAction = [&](const std::string& token) {
         return token == "action:newline" || token == "action:move" ||
-               token == "action:android" || token == "action:settings";
+               token == "action:android" || token == "action:slots" ||
+               token == "action:settings";
     };
     auto cleanupBreaks = [](std::vector<std::string>& order) {
         order.erase(std::remove_if(order.begin(), order.end(), [](const std::string& token) {
@@ -930,7 +933,7 @@ void PopupWindow::DrawFilterStrip() {
     for (const BuiltInFilter& item : kBuiltIns)
         addUnique(item.token);
     static constexpr const char* kActionTokens[] = {
-        "action:android", "action:newline", "action:move", "action:settings"
+        "action:android", "action:slots", "action:newline", "action:move", "action:settings"
     };
     for (const char* token : kActionTokens)
         addUnique(token);
@@ -1118,6 +1121,7 @@ void PopupWindow::DrawFilterStrip() {
             if (PopupToggleButton(item.label, active, toggleColors)) {
                 ActivateKeyboardCapture();
                 m_androidPanelOpen = false;
+                m_namedSlotsPanelOpen = false;
                 m_filterMode = item.mode;
                 m_activeCustomFilterId.clear();
             }
@@ -1133,6 +1137,7 @@ void PopupWindow::DrawFilterStrip() {
             if (PopupToggleButton(filter->name.c_str(), active, toggleColors)) {
                 ActivateKeyboardCapture();
                 m_androidPanelOpen = false;
+                m_namedSlotsPanelOpen = false;
                 m_filterMode = 0;
                 m_activeCustomFilterId = filter->id;
             }
@@ -1157,9 +1162,23 @@ void PopupWindow::DrawFilterStrip() {
             if (PopupToggleButton("Android", m_androidPanelOpen, toggleColors)) {
                 ActivateKeyboardCapture();
                 m_androidPanelOpen = !m_androidPanelOpen;
+                if (m_androidPanelOpen)
+                    m_namedSlotsPanelOpen = false;
             }
             recordButtonRect(token, "Android");
             attachDragSource(token, "Android");
+            ImGui::PopID();
+            return true;
+        }
+        if (token == "action:slots") {
+            if (PopupToggleButton("Slots", m_namedSlotsPanelOpen, toggleColors)) {
+                ActivateKeyboardCapture();
+                m_namedSlotsPanelOpen = !m_namedSlotsPanelOpen;
+                if (m_namedSlotsPanelOpen)
+                    m_androidPanelOpen = false;
+            }
+            recordButtonRect(token, "Slots");
+            attachDragSource(token, "Slots");
             ImGui::PopID();
             return true;
         }
@@ -1647,7 +1666,7 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
     }
 
     case WM_MOUSEACTIVATE:
-        // Always suppress activation on click — fixes close button in focus test mode.
+        // Always suppress activation on click - fixes close button in focus test mode.
         // ShowWindow(SW_SHOW) still triggers WM_ACTIVATE directly when focus test mode is on.
         return MA_NOACTIVATE;
 

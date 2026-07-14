@@ -13,7 +13,6 @@ public:
     void Destroy();
     void HandleMessage(WPARAM wParam, LPARAM lParam);
     void SetIncognito(bool on);
-    bool IsIncognito() const { return m_incognito; }
     void ApplyTheme(const AppearanceSettings& ap);
 
     // Renders the themed clipboard icon at 16/32/48 px and writes an .ico file.
@@ -29,6 +28,5 @@ private:
     HINSTANCE m_hInstance{};
     NOTIFYICONDATAW m_nid{};
     bool      m_created{false};
-    bool      m_incognito{false};
     HICON     m_themedIcon{nullptr};
 };

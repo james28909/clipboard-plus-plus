@@ -113,6 +113,16 @@ const char* ContentTypeName(ContentType type) {
     }
 }
 
+const char* ClipboardFormatStatusName(ClipboardFormatStatus status) {
+    switch (status) {
+    case ClipboardFormatStatus::Preserved:    return "preserved";
+    case ClipboardFormatStatus::TooLarge:     return "too-large";
+    case ClipboardFormatStatus::ReadFailed:   return "read-failed";
+    case ClipboardFormatStatus::MetadataOnly:
+    default:                                  return "metadata-only";
+    }
+}
+
 std::string ClipboardItem::Preview(size_t maxLen) const {
     if (type == ContentType::Image)
         return text; // already "[Image WxH]"

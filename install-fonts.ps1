@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Extract bundled fonts into %APPDATA%\Clipboard++\fonts\
-    No dependencies — requires only Windows 10/11 built-in ZIP support.
+    No dependencies - requires only Windows 10/11 built-in ZIP support.
     Rename fonts.7z to fonts.zip before using this script.
 #>
 
@@ -22,7 +22,7 @@ if (-not (Test-Path $dest)) {
 
 Write-Host "Installing fonts to: $dest" -ForegroundColor Cyan
 
-# Extract — overwrite existing files silently
+# Extract - overwrite existing files silently
 Expand-Archive -Path $archive -DestinationPath $dest -Force
 
 $count = (Get-ChildItem $dest -File).Count

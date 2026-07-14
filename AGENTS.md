@@ -8,10 +8,10 @@ This file is for coding agents working in this repository. It captures the proje
 
 | Directory | Executable | Description |
 |---|---|---|
-| `.` (root) | `clipboardpp.exe` | Main clipboard manager — Win32 tray app, ImGui UI, DirectX 11 |
+| `.` (root) | `clipboardpp.exe` | Main clipboard manager - Win32 tray app, ImGui UI, DirectX 11 |
 | `dbviewer/` | `sqlite_editor.exe` | Standalone SQLite database viewer |
 | `jsonviewer/` | `json_viewer.exe` | Standalone JSON file viewer |
-| `icons/` | — | SVG sources + ICO build tooling (Node.js + Python) |
+| `icons/` | - | SVG sources + ICO build tooling (Node.js + Python) |
 
 All three share the same `third_party/` vendors (ImGui, nlohmann/json, SQLite3 is bundled in dbviewer).
 
@@ -52,7 +52,7 @@ cmake -S jsonviewer -B build/.cmake/json_viewer -G "Visual Studio 17 2022" -A x6
 cmake --build build/.cmake/json_viewer --config Release
 ```
 
-Do NOT pass `-DCMAKE_BUILD_TYPE` when using a Visual Studio generator — it is silently ignored and produces a CMake warning. Configuration is set at build time via `--config`.
+Do NOT pass `-DCMAKE_BUILD_TYPE` when using a Visual Studio generator - it is silently ignored and produces a CMake warning. Configuration is set at build time via `--config`.
 
 ### CMakeLists.txt behavior (clipboardpp)
 
@@ -62,7 +62,7 @@ Do NOT pass `-DCMAKE_BUILD_TYPE` when using a Visual Studio generator — it is 
 
 `imgui_demo.cpp` is intentionally **excluded** from `IMGUI_SOURCES`. Do not add it back.
 
-Static MSVC runtime (`MultiThreaded` / `MultiThreadedDebug`) — no redistributable needed.
+Static MSVC runtime (`MultiThreaded` / `MultiThreadedDebug`) - no redistributable needed.
 
 ### Releasing
 
@@ -104,14 +104,14 @@ third_party/nlohmann/             Vendored nlohmann/json
 
 ## Appearance system
 
-### AppearanceSettings struct — key color fields
+### AppearanceSettings struct - key color fields
 
 Every color field added here must be wired through **four** locations:
 1. `SavedAppearanceTheme` struct (same field, same default)
-2. `ThemeDefaults()` in `Appearance.cpp` — derive from theme palette after the switch
-3. `EffectiveSettings()` — copy `theme.<field>` into `effective.<field>`
-4. `ToSavedTheme()` / `ApplySavedTheme()` — copy field both directions
-5. `LoadColorFields()` / `SaveColorFields()` in `ConfigStore.cpp` — JSON persist
+2. `ThemeDefaults()` in `Appearance.cpp` - derive from theme palette after the switch
+3. `EffectiveSettings()` - copy `theme.<field>` into `effective.<field>`
+4. `ToSavedTheme()` / `ApplySavedTheme()` - copy field both directions
+5. `LoadColorFields()` / `SaveColorFields()` in `ConfigStore.cpp` - JSON persist
 
 Current color fields (beyond the standard palette):
 
@@ -154,14 +154,14 @@ static void DrawClipboardIconAt(ImDrawList* dl, ImVec2 pos, float sz,
 static void DrawClipboardIcon(float sz, const AppearanceSettings& ap);
 ```
 
-`DrawClipboardIconAt` draws the full clipboard shape procedurally via ImDrawList — no texture. Use it anywhere you need a live-themed clipboard icon:
-- `DrawTitleBar()` — small icon in the title bar strip
-- `DrawAbout()` — 64px icon in the About page
-- `DrawAppearance()` — 48px live preview beside the icon color pickers
+`DrawClipboardIconAt` draws the full clipboard shape procedurally via ImDrawList - no texture. Use it anywhere you need a live-themed clipboard icon:
+- `DrawTitleBar()` - small icon in the title bar strip
+- `DrawAbout()` - 64px icon in the About page
+- `DrawAppearance()` - 48px live preview beside the icon color pickers
 
 ### TrayIcon::ApplyTheme
 
-Called from `Application::ApplyAppearanceNow()` whenever the theme changes. Generates a new HICON via GDI (`BuildHIcon`) and calls `Shell_NotifyIconW(NIM_MODIFY)` to update the system tray icon in real time. The compiled `.ico` in `resources/app.rc` is used only for taskbar/Alt+Tab/shell — it is not updated at runtime.
+Called from `Application::ApplyAppearanceNow()` whenever the theme changes. Generates a new HICON via GDI (`BuildHIcon`) and calls `Shell_NotifyIconW(NIM_MODIFY)` to update the system tray icon in real time. The compiled `.ico` in `resources/app.rc` is used only for taskbar/Alt+Tab/shell - it is not updated at runtime.
 
 ---
 
@@ -173,7 +173,7 @@ Standalone Win32 app built on Dear ImGui + DirectX 11. Opens `.db`, `.sqlite`, `
 
 Key source: `dbviewer/src/DbViewer.cpp`, `DbViewer.h`  
 Resource file: `dbviewer/res/sqlite_editor.rc` (references `../../icons/sqlite_editor.ico`)  
-Shell integration: `dbviewer/sqlite_editor.reg` — installs right-click "Open with SQLite Editor" for `.db`, `.sqlite`, `.sqlite3`
+Shell integration: `dbviewer/sqlite_editor.reg` - installs right-click "Open with SQLite Editor" for `.db`, `.sqlite`, `.sqlite3`
 
 Window setup pattern (shared with JsonViewer):
 ```cpp
@@ -200,8 +200,8 @@ Shell integration: `jsonviewer/json-viewer.reg`
 Source: one SVG per project (`clipboardpp.svg`, `sqlite_editor.svg`, `json_viewer.svg`)
 
 Tools:
-- `render_svg.js` — Node.js, uses `@resvg/resvg-js` (Rust renderer, no system deps), renders SVG at 7 sizes
-- `make_ico.py` — Python 3, assembles 7 PNGs into a multi-resolution ICO using `struct.pack`
+- `render_svg.js` - Node.js, uses `@resvg/resvg-js` (Rust renderer, no system deps), renders SVG at 7 sizes
+- `make_ico.py` - Python 3, assembles 7 PNGs into a multi-resolution ICO using `struct.pack`
 
 ```powershell
 cd icons && npm install   # first time
@@ -221,13 +221,13 @@ The SVG uses a **double-stroke technique** for lines (wide black outline drawn f
 `Application` is a singleton (`Application::Get()`). It owns:
 - Main Win32 HWND (message loop, hotkeys, WM_COPYDATA IPC)
 - D3D11 device + context (shared between main window and popup)
-- `PopupWindow` — own swap chain + render target
-- `TrayPopupWindow` — own swap chain + render target
-- `MainWindow`, `DebugWindow` — rendered into the main swap chain
-- `TrayIcon` — system tray, calls `ApplyTheme()` on appearance change
+- `PopupWindow` - own swap chain + render target
+- `TrayPopupWindow` - own swap chain + render target
+- `MainWindow`, `DebugWindow` - rendered into the main swap chain
+- `TrayIcon` - system tray, calls `ApplyTheme()` on appearance change
 - `HotkeyManager`, `ClipboardMonitor`, `AppConfig`, `ImageStore`
-- `vector<unique_ptr<ClipboardHistory>>` — one per profile
-- `ClipboardHistory* m_history` — active profile pointer (not owned)
+- `vector<unique_ptr<ClipboardHistory>>` - one per profile
+- `ClipboardHistory* m_history` - active profile pointer (not owned)
 
 ### Two ImGui contexts
 
@@ -236,10 +236,10 @@ Main window and popup each have their own `ImGuiContext`. Always switch contexts
 ### Render loop
 
 `Application::RenderFrame()` runs on every frame (PeekMessage loop with idle throttling):
-1. Main window — only when visible
-2. PopupWindow — only when popup is visible
-3. TrayPopupWindow — only when tray popup is visible
-4. DebugWindow — inside the main window frame
+1. Main window - only when visible
+2. PopupWindow - only when popup is visible
+3. TrayPopupWindow - only when tray popup is visible
+4. DebugWindow - inside the main window frame
 
 `ApplyAppearanceNow()` runs when `m_appearanceDirty` is set. It applies to all windows + regenerates the tray icon.
 
@@ -247,16 +247,16 @@ Main window and popup each have their own `ImGuiContext`. Always switch contexts
 
 ## Main window (settings)
 
-Created with `WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX` — no native title bar. Custom chrome via ImGui.
+Created with `WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX` - no native title bar. Custom chrome via ImGui.
 
 **Settings tabs:**
 - General, Hotkeys, Appearance, History, Images, Privacy, Developer (debug only), About
 
 **Custom title bar**: drawn by `DrawTitleBar()`, calls `DrawClipboardIcon()` for the title bar icon. Button colors (base + hover for min/max/close) are theme-driven via `ap.titleMinBase/Hover`, etc.
 
-**About page**: calls `DrawClipboardIcon(64px, ap)` — no texture, fully theme-driven.
+**About page**: calls `DrawClipboardIcon(64px, ap)` - no texture, fully theme-driven.
 
-**Appearance tab — Icon section**: 5 color pickers (Board top, Board bottom, Paper, Margin line, Ruled lines) + live 48px preview.
+**Appearance tab - Icon section**: 5 color pickers (Board top, Board bottom, Paper, Margin line, Ruled lines) + live 48px preview.
 
 **Focus gotcha**: reopening the settings window required two clicks before ImGui responded. Fixed by:
 - `ClearMainInputState()` in both `ShowMainWindow()` and `HideMainWindow()`
@@ -268,13 +268,13 @@ Do not remove any of these pieces.
 
 ## Popup window
 
-`WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE` — never steals focus. All keyboard input is forwarded from the `WH_KEYBOARD_LL` hook.
+`WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE` - never steals focus. All keyboard input is forwarded from the `WH_KEYBOARD_LL` hook.
 
 Layout (top → bottom):
-1. Title bar — close button, opacity knobs, profile combo
-2. Filter strip — 10 type filters, queue mode, paste-all, settings gear
+1. Title bar - close button, opacity knobs, profile combo
+2. Filter strip - 10 type filters, queue mode, paste-all, settings gear
 3. Search bar
-4. Item list — pinned section, regular history, drag-drop reorder
+4. Item list - pinned section, regular history, drag-drop reorder
 
 Keyboard capture flags: `m_keyboardCapture`, `m_searchCapture`, `m_searchActive`, `m_focusSearchOnOpen`, `m_dialogTextCapture`. `HotkeyManager` checks `IsKeyboardCaptureActive()` before slot-paste keys.
 
@@ -296,7 +296,7 @@ Injected paste keystrokes tagged with `kClipboardPasteMagic` to suppress hook re
 
 ## Config
 
-`%APPDATA%\Clipboard++\config.json` — loaded/saved by `ConfigStore`. Missing fields are filled with defaults; adding new fields with defaults is forwards-compatible.
+`%APPDATA%\Clipboard++\config.json` - loaded/saved by `ConfigStore`. Missing fields are filled with defaults; adding new fields with defaults is forwards-compatible.
 
 `AppConfig` contains: `appearance` (full `AppearanceSettings`), `hotkeys`, `developer`, behavioral flags, `activeClipboardId`, `clipboards` (profile metadata), `savedThemes`.
 
@@ -307,8 +307,8 @@ Injected paste keystrokes tagged with `kClipboardPasteMagic` to suppress hook re
 Single-instance mutex: `Local\ClipboardPlusPlus`  
 IPC window class: `ClipboardPlusPlus_Main`
 
-`ipc::SignalRunning(WM_SHOWCPP_MAIN)` — brings GUI to foreground.  
-`ipc::SendClipboardHistoryText(text, position, setSystemClipboard)` — WM_COPYDATA with ClipboardTextCommand payload.
+`ipc::SignalRunning(WM_SHOWCPP_MAIN)` - brings GUI to foreground.
+`ipc::SendClipboardHistoryText(text, position, setSystemClipboard)` - WM_COPYDATA with ClipboardTextCommand payload.
 
 ---
 

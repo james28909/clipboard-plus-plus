@@ -1,5 +1,5 @@
 // resources/app.rc
-// Placeholder resource file — replace icon with actual .ico before release
+// Placeholder resource file - replace icon with actual .ico before release
 
 #include <windows.h>
 
@@ -30,7 +30,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "clipboard-plus-plus"
-            VALUE "FileDescription",  "Clipboard++ — Clipboard Manager"
+            VALUE "FileDescription",  "Clipboard++ - Clipboard Manager"
             VALUE "FileVersion",      "0.1.0.0"
             VALUE "InternalName",     "clipboardpp"
             VALUE "OriginalFilename", "clipboardpp.exe"

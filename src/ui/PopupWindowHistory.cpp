@@ -1,7 +1,11 @@
 #include "PopupWindow.h"
+#include "MainWindow.h"
 #include "../app/Application.h"
 #include "../filters/CustomFilter.h"
 #include "../hotkeys/HotkeyManager.h"
+#include "../transforms/RegexTransform.h"
+#include "../templates/PasteTemplate.h"
+#include "../formatting/StructuredFormatter.h"
 #include "ImGuiWidgets.h"
 
 #include <imgui.h>
@@ -288,6 +292,67 @@ void PopupWindow::DrawItemList() {
     ImGui::PopStyleColor();
 }
 
+void PopupWindow::DrawNamedSlots() {
+    Application* app = Application::Get();
+    if (!app) return;
+    const std::vector<NamedClipboardSlot> slots = app->GetNamedSlots();
+    std::string query = m_searchBuf;
+    std::transform(query.begin(), query.end(), query.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
+    ImGuiWindowFlags flags = m_appearance.showScrollbars
+        ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoScrollbar;
+    flags |= ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::BeginChild("##named_slots", {0.0f, 0.0f}, ImGuiChildFlags_None, flags);
+    ImGui::TextDisabled("Named slots (%zu)", slots.size());
+    ImGui::Separator();
+
+    size_t visible = 0;
+    for (const NamedClipboardSlot& slot : slots) {
+        std::string haystack = slot.name + "\n" + slot.text;
+        std::transform(haystack.begin(), haystack.end(), haystack.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (!query.empty() && haystack.find(query) == std::string::npos)
+            continue;
+        ++visible;
+        ImGui::PushID(static_cast<int>(slot.slotId));
+        ImGui::TextUnformatted(slot.name.c_str());
+
+        const auto& bindings = app->GetHotkeySettings().bindings;
+        auto binding = std::find_if(bindings.begin(), bindings.end(),
+            [&](const KeyBinding& value) {
+                return value.action == HotkeyAction::PasteNamedSlot &&
+                       value.data == static_cast<int>(slot.slotId);
+            });
+        if (binding != bindings.end()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("[%s]", HotkeyManager::BindingText(*binding).c_str());
+        }
+
+        std::string preview = slot.text;
+        std::replace(preview.begin(), preview.end(), '\r', ' ');
+        std::replace(preview.begin(), preview.end(), '\n', ' ');
+        if (preview.size() > 120)
+            preview = preview.substr(0, 117) + "...";
+        ImGui::TextDisabled("%s", preview.empty() ? "(empty)" : preview.c_str());
+        if (ImGui::SmallButton("Paste"))
+            PasteNamedSlot(slot.slotId);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Copy"))
+            app->CopyTextToClipboard(slot.text);
+        ImGui::Separator();
+        ImGui::PopID();
+    }
+    if (slots.empty())
+        ImGui::TextDisabled("Create a named slot in Settings > Developer > Automation.");
+    else if (visible == 0)
+        ImGui::TextDisabled("No named slots match the search.");
+    SmoothScrollCurrentWindow("popup_named_slots_scroll", 78.0f);
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
 bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
     Application* app = Application::Get();
     ClipboardHistory* hist = app ? app->GetHistory() : nullptr;
@@ -316,6 +381,13 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
                 PasteSelectedItemsInOrder();
                 changed = true;
             }
+            if (ids.size() == 2 && ImGui::MenuItem("Compare selected items")) {
+                ClipboardItem left;
+                ClipboardItem right;
+                if (hist->GetByIdCopy(ids[0], left) && hist->GetByIdCopy(ids[1], right))
+                    MainWindow::OpenDiffView(left, right);
+                changed = true;
+            }
             if (ImGui::MenuItem("Clear selection")) {
                 ClearItemSelection();
                 changed = true;
@@ -326,6 +398,89 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
                 hist->MoveItemById(itemId, m_pasteMoveTarget);
                 changed = true;
             }
+            const std::vector<RegexTransformDefinition> transforms =
+                app->GetRegexTransforms();
+            if (ImGui::BeginMenu("Paste with transform...",
+                                 item.IsText() && !transforms.empty())) {
+                for (const RegexTransformDefinition& transform : transforms) {
+                    ImGui::PushID(static_cast<int>(transform.transformId));
+                    if (ImGui::MenuItem(transform.name.c_str())) {
+                        PasteItemWithTransformKeepOpen(item, transform);
+                        hist->MoveItemById(itemId, m_pasteMoveTarget);
+                        changed = true;
+                    }
+                    ImGui::PopID();
+                    if (changed)
+                        break;
+                }
+                ImGui::EndMenu();
+            }
+            const bool canFormat = (item.tags & (TAG_JSON | TAG_XML | TAG_SQL)) != 0;
+            if (ImGui::BeginMenu("Paste formatted...", canFormat)) {
+                const auto pasteFormatted = [&](const char* label,
+                                                StructuredFormat format) {
+                    if (ImGui::MenuItem(label) &&
+                        PasteItemFormattedKeepOpen(item, format)) {
+                        hist->MoveItemById(itemId, m_pasteMoveTarget);
+                        changed = true;
+                    }
+                };
+                if ((item.tags & TAG_JSON) != 0)
+                    pasteFormatted("JSON", StructuredFormat::Json);
+                if ((item.tags & TAG_XML) != 0)
+                    pasteFormatted("XML", StructuredFormat::Xml);
+                if ((item.tags & TAG_SQL) != 0)
+                    pasteFormatted("SQL", StructuredFormat::Sql);
+                ImGui::EndMenu();
+            }
+            const bool hasPasteAs = std::any_of(item.formats.begin(), item.formats.end(),
+                [](const ClipboardFormatRecord& format) {
+                    return format.replaySafe &&
+                           format.status == ClipboardFormatStatus::Preserved &&
+                           !format.data.empty() && format.formatId != CF_LOCALE;
+                });
+            if (ImGui::BeginMenu("Paste as...", hasPasteAs)) {
+                for (const ClipboardFormatRecord& format : item.formats) {
+                    if (!format.replaySafe ||
+                        format.status != ClipboardFormatStatus::Preserved ||
+                        format.data.empty() || format.formatId == CF_LOCALE)
+                        continue;
+                    ImGui::PushID(static_cast<int>(format.order));
+                    std::string label = format.name + "  (" +
+                        std::to_string(format.data.size()) + " bytes)";
+                    if (ImGui::MenuItem(label.c_str())) {
+                        PasteItemAsFormatKeepOpen(item, format);
+                        hist->MoveItemById(itemId, m_pasteMoveTarget);
+                        changed = true;
+                    }
+                    ImGui::PopID();
+                    if (changed)
+                        break;
+                }
+                ImGui::EndMenu();
+            }
+        }
+        const std::vector<PasteTemplateDefinition> pasteTemplates =
+            app->GetPasteTemplates();
+        const bool templateInputsAreText = std::all_of(ids.begin(), ids.end(),
+            [&](uint64_t id) {
+                ClipboardItem selected;
+                return hist->GetByIdCopy(id, selected) && selected.IsText();
+            });
+        if (ImGui::BeginMenu("Paste with template...",
+                             !pasteTemplates.empty() && templateInputsAreText)) {
+            for (const PasteTemplateDefinition& pasteTemplate : pasteTemplates) {
+                ImGui::PushID(static_cast<int>(pasteTemplate.templateId));
+                if (ImGui::MenuItem(pasteTemplate.name.c_str()) &&
+                    PasteSelectionWithTemplateKeepOpen(ids, pasteTemplate)) {
+                    hist->MoveItemsById(ids, m_pasteMoveTarget);
+                    changed = true;
+                }
+                ImGui::PopID();
+                if (changed)
+                    break;
+            }
+            ImGui::EndMenu();
         }
         if (!multi && ImGui::MenuItem("Copy to clipboard")) {
             WriteToClipboard(item);

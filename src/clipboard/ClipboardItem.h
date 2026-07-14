@@ -15,6 +15,25 @@ enum class ContentType : uint8_t {
 
 const char* ContentTypeName(ContentType type);
 
+enum class ClipboardFormatStatus : uint8_t {
+    Preserved,
+    MetadataOnly,
+    TooLarge,
+    ReadFailed,
+};
+
+const char* ClipboardFormatStatusName(ClipboardFormatStatus status);
+
+struct ClipboardFormatRecord {
+    uint32_t formatId{};          // Numeric Win32 ID at capture time (diagnostic only).
+    std::string name;             // Stable standard/registered format name.
+    uint32_t order{};             // Order returned by EnumClipboardFormats.
+    uint64_t byteSize{};          // Size reported at capture time, when known.
+    ClipboardFormatStatus status{ClipboardFormatStatus::MetadataOnly};
+    bool replaySafe{false};
+    std::vector<uint8_t> data;    // Exact bytes only for audited HGLOBAL formats.
+};
+
 // Bitmask - multiple tags can be set on one item
 enum ContentTag : uint32_t {
     TAG_NONE       = 0,
@@ -63,6 +82,8 @@ struct ClipboardItem {
     uint64_t sourcePixelHash{};      // transient normalized image hash for late screenshot file matching
     int imageW{};
     int imageH{};
+
+    std::vector<ClipboardFormatRecord> formats;
 
     std::string sourceProcess;      // e.g. "chrome.exe"  (populated in dev mode)
     std::chrono::system_clock::time_point timestamp;

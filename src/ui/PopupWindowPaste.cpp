@@ -1,7 +1,11 @@
 #include "PopupWindow.h"
 #include "../app/Application.h"
 #include "../clipboard/ClipboardMonitor.h"
+#include "../clipboard/ContentDetector.h"
 #include "../hotkeys/HotkeyManager.h"
+#include "../transforms/RegexTransform.h"
+#include "../templates/PasteTemplate.h"
+#include "../formatting/StructuredFormatter.h"
 #include "../util/Win32Util.h"
 #include "PasteDiagnostics.h"
 #include "ToastWindow.h"
@@ -9,6 +13,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -16,6 +21,21 @@
 #include <vector>
 
 static PopupWindow* g_trackingPopup = nullptr;
+
+class ScopedClipboardSelfWrite {
+public:
+    explicit ScopedClipboardSelfWrite(ClipboardMonitor* monitor) : m_monitor(monitor) {
+        if (m_monitor)
+            m_monitor->BeginSelfWrite();
+    }
+    ~ScopedClipboardSelfWrite() {
+        if (m_monitor)
+            m_monitor->EndSelfWrite();
+    }
+
+private:
+    ClipboardMonitor* m_monitor{};
+};
 
 static HGLOBAL BuildUnicodeTextGlobal(const std::wstring& text) {
     const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
@@ -65,6 +85,47 @@ static HGLOBAL BuildFileDropGlobal(const std::vector<std::wstring>& paths) {
 
     GlobalUnlock(mem);
     return mem;
+}
+
+static UINT ReplayFormatId(const ClipboardFormatRecord& format) {
+    if (format.formatId < 0xC000)
+        return format.formatId;
+    if (format.name.empty())
+        return 0;
+    const std::wstring name = win32util::Utf8ToWide(format.name);
+    return name.empty() ? 0 : RegisterClipboardFormatW(name.c_str());
+}
+
+static bool SetPreservedFormat(const ClipboardFormatRecord& format) {
+    if (!format.replaySafe || format.status != ClipboardFormatStatus::Preserved ||
+        format.data.empty())
+        return false;
+    const UINT replayId = ReplayFormatId(format);
+    if (replayId == 0)
+        return false;
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, format.data.size());
+    if (!memory)
+        return false;
+    void* destination = GlobalLock(memory);
+    if (!destination) {
+        GlobalFree(memory);
+        return false;
+    }
+    std::memcpy(destination, format.data.data(), format.data.size());
+    GlobalUnlock(memory);
+    if (!SetClipboardData(replayId, memory)) {
+        GlobalFree(memory);
+        return false;
+    }
+    return true;
+}
+
+static bool HasReplayableBundle(const ClipboardItem& item) {
+    return std::any_of(item.formats.begin(), item.formats.end(),
+        [](const ClipboardFormatRecord& format) {
+            return format.replaySafe && format.status == ClipboardFormatStatus::Preserved &&
+                   !format.data.empty();
+        });
 }
 
 static std::wstring WithTrailingCrlf(std::wstring text) {
@@ -304,6 +365,114 @@ void PopupWindow::PasteItemKeepOpen(const ClipboardItem& item) {
     ActivateKeyboardCapture(); // re-arm so slot keys keep working after paste
 }
 
+void PopupWindow::PasteItemWithTransformKeepOpen(
+    const ClipboardItem& item, const RegexTransformDefinition& transform) {
+    const RegexTransformResult result = ApplyRegexTransform(transform, item.text);
+    if (!result.ok) {
+        ToastWindow::Show(L"Regex transform failed");
+        return;
+    }
+
+    ClipboardItem transformed = item;
+    transformed.type = ContentType::Text;
+    transformed.text = result.output;
+    transformed.formats.clear();
+    transformed.tags = ContentDetector::DetectTags(transformed.text);
+    PasteItemKeepOpen(transformed);
+}
+
+bool PopupWindow::PasteSelectionWithTemplateKeepOpen(
+    const std::vector<uint64_t>& itemIds,
+    const PasteTemplateDefinition& pasteTemplate) {
+    Application* app = Application::Get();
+    ClipboardHistory* history = app ? app->GetHistory() : nullptr;
+    if (!app || !history)
+        return false;
+
+    std::vector<std::string> numberedValues;
+    numberedValues.reserve(itemIds.size());
+    for (uint64_t itemId : itemIds) {
+        ClipboardItem selected;
+        if (!history->GetByIdCopy(itemId, selected) || !selected.IsText()) {
+            ToastWindow::Show(L"Templates require text clipboard items");
+            return false;
+        }
+        numberedValues.push_back(std::move(selected.text));
+    }
+
+    std::vector<std::pair<std::string, std::string>> namedValues;
+    for (const NamedClipboardSlot& slot : app->GetNamedSlots())
+        namedValues.emplace_back(slot.name, slot.text);
+    const PasteTemplateResult result = ApplyPasteTemplate(
+        pasteTemplate, numberedValues, namedValues);
+    if (!result.ok) {
+        const std::wstring message = win32util::Utf8ToWide(result.error);
+        ToastWindow::Show(message.c_str());
+        return false;
+    }
+
+    ClipboardItem templated;
+    templated.type = ContentType::Text;
+    templated.text = result.output;
+    templated.sourceProcess = "clipboardpp.exe";
+    templated.tags = ContentDetector::DetectTags(templated.text);
+    PasteItemKeepOpen(templated);
+    return true;
+}
+
+bool PopupWindow::PasteItemFormattedKeepOpen(const ClipboardItem& item,
+                                             StructuredFormat format) {
+    const StructuredFormatResult result = FormatStructuredText(item.text, format);
+    if (!result.ok) {
+        const std::wstring message = win32util::Utf8ToWide(result.error);
+        ToastWindow::Show(message.c_str());
+        return false;
+    }
+    ClipboardItem formatted = item;
+    formatted.type = ContentType::Text;
+    formatted.text = result.output;
+    formatted.formats.clear();
+    formatted.tags = ContentDetector::DetectTags(formatted.text);
+    PasteItemKeepOpen(formatted);
+    return true;
+}
+
+void PopupWindow::PasteNamedSlot(int64_t slotId, HWND targetWindow) {
+    Application* app = Application::Get();
+    if (!app) return;
+    const std::vector<NamedClipboardSlot> slots = app->GetNamedSlots();
+    auto it = std::find_if(slots.begin(), slots.end(),
+        [&](const NamedClipboardSlot& slot) { return slot.slotId == slotId; });
+    if (it == slots.end()) {
+        ToastWindow::Show(L"Named slot no longer exists");
+        return;
+    }
+
+    ClipboardItem item;
+    item.type = ContentType::Text;
+    item.text = it->text;
+    item.sourceProcess = "clipboardpp.exe";
+    item.tags = ContentDetector::DetectTags(item.text);
+    if (!targetWindow) {
+        PasteItemKeepOpen(item);
+        return;
+    }
+    WriteToClipboard(item, targetWindow);
+    RestoreFocusAndPaste(targetWindow);
+}
+
+void PopupWindow::PasteItemAsFormatKeepOpen(const ClipboardItem& item,
+                                            const ClipboardFormatRecord& format) {
+    HWND target = ResolvePasteTarget();
+    if (!target) {
+        ActivateKeyboardCapture();
+        return;
+    }
+    if (WriteFormatToClipboard(format))
+        RestoreFocusAndPaste(target);
+    ActivateKeyboardCapture();
+}
+
 void PopupWindow::PasteSelectedItemsInOrder() {
     ClipboardHistory* hist = Application::Get()->GetHistory();
     if (!hist) return;
@@ -342,8 +511,39 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow)
     PLog("[WRITE-CB] type=%s len=%zu text=%.60s",
          CtName(item.type), item.text.size(), item.text.c_str());
 
-    if (Application::Get() && Application::Get()->GetMonitor())
-        Application::Get()->GetMonitor()->SuppressNextUpdate();
+    Application* app = Application::Get();
+    ScopedClipboardSelfWrite selfWrite(app ? app->GetMonitor() : nullptr);
+    if (app && targetWindow && item.sourceProcess == "clipboardpp.exe") {
+        std::string destination = win32util::ProcessNameFromWindow(targetWindow);
+        if (destination.empty())
+            destination = "unknown";
+        app->RecordGeneratedPaste("clipboardpp.exe", destination);
+    }
+
+    // Normal paste republishes the complete audited bundle so the destination
+    // application can choose its preferred representation. Transforming text
+    // with the append-newline option intentionally uses the canonical fallback.
+    if (!m_appendNewlineAfterPaste && HasReplayableBundle(item)) {
+        if (!OpenClipboard(nullptr)) {
+            PLog("[WRITE-CB] OpenClipboard FAILED for format bundle (GLE=%lu)", GetLastError());
+            ToastWindow::Show(L"Paste failed: clipboard busy");
+            return;
+        }
+        EmptyClipboard();
+        if (app && app->GetMonitor()) app->GetMonitor()->MarkSelfWrite();
+        size_t written = 0;
+        for (const ClipboardFormatRecord& format : item.formats) {
+            if (SetPreservedFormat(format)) {
+                ++written;
+                PLog("[WRITE-CB] bundled format set OK id=%u name=%s bytes=%zu",
+                     ReplayFormatId(format), format.name.c_str(), format.data.size());
+            }
+        }
+        CloseClipboard();
+        if (written > 0)
+            return;
+        PLog("[WRITE-CB] no bundled formats could be replayed; using canonical fallback");
+    }
 
     std::string text = item.text;
     const bool isFileDrop = item.type == ContentType::FilePaths || (item.tags & TAG_PATH) != 0;
@@ -356,6 +556,7 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow)
                 return;
             }
             EmptyClipboard();
+            if (app && app->GetMonitor()) app->GetMonitor()->MarkSelfWrite();
 
             bool wroteAny = false;
             const std::wstring textPaths = WithTrailingCrlf(win32util::Utf8ToWide(text));
@@ -396,6 +597,7 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow)
             return;
         }
         EmptyClipboard();
+        if (app && app->GetMonitor()) app->GetMonitor()->MarkSelfWrite();
 
         bool wroteAny = false;
         const std::wstring path = win32util::Utf8ToWide(item.sourceFilePath);
@@ -450,6 +652,7 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow)
         return;
     }
     EmptyClipboard();
+    if (app && app->GetMonitor()) app->GetMonitor()->MarkSelfWrite();
 
     if (item.type == ContentType::Image && !item.imageStoreId.empty()) {
         Application* app = Application::Get();
@@ -486,6 +689,22 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow)
         }
     }
     CloseClipboard();
+}
+
+bool PopupWindow::WriteFormatToClipboard(const ClipboardFormatRecord& format) const {
+    Application* app = Application::Get();
+    ScopedClipboardSelfWrite selfWrite(app ? app->GetMonitor() : nullptr);
+    if (!OpenClipboard(nullptr)) {
+        ToastWindow::Show(L"Paste failed: clipboard busy");
+        return false;
+    }
+    EmptyClipboard();
+    if (app && app->GetMonitor()) app->GetMonitor()->MarkSelfWrite();
+    const bool written = SetPreservedFormat(format);
+    CloseClipboard();
+    if (!written)
+        ToastWindow::Show(L"Paste failed: selected format is unavailable");
+    return written;
 }
 
 HWND PopupWindow::ResolvePasteTarget() const {

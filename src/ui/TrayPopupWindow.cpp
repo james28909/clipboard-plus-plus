@@ -1,6 +1,5 @@
 #include "TrayPopupWindow.h"
 #include "../app/Application.h"
-#include "../app/TrayIcon.h"
 
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
@@ -329,7 +328,6 @@ void TrayPopupWindow::CloseWhenClickedOutside() {
 
 void TrayPopupWindow::DrawMenu() {
     Application* app = Application::Get();
-    TrayIcon* tray = app ? app->GetTray() : nullptr;
 
     ImGui::TextUnformatted("Clipboard++");
     ImGui::Separator();
@@ -355,11 +353,11 @@ void TrayPopupWindow::DrawMenu() {
         Hide();
     });
 
-    const bool incognito = tray && tray->IsIncognito();
+    const bool incognito = app && app->IsIncognito();
     const char* incognitoLabel = incognito ? "Incognito: On" : "Incognito: Off";
-    DrawActionButton(incognitoLabel, buttonSize, [tray]() {
-        if (tray)
-            tray->SetIncognito(!tray->IsIncognito());
+    DrawActionButton(incognitoLabel, buttonSize, [app]() {
+        if (app)
+            app->ToggleIncognito();
     });
 
     ImGui::Separator();

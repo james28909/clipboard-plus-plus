@@ -4,14 +4,14 @@ A lightweight standalone SQLite database browser and editor for Windows, built w
 
 ## Features
 
-- **Table browser** — left panel lists all tables with row counts; click to load
-- **Data grid** — sortable columns, row selection, inline cell editing with commit/rollback
-- **SQL query panel** — write and run arbitrary SQL; results shown in a separate grid
-- **BLOB image preview** — automatically detects image columns and displays decoded images (PNG, JPEG, BMP, GIF, TIFF, raw DIB) in a resizable side panel with save-to-file support; Clipboard++ image BLOBs are decrypted in memory with current-user DPAPI
-- **Recent files** — up to 10 recently opened databases, persisted in `%APPDATA%\sqlite_editor_recents.txt`
-- **Drag and drop** — drop a `.db` or `.sqlite` file onto the window to open it
-- **Dark theme** — matches the Clipboard++ visual style (Dear ImGui + DWM dark title bar)
-- **Keyboard shortcuts** — `Ctrl+O` open, `F5` refresh/reload, `Delete` delete selected row
+- **Table browser** - left panel lists all tables with row counts; click to load
+- **Data grid** - sortable columns, row selection, inline cell editing with commit/rollback
+- **SQL query panel** - write and run arbitrary SQL; results shown in a separate grid
+- **BLOB image preview** - automatically detects image columns and displays decoded images (PNG, JPEG, BMP, GIF, TIFF, raw DIB) in a resizable side panel with save-to-file support; Clipboard++ image BLOBs are decrypted in memory with current-user DPAPI
+- **Recent files** - up to 10 recently opened databases, persisted in `%APPDATA%\sqlite_editor_recents.txt`
+- **Drag and drop** - drop a `.db` or `.sqlite` file onto the window to open it
+- **Dark theme** - matches the Clipboard++ visual style (Dear ImGui + DWM dark title bar)
+- **Keyboard shortcuts** - `Ctrl+O` open, `F5` refresh/reload, `Delete` delete selected row
 
 ## Build
 
@@ -49,7 +49,7 @@ Open `sample.db` in the editor and click any row in `screenshots` to see the ima
 
 ## Tips
 
-- **Resize panels** — drag the vertical splitter between the table list and data grid, or the horizontal splitter between the grid and the image preview
-- **Edit a cell** — double-click any cell; press Enter to commit or Escape to cancel
-- **Run SQL** — type in the SQL panel at the bottom and press `Ctrl+Enter` or click **Run**
-- **Image preview** — only appears when the selected table has a BLOB column; the preview shows the first BLOB column in the row
+- **Resize panels** - drag the vertical splitter between the table list and data grid, or the horizontal splitter between the grid and the image preview
+- **Edit a cell** - double-click any cell; press Enter to commit or Escape to cancel
+- **Run SQL** - type in the SQL panel at the bottom and press `Ctrl+Enter` or click **Run**
+- **Image preview** - only appears when the selected table has a BLOB column; the preview shows the first BLOB column in the row

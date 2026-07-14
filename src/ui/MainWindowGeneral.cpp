@@ -35,61 +35,94 @@ void MainWindow::DrawGeneral() {
     Application* app = Application::Get();
     if (!app) return;
 
-    ImGui::TextDisabled("General");
-    ImGui::Separator();
-    ImGui::Spacing();
+    PageHeader("General", "Choose how Clipboard++ starts, captures, pastes, and presents everyday controls.");
 
     static bool startWithWindowsInitialized = false;
     static bool startWithWindows = false;
-    static bool deduplication = true;
 
     if (!startWithWindowsInitialized) {
         startWithWindows = app->IsStartWithWindowsEnabled();
         startWithWindowsInitialized = true;
     }
-    if (ImGui::Checkbox("Start with Windows", &startWithWindows)) {
-        if (!app->SetStartWithWindowsEnabled(startWithWindows)) {
-            startWithWindows = app->IsStartWithWindowsEnabled();
-            MessageBoxW(app->GetHwnd(),
-                        L"Clipboard++ could not update your Windows startup setting.",
-                        L"Start with Windows", MB_OK | MB_ICONERROR);
+    if (BeginSettingsCard("##general_startup", "Startup & capture",
+                          "Core behavior for launching the app and placing newly captured items.")) {
+        if (ImGui::Checkbox("Start with Windows", &startWithWindows)) {
+            if (!app->SetStartWithWindowsEnabled(startWithWindows)) {
+                startWithWindows = app->IsStartWithWindowsEnabled();
+                MessageBoxW(app->GetHwnd(),
+                            L"Clipboard++ could not update your Windows startup setting.",
+                            L"Start with Windows", MB_OK | MB_ICONERROR);
+            }
+        }
+        ImGui::SameLine(); ImGui::TextDisabled("(?)");
+        HelpTooltip("Launch Clipboard++ automatically when you sign in to Windows.");
+
+        bool newItemsAtTop = app->GetNewItemsAtTop();
+        if (ImGui::Checkbox("Place new items at the top of history", &newItemsAtTop))
+            app->SetNewItemsAtTop(newItemsAtTop);
+        ImGui::SameLine(); ImGui::TextDisabled("(?)");
+        HelpTooltip("When off, new items are added to the bottom.");
+
+        bool hidePopupOnOutsideClick = app->GetHidePopupOnOutsideClick();
+        if (ImGui::Checkbox("Close the popup when clicking elsewhere", &hidePopupOnOutsideClick))
+            app->SetHidePopupOnOutsideClick(hidePopupOnOutsideClick);
+
+        ImGui::TextDisabled(app->IsHistoryDeduplicationEnabled()
+            ? "Duplicate clipboard content is currently consolidated (change in History)."
+            : "Duplicate clipboard content is currently kept separately (change in History).");
+    }
+    EndSettingsCard();
+
+    if (BeginSettingsCard("##general_paste", "Paste behavior",
+                          "Control what happens after an item is pasted into the target application.")) {
+        bool newline = app->GetAppendNewlineAfterPaste();
+        if (ImGui::Checkbox("Append a newline after pasted text", &newline))
+            app->SetAppendNewlineAfterPaste(newline);
+
+        int moveMode = 0;
+        switch (app->GetPasteMoveTarget()) {
+        case ClipboardHistory::MoveTarget::Top:    moveMode = 1; break;
+        case ClipboardHistory::MoveTarget::Bottom: moveMode = 2; break;
+        default:                                   moveMode = 0; break;
+        }
+        const char* modes[] = {
+            "Keep the pasted item in place",
+            "Move the pasted item to the top",
+            "Move the pasted item to the bottom"
+        };
+        ImGui::SetNextItemWidth(std::min(420.0f, ImGui::GetContentRegionAvail().x));
+        if (ImGui::Combo("After paste", &moveMode, modes, IM_ARRAYSIZE(modes))) {
+            ClipboardHistory::MoveTarget target = ClipboardHistory::MoveTarget::None;
+            if (moveMode == 1) target = ClipboardHistory::MoveTarget::Top;
+            if (moveMode == 2) target = ClipboardHistory::MoveTarget::Bottom;
+            app->SetPasteMoveTarget(target);
         }
     }
-    ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    HelpTooltip("Launch Clipboard++ automatically when you sign in to Windows.");
-    ImGui::Spacing();
-    bool newItemsAtTop = app->GetNewItemsAtTop();
-    if (ImGui::Checkbox("New items added to top of list", &newItemsAtTop)) {
-        app->SetNewItemsAtTop(newItemsAtTop);
-    }
-    ImGui::SameLine(); ImGui::TextDisabled("(?)");
-    HelpTooltip("When off, new items are added to the bottom.");
-    ImGui::Spacing();
-    bool hidePopupOnOutsideClick = app->GetHidePopupOnOutsideClick();
-    if (ImGui::Checkbox("Hide popup when clicking outside it", &hidePopupOnOutsideClick))
-        app->SetHidePopupOnOutsideClick(hidePopupOnOutsideClick);
-    ImGui::Spacing();
-    ImGui::Checkbox("Deduplicate - move existing copy to configured position", &deduplication);
+    EndSettingsCard();
 
-    SectionHeader("Interface");
-    UiSettings ui = app->GetUiSettings();
-    bool uiChanged = false;
-    uiChanged |= ImGui::Checkbox("Show helper text", &ui.showHelperText);
-    if (ui.showHelperText) {
-        ImGui::SetNextItemWidth(180.0f);
-        uiChanged |= SliderIntWheel("Helper delay (ms)", &ui.helperDelayMs, 0, 5000, "%d", 50);
-        ImGui::SetNextItemWidth(180.0f);
-        uiChanged |= SliderIntWheel("Helper duration (ms)", &ui.helperDurationMs, 500, 30000, "%d", 250);
-    } else {
-        ImGui::TextDisabled("Inline helper popups are hidden.");
+    if (BeginSettingsCard("##general_interface", "Interface help",
+                          "Configure the contextual hints shown while learning the application.")) {
+        UiSettings ui = app->GetUiSettings();
+        bool uiChanged = ImGui::Checkbox("Show helper text", &ui.showHelperText);
+        if (ui.showHelperText) {
+            ImGui::SetNextItemWidth(std::min(220.0f, ImGui::GetContentRegionAvail().x));
+            uiChanged |= SliderIntWheel("Helper delay (ms)", &ui.helperDelayMs, 0, 5000, "%d", 50);
+            ImGui::SetNextItemWidth(std::min(220.0f, ImGui::GetContentRegionAvail().x));
+            uiChanged |= SliderIntWheel("Helper duration (ms)", &ui.helperDurationMs, 500, 30000, "%d", 250);
+        } else {
+            ImGui::TextDisabled("Contextual helper popups are hidden.");
+        }
+        if (uiChanged) {
+            ui.helperDelayMs = std::clamp(ui.helperDelayMs, 0, 5000);
+            ui.helperDurationMs = std::clamp(ui.helperDurationMs, 500, 30000);
+            app->SetUiSettings(ui);
+        }
     }
-    if (uiChanged) {
-        ui.helperDelayMs = std::clamp(ui.helperDelayMs, 0, 5000);
-        ui.helperDurationMs = std::clamp(ui.helperDurationMs, 500, 30000);
-        app->SetUiSettings(ui);
-    }
+    EndSettingsCard();
 
-    SectionHeader("Clipboards");
+    const bool profileCardVisible = BeginSettingsCard(
+        "##general_clipboards", "Clipboard profiles",
+        "Select, create, rename, and manage independent clipboard histories.");
 
     const ClipboardProfileConfig* activeProfile = app->GetActiveClipboardProfile();
     static std::string lastProfileId;
@@ -184,19 +217,22 @@ void MainWindow::DrawGeneral() {
 
     std::string typedName = TrimAscii(clipboardNameBuf);
     ImGui::Spacing();
-    if (PaddedButton("Set name", 100.0f)) {
+    const float renameW = ButtonWidthForText("Rename", 100.0f);
+    const float createW = ButtonWidthForText("New clipboard", 130.0f);
+    const float deleteW = ButtonWidthForText("Delete active", 130.0f);
+    if (PaddedButton("Rename", renameW)) {
         if (typedName.empty() && activeProfile)
             typedName = activeProfile->name;
         requestConfirmation(PendingClipboardAction::Rename, typedName);
     }
-    ImGui::SameLine();
-    if (PaddedButton("New clipboard", 130.0f)) {
+    SameLineIfFits(createW);
+    if (PaddedButton("New clipboard", createW)) {
         std::string name = typedName;
         if (name.empty())
             name = "Clipboard " + std::to_string(app->GetClipboardProfiles().size() + 1);
         requestConfirmation(PendingClipboardAction::Create, name);
     }
-    ImGui::SameLine();
+    SameLineIfFits(deleteW);
     if (!app->CanDeleteActiveClipboardProfile())
         ImGui::BeginDisabled();
     if (DangerButton("Delete active", 130.0f)) {
@@ -246,6 +282,7 @@ void MainWindow::DrawGeneral() {
     }
 
     if (activeProfile) {
+        ImGui::Separator();
         ImGui::TextDisabled("ID: %s", activeProfile->id.c_str());
         ImGui::TextDisabled("Created: %s", activeProfile->createdAt.c_str());
         ImGui::TextDisabled("Updated: %s", activeProfile->updatedAt.c_str());
@@ -254,5 +291,24 @@ void MainWindow::DrawGeneral() {
                                 ? "(none)"
                                 : activeProfile->processName.c_str());
     }
+
+    (void)profileCardVisible;
+    EndSettingsCard();
+
+    if (BeginSettingsCard("##general_profile_automation", "Profile automation",
+                          "Optionally bind and switch clipboard profiles using the application you were working in.")) {
+        if (PaddedButton("Bind active profile to the last focused app", 280.0f))
+            app->BindActiveClipboardToForegroundProcess();
+
+        bool autoSwitch = app->GetAutoSwitchClipboardByProcess();
+        if (ImGui::Checkbox("Automatically switch profiles for bound apps", &autoSwitch))
+            app->SetAutoSwitchClipboardByProcess(autoSwitch);
+
+        bool autoCreate = app->GetAutoCreateClipboardByProcess();
+        if (ImGui::Checkbox("Create a profile when an unrecognized app is focused", &autoCreate))
+            app->SetAutoCreateClipboardByProcess(autoCreate);
+        ImGui::TextDisabled("Automatic creation can produce many profiles; leave it off unless that workflow is intentional.");
+    }
+    EndSettingsCard();
 
 }

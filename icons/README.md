@@ -1,4 +1,4 @@
-# Icons — Build Guide
+# Icons - Build Guide
 
 This folder contains SVG source files for all three project icons and the tooling to render them into multi-resolution `.ico` files suitable for Windows.
 
@@ -6,25 +6,25 @@ This folder contains SVG source files for all three project icons and the toolin
 
 | File | Purpose |
 |---|---|
-| `clipboardpp.svg` | Clipboard++ main icon — Jugo-style clipboard with theme colors |
+| `clipboardpp.svg` | Clipboard++ main icon - Jugo-style clipboard with theme colors |
 | `sqlite_editor.svg` | SQLite Editor (db viewer) icon |
 | `json_viewer.svg` | JSON Viewer icon |
-| `render_svg.js` | Node.js script — renders one SVG to 7 PNG sizes |
-| `make_ico.py` | Python script — assembles 7 PNGs into a multi-resolution ICO |
+| `render_svg.js` | Node.js script - renders one SVG to 7 PNG sizes |
+| `make_ico.py` | Python script - assembles 7 PNGs into a multi-resolution ICO |
 | `package.json` | npm config for `@resvg/resvg-js` (Rust-based SVG renderer) |
 
 ## Prerequisites
 
-- **Node.js** 18+ — [nodejs.org](https://nodejs.org)
-- **Python 3** — [python.org](https://www.python.org)
-- **npm packages** — install once from this folder:
+- **Node.js** 18+ - [nodejs.org](https://nodejs.org)
+- **Python 3** - [python.org](https://www.python.org)
+- **npm packages** - install once from this folder:
 
 ```powershell
 cd icons
 npm install
 ```
 
-This installs `@resvg/resvg-js` — a Rust-based SVG renderer with no system dependencies. It does not require Inkscape, Chrome, or any other external renderer.
+This installs `@resvg/resvg-js` - a Rust-based SVG renderer with no system dependencies. It does not require Inkscape, Chrome, or any other external renderer.
 
 ## Build a single icon
 
@@ -84,7 +84,7 @@ After rebuilding an icon, rebuild the corresponding project to embed the new ICO
 
 Open the `.svg` in any text editor. The colors are defined in `<linearGradient>` and `<stop>` elements near the top. The Clipboard++ icon uses a blue board gradient, metallic clip, white paper, a red margin line, and four navy ruled lines.
 
-The Clipboard++ in-app icon is also **theme-driven at runtime** — the `DrawClipboardIconAt()` function in `src/ui/MainWindow.cpp` redraws it procedurally using the active theme's `iconBoardTop`, `iconBoardBottom`, `iconPaper`, `iconMarginLine`, and `iconRuledLines` color fields. The compiled `.ico` is used only for the taskbar, Alt+Tab, and the system tray default state. The systray icon is regenerated via GDI in `TrayIcon::ApplyTheme()` whenever the theme changes.
+The Clipboard++ in-app icon is also **theme-driven at runtime** - the `DrawClipboardIconAt()` function in `src/ui/MainWindow.cpp` redraws it procedurally using the active theme's `iconBoardTop`, `iconBoardBottom`, `iconPaper`, `iconMarginLine`, and `iconRuledLines` color fields. The compiled `.ico` is used only for the taskbar, Alt+Tab, and the system tray default state. The systray icon is regenerated via GDI in `TrayIcon::ApplyTheme()` whenever the theme changes.
 
 ## Sizes in the ICO
 
@@ -102,8 +102,8 @@ Each `.ico` contains all seven sizes so Windows picks the best resolution for ea
 
 ## Troubleshooting
 
-**`Cannot find module '@resvg/resvg-js'`** — run `npm install` in the `icons/` folder.
+**`Cannot find module '@resvg/resvg-js'`** - run `npm install` in the `icons/` folder.
 
-**`python` not found** — on some systems Python 3 is invoked as `python3`. Edit the command or add a `python` alias.
+**`python` not found** - on some systems Python 3 is invoked as `python3`. Edit the command or add a `python` alias.
 
-**ICO looks blurry at small sizes** — the SVG uses fine detail that doesn't scale down well. Simplify the SVG at `16px` by reducing stroke widths or adding a size-specific simplified path.
+**ICO looks blurry at small sizes** - the SVG uses fine detail that doesn't scale down well. Simplify the SVG at `16px` by reducing stroke widths or adding a size-specific simplified path.

@@ -1,4 +1,6 @@
 #include "../src/clipboard/ImageStore.h"
+#include "../src/app/ConfigStore.h"
+#include "../src/security/EncryptedSqliteVfs.h"
 #include "../third_party/sqlite/sqlite3.h"
 
 #include <windows.h>
@@ -70,7 +72,7 @@ bool CreateLegacyDatabase(const std::filesystem::path& path,
 bool ReadStoredBlob(const std::filesystem::path& path, const std::string& id,
                     std::vector<uint8_t>& bytes, int& protectionVersion) {
     sqlite3* db = nullptr;
-    if (sqlite3_open_v2(path.u8string().c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+    if (EncryptedSqliteVfs::Open(path, &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
         return false;
     sqlite3_stmt* stmt = nullptr;
     bool ok = sqlite3_prepare_v2(db,
@@ -95,7 +97,7 @@ bool ReadStoredBlob(const std::filesystem::path& path, const std::string& id,
 
 bool CorruptBlob(const std::filesystem::path& path, const std::string& id) {
     sqlite3* db = nullptr;
-    if (sqlite3_open_v2(path.u8string().c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK)
+    if (EncryptedSqliteVfs::Open(path, &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK)
         return false;
     sqlite3_stmt* stmt = nullptr;
     bool ok = sqlite3_prepare_v2(db,
@@ -159,6 +161,11 @@ int main() {
         newId = store.StoreImage(secret, true, "new-profile", 64, 64, "test.exe", 5678);
         ok &= Expect(!newId.empty(), "new image is stored");
         ok &= Expect(store.GetPng(newId) == secret, "new image decrypts on read");
+        std::vector<uint8_t> exactBytes;
+        StoredFormat exactFormat = StoredFormat::RawDib;
+        ok &= Expect(store.GetStoredBytes(newId, exactBytes, exactFormat) &&
+                     exactBytes == secret && exactFormat == StoredFormat::Png,
+                     "exact stored image representation is available for vault export");
     }
     stored.clear();
     protectionVersion = 0;
@@ -186,6 +193,35 @@ int main() {
                  "rolled-back legacy row can be inspected");
     ok &= Expect(protectionVersion == 0 && stored == secret,
                  "failed migration rolls back every image row");
+
+    const auto retentionDb = testDirectory / "retention.db";
+    {
+        ImageStore store;
+        ok &= Expect(store.Open(retentionDb), "retention database opens");
+        ImageSettings settings;
+        settings.maxImages = 1;
+        settings.skipSmallImages = false;
+        store.SetSettings(settings);
+        const std::string protectedId = store.StoreImage(
+            {'p','r','o','t','e','c','t','e','d'}, true,
+            "profile", 64, 64, "test.exe", 1);
+        store.SetProtectedImageIdsProvider([protectedId] {
+            return std::unordered_set<std::string>{protectedId};
+        });
+        const std::string disposableId = store.StoreImage(
+            {'d','i','s','p','o','s','a','b','l','e'}, true,
+            "profile", 64, 64, "test.exe", 2);
+        const std::string newestId = store.StoreImage(
+            {'n','e','w','e','s','t'}, true,
+            "profile", 64, 64, "test.exe", 3);
+        ImageRecord record;
+        ok &= Expect(store.GetRecord(protectedId, record),
+                     "vault-referenced image survives max-image cleanup");
+        ok &= Expect(!store.GetRecord(disposableId, record),
+                     "unreferenced image is eligible for cleanup");
+        ok &= Expect(store.GetRecord(newestId, record),
+                     "new image survives cleanup before history references it");
+    }
 
     std::filesystem::remove_all(testDirectory, error);
     if (!ok)

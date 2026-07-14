@@ -55,15 +55,18 @@ void TrayIcon::HandleMessage(WPARAM wParam, LPARAM lParam) {
 }
 
 void TrayIcon::SetIncognito(bool on) {
-    m_incognito = on;
+    wcscpy_s(m_nid.szTip, on
+        ? L"Clipboard++ - Incognito mode (capture paused)"
+        : L"Clipboard++");
     UpdateIcon();
 }
 
 void TrayIcon::UpdateIcon() {
-    Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+    if (m_created)
+        Shell_NotifyIconW(NIM_MODIFY, &m_nid);
 }
 
-// Shared drawing routine — renders the clipboard icon into a top-down BGRA pixel buffer.
+// Shared drawing routine - renders the clipboard icon into a top-down BGRA pixel buffer.
 static void DrawClipboardIcon(int sz, const AppearanceSettings& ap, DWORD* px) {
     auto setpx = [&](int x, int y, const ImVec4& c) {
         if (x < 0 || y < 0 || x >= sz || y >= sz) return;
@@ -240,13 +243,13 @@ bool TrayIcon::WriteThemeIco(const AppearanceSettings& ap, const std::wstring& o
         bih->biCompression = BI_RGB;
         p += sizeof(BITMAPINFOHEADER);
 
-        // Pixel rows — ICO expects bottom-up, renderer produced top-down → reverse rows
+        // Pixel rows - ICO expects bottom-up, renderer produced top-down → reverse rows
         for (int row = sz - 1; row >= 0; --row) {
             memcpy(p, &frames[i][row * sz], sz * 4);
             p += sz * 4;
         }
 
-        // AND mask — all zeros (alpha channel controls transparency for 32-bit icons)
+        // AND mask - all zeros (alpha channel controls transparency for 32-bit icons)
         memset(p, 0, sz * andStride);
     }
 

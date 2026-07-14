@@ -17,7 +17,9 @@ inline void AddSmoothWheelDelta(float delta) {
 }
 
 inline void SmoothScrollCurrentWindow(const char* id, float pixelsPerWheel = 88.0f,
-                                      float smoothing = 0.32f) {
+                                      float smoothing = 0.32f,
+                                      bool includeChildWindows = true,
+                                      bool suspend = false) {
     const ImGuiID scrollId = ImGui::GetID(id);
     struct State { float target = 0.0f; bool initialized = false; };
     static std::unordered_map<ImGuiID, State> states;
@@ -29,13 +31,21 @@ inline void SmoothScrollCurrentWindow(const char* id, float pixelsPerWheel = 88.
         state.target = current;
         state.initialized = true;
     }
+    if (suspend) {
+        // A nested scroll owner is active. Cancel any residual parent
+        // animation so the parent remains completely stationary.
+        state.target = current;
+        return;
+    }
     const float resetDistance = std::max(900.0f, ImGui::GetWindowHeight() * 2.5f);
     if (std::fabs(current - state.target) > resetDistance)
         state.target = current;
     state.target = std::clamp(state.target, 0.0f, maxScroll);
 
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
-                               ImGuiHoveredFlags_ChildWindows)) {
+    ImGuiHoveredFlags hoverFlags = ImGuiHoveredFlags_AllowWhenBlockedByActiveItem;
+    if (includeChildWindows)
+        hoverFlags |= ImGuiHoveredFlags_ChildWindows;
+    if (ImGui::IsWindowHovered(hoverFlags)) {
         ImGuiIO& io = ImGui::GetIO();
         float wheel = PendingSmoothWheel();
         if (wheel == 0.0f)

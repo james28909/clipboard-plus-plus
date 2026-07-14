@@ -25,7 +25,7 @@ Makefile
 # Third-party vendored libraries (managed separately)
 third_party/imgui/
 
-# Node.js (icon tooling — render_svg.js / make_ico.py deps)
+# Node.js (icon tooling - render_svg.js / make_ico.py deps)
 icons/node_modules/
 
 # Reference / extracted APK (icon style reference, not source)

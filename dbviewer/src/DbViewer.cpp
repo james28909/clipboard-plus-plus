@@ -1,5 +1,6 @@
 #include "DbViewer.h"
 #include "ClipboardImageBlob.h"
+#include "../../src/security/EncryptedSqliteVfs.h"
 #include "../../third_party/sqlite/sqlite3.h"
 
 #include <imgui.h>
@@ -386,17 +387,31 @@ void DbViewerApp::AddToRecents(const std::wstring& path) {
 bool DbViewerApp::OpenDb(const std::wstring& path) {
     CloseDb();
     const std::string utf8 = WideToUtf8(path);
-    if (sqlite3_open_v2(utf8.c_str(), &m_db,
-            SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nullptr) != SQLITE_OK) {
-        if (sqlite3_open_v2(utf8.c_str(), &m_db,
-                SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr) != SQLITE_OK) {
-            m_statusMsg = "Failed to open: " + utf8;
+    const std::filesystem::path databasePath(path);
+    const bool encrypted = EncryptedSqliteVfs::HasKey(databasePath);
+    const auto open = [&](int flags) {
+        if (m_db) {
+            sqlite3_close(m_db);
             m_db = nullptr;
+        }
+        return encrypted
+            ? EncryptedSqliteVfs::Open(databasePath, &m_db, flags, nullptr)
+            : sqlite3_open_v2(utf8.c_str(), &m_db, flags, nullptr);
+    };
+    if (open(SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX) != SQLITE_OK) {
+        if (open(SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX) != SQLITE_OK) {
+            if (m_db) {
+                sqlite3_close(m_db);
+                m_db = nullptr;
+            }
+            m_statusMsg = "Failed to open: " + utf8;
             return false;
         }
-        m_statusMsg = "Opened read-only: " + utf8;
+        m_statusMsg = encrypted ? "Opened encrypted database read-only: " + utf8
+                                : "Opened read-only: " + utf8;
     } else {
-        m_statusMsg = "Opened: " + utf8;
+        m_statusMsg = encrypted ? "Opened encrypted database: " + utf8
+                                : "Opened: " + utf8;
     }
     m_dbPath = path;
     AddToRecents(path);
@@ -1058,7 +1073,7 @@ void DbViewerApp::DrawMenuBar() {
 }
 
 // ---------------------------------------------------------------------------
-// Left panel — table list
+// Left panel - table list
 // ---------------------------------------------------------------------------
 void DbViewerApp::DrawLeftPanel(float panelW) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{0.090f, 0.090f, 0.095f, 1.0f});
@@ -1251,7 +1266,7 @@ void DbViewerApp::DrawImagePreview(float panelW, float availH) {
     ImGui::BeginChild("##preview", {panelW, availH});
     ImGui::PopStyleVar();
 
-    // Content width — always use this, never panelW, for sizing and centering.
+    // Content width - always use this, never panelW, for sizing and centering.
     // panelW is the outer window size; the usable area is smaller by 2×padding.
     const float cw = ImGui::GetContentRegionAvail().x;
 
@@ -1281,7 +1296,7 @@ void DbViewerApp::DrawImagePreview(float panelW, float availH) {
         imgW *= scale;
         imgH *= scale;
 
-        // Center within the content area — cw is the correct boundary
+        // Center within the content area - cw is the correct boundary
         const float cx = std::max(0.0f, (cw - imgW) * 0.5f);
         const float cy = headerY + std::max(0.0f, (remainH - imgH) * 0.5f);
         ImGui::SetCursorPos({cx, cy});

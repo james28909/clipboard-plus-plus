@@ -45,7 +45,7 @@
   <rect x="178" y="34" width="156" height="36" rx="18" ry="18"
         fill="url(#clipSheen)"/>
 
-  <!-- Clip slot cutout — slightly lighter so it reads as a real void -->
+  <!-- Clip slot cutout - slightly lighter so it reads as a real void -->
   <rect x="207" y="52" width="98" height="58" rx="14" ry="14"
         fill="#0A0A0A" stroke="#444" stroke-width="5"/>
 
@@ -57,13 +57,13 @@
   <rect x="106" y="148" width="300" height="310" rx="10" ry="10"
         fill="url(#paper)" stroke="#111" stroke-width="14"/>
 
-  <!-- Red margin line — black outline + vivid red on top -->
+  <!-- Red margin line - black outline + vivid red on top -->
   <line x1="160" y1="162" x2="160" y2="444"
         stroke="#111" stroke-width="46" stroke-linecap="round"/>
   <line x1="160" y1="162" x2="160" y2="444"
         stroke="#FF0022" stroke-width="32" stroke-linecap="round"/>
 
-  <!-- Ruled lines — double-stroke: black outline + deep navy on top -->
+  <!-- Ruled lines - double-stroke: black outline + deep navy on top -->
   <line x1="180" y1="207" x2="382" y2="207"
         stroke="#111" stroke-width="26" stroke-linecap="round"/>
   <line x1="180" y1="207" x2="382" y2="207"

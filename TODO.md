@@ -1,28 +1,28 @@
 # Clipboard++ TODO
 
 ## Quick wins (UI stubs that need wiring)
-- [ ] Incognito mode — toggle exists in tray popup and Ctrl+Shift+I hotkey but does NOT suspend capture
-- [x] Start with Windows — checkbox on General tab wired to HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+- [x] Incognito mode - tray popup and Ctrl+Shift+I suspend clipboard capture without affecting the Windows clipboard; resumes cleanly without capturing incognito content late
+- [x] Start with Windows - checkbox on General tab wired to HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 
 ## Security / storage
-- [x] DPAPI-encrypted history — per-profile history uses current-user DPAPI protection with safe plaintext migration
-- [x] Image store — SQLite DB at %APPDATA%\Clipboard++\images.db; image BLOBs use current-user DPAPI protection with transactional plaintext migration; query metadata remains plaintext; profile history stores UUID reference only
-- [ ] SQLite VFS encryption — implement a custom SQLite VFS layer that encrypts/decrypts each DB page on-the-fly using AES-256; protect the AES key with DPAPI (CryptProtectData) stored alongside the DB; transparent to all callers once wired in
-- [ ] Vault / archive — items that overflow active history limit currently vanish; spec defines a searchable overflow archive with promote-back support
+- [x] DPAPI-encrypted history - per-profile history uses current-user DPAPI protection with safe plaintext migration
+- [x] Image store - encrypted SQLite DB at %APPDATA%\Clipboard++\images.db; the VFS encrypts DB/WAL page payloads and image BLOBs retain an additional current-user DPAPI layer
+- [x] SQLite VFS encryption - custom AES-256-XTS SQLite VFS encrypts/decrypts database, WAL, and rollback-journal page payloads on-the-fly; DPAPI protects each database key; images, profiles, active-profile state, and all history now use encrypted SQLite storage; SQLite Editor opens keyed databases transparently
+- [x] Vault / archive - per-profile encrypted overflow archive with persisted history limit, cached search, deduplication, optional MB cap, delete, and restore-to-active-history support
 
 ## CLI completeness
-- [ ] clipboardpp vault commands (search, count, export) — not implemented
-- [ ] get --list, get --search, get --item <n> — not implemented
-- [ ] set --delete <n>, set --pin <n>, set --unpin <n>, set --clear — not implemented
+- [x] clipboardpp vault commands - per-profile count/search, decrypted files/JSON/binary export, and consistent encrypted online backup
+- [x] get --list, get --search, get --item <n> - per-profile encrypted-history reads with stable one-based positions and text/JSON output
+- [x] set --delete <n>, set --pin <n>, set --unpin <n>, set --clear - stable-ID mutations routed through the running app with optional profile selection; clear leaves the vault intact
 
-## Developer mode (advanced features — all stubs)
-- [ ] Format inspector — show all Win32 clipboard formats for a selected item
-- [ ] Hex viewer — raw bytes view for any item
-- [ ] Named persistent slots — named non-sensitive text snippets unaffected by history limits
-- [ ] Regex transform engine — named pattern/replacement transforms applied before paste
-- [ ] Template paste — {{slot:name}} / {{1}} interpolation
-- [ ] Diff view — side-by-side diff between two selected items
-- [ ] Auto pretty-print — detect JSON/XML/SQL and offer formatted paste
+## Developer mode (advanced features)
+- [x] Format inspector - capture the ordered Win32 format manifest, retain exact bytes for an audited safe allowlist, inspect metadata/hex previews, replay safe bundles, and offer per-format Paste as choices
+- [x] Hex viewer - virtualized full-payload offset/hex/ASCII view for preserved formats, normalized text, and stored image bytes
+- [x] Named persistent slots - encrypted reusable text snippets unaffected by history limits, with popup search/paste/copy, per-slot global hotkeys, and management under Hotkeys
+- [x] Regex transform engine - encrypted named PCRE2 pattern/replacement transforms with an explicit paste action and in-settings preview
+- [x] Template paste - encrypted named templates with {{slot:name}} and selection-ordered {{1}}, {{2}}, ... interpolation
+- [x] Diff view - line-aligned side-by-side diff between two popup-selected items
+- [x] Auto pretty-print - detect JSON/XML/SQL and offer a text-only formatted paste action
 
 ## Code consolidation / restructuring
 - [x] Split Android popup panel out of `PopupWindow.cpp` into `PopupWindowAndroid.cpp`
@@ -37,3 +37,58 @@
 - [x] Split settings tabs out of `MainWindow.cpp` into focused tab files
 - [x] Extract Android Windows-side integration out of `Application.cpp`
 - [x] Extract clipboard profile create/delete/switch logic out of `Application.cpp`
+
+## Next session - correctness first (P0)
+- [x] Fix synthesized-paste recapture - template/transform/formatted output must not be captured back into history as a second item
+- [x] Fix synthesized-paste provenance - inspector source must remain `clipboardpp.exe` (generated by Clipboard++), while paste destination is recorded separately as `chatgpt.exe` or the actual target process
+- [x] Audit clipboard suppression as a transaction/token rather than a single `SuppressNextUpdate` flag; cover multiple/coalesced `WM_CLIPBOARDUPDATE` notifications and delayed format rendering
+- [ ] Fix transient popup list blanking after paste/history mutation - defer mutations until the list frame finishes or render from a stable snapshot and invalidate caches for the next frame only
+- [ ] Add regression tests for template paste to a foreground target: one generated paste, zero duplicate history entries, correct source/destination, and no list disappearance
+- [ ] Verify retained multi-selection behavior is clearly indicated before template paste; add a one-item-only action or explicit selection summary if accidental multi-item application remains confusing
+
+## Startup and responsiveness (P0/P1)
+- [ ] Add timestamped startup profiling around config load, encrypted VFS/DPAPI key open, schema setup, profile metadata, history deserialization, image DB initialization, hotkeys, tray creation, and first rendered frame
+- [ ] Establish performance targets: tray/main shell visible in under 500 ms, popup usable with active history in under 1 second, remaining profiles hydrated without blocking UI
+- [ ] Split startup into a minimal foreground path and deferred work queue; create the window/tray/message loop before nonessential initialization
+- [ ] Load active profile history first; lazy-load inactive clipboard profiles when selected or hydrate them in a bounded background worker
+- [ ] Keep profile metadata available immediately so the profile selector can render while histories are still loading; show a small per-profile loading state
+- [ ] Lazy-initialize the image database/browser, thumbnail cache, Android integration, Developer tooling, and cleanup/pruning jobs only when needed
+- [ ] Cache named slots, regex transforms, templates, vault counts, and other encrypted DB lookups in memory with explicit version invalidation instead of querying during rendering
+- [ ] Measure history JSON serialization/deserialization cost; consider normalized SQLite rows or chunked/lazy payload decoding if it dominates startup
+- [ ] Move integrity checks, orphan-image cleanup, vault pruning, and noncritical migrations off the first-frame path where safe
+- [ ] Add a repeatable cold/warm startup benchmark and record profile count, item count, image count, DB size, and time-to-first-frame
+- [ ] Audit all background initialization for SQLite connection ownership, shutdown cancellation, and ImGui/main-thread boundaries
+
+## Settings information architecture (P1)
+- [ ] Inventory every setting and assign one clear owner; identify duplicates, misplaced controls, vague labels, and settings that belong beside the feature they affect
+- [ ] Decide the final top-level navigation before adding a `Global` tab; candidate structure: General, Clipboard, Popup, Hotkeys, Appearance, Integrations, Privacy & Storage, Developer, About
+- [ ] Consider renaming `General` to `Application` or `System`, and `History` to `Clipboard & History`; do not add a catch-all Global page without a defined content map
+- [ ] Keep Hotkeys standalone, but cross-link relevant shortcut controls from Popup, Profiles, Named slots, and Integrations
+- [ ] Create shared compact UI primitives for page headers, cards, field rows, tables, action columns, status messages, destructive actions, and hidden-until-edit forms
+- [ ] Define one compact density system: control height, row height, cell padding, card padding, label width, section spacing, action-button width, and text wrapping
+- [ ] Make every settings grid use predictable stretch/fixed columns, aligned headers, centered controls, stable action widths, and graceful behavior at minimum window size
+- [ ] Standardize list-first editing: show saved entries first; reveal editors only for New/Edit; keep Save/Cancel/Delete placement consistent
+- [ ] Audit long text, localization growth, custom fonts, UI scaling, Windows DPI scaling, narrow windows, and scrollbar ownership on every page
+- [ ] Add empty, loading, error, and disabled states with consistent wording and colors
+- [ ] Walk every settings page manually and capture before/after screenshots at 100%, 125%, 150%, and the minimum supported window size
+- [ ] Remove obsolete helper text and replace dense explanations with concise labels plus optional tooltips/details
+
+## Popup toolbar and filter redesign (P1)
+- [ ] Redesign the top strip into visually distinct compact groups: content filters, actions/modes, destinations/integrations, and profile/search controls
+- [ ] Preserve the popup's small footprint with collapsible/expanding groups, an overflow menu, and remembered expanded state
+- [ ] Give built-in filters, custom filters, Android/destinations, multi-paste actions, and utility buttons separate containers without making the popup feel like a ribbon
+- [ ] Support a growing number of filters with horizontal overflow, a compact filter picker, favorites/pinning, and clear active-filter indication
+- [ ] Standardize icon size, hit target, padding, hover/active state, tooltip, badge/count, and keyboard navigation for every top-strip control
+- [ ] Keep the most common actions one click away; move rare actions into overflow rather than shrinking every control
+- [ ] Prototype two or three layouts with screenshots/wireframes before implementation, then test at minimum popup width and high DPI
+
+## Reliability, performance, and release hardening (P2)
+- [ ] Add an in-app backup/restore workflow using SQLite online backup, including encrypted backup by default and explicit warnings for decrypted exports
+- [ ] Add config/profile/named-slot/transform/template import-export with conflict handling and encrypted options
+- [ ] Add undo for destructive popup actions (delete, clear, bulk move) using stable item IDs
+- [ ] Add database corruption/recovery UX, safe-mode startup, and actionable persistence error reporting
+- [ ] Add memory and latency telemetry to Developer diagnostics: history bytes, format bytes, thumbnail memory, DB query time, render time, and clipboard-event rate
+- [ ] Stress-test 500 history items per profile, many profiles, large HTML/RTF payloads, large images, thousands of vault items, and rapid clipboard bursts
+- [ ] Audit secrets: source-process display, incognito transitions, vault exports, logs, crash dumps, clipboard restoration, and temporary decrypted files
+- [ ] Add automated tests for physical-modifier hotkeys, double-tap routing, filtered slot positions, popup focus restoration, template/transform formatting, and format replay
+- [ ] Add a release-readiness checklist covering upgrade/migration, clean install, uninstall leftovers, shell integration, startup registration, signatures, version metadata, and all Debug/Release executables

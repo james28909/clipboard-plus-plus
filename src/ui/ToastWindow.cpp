@@ -107,7 +107,7 @@ static void EnsureClassRegistered() {
     wc.lpfnWndProc   = ToastProc;
     wc.hInstance     = GetModuleHandleW(nullptr);
     wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr; // layered window — WM_ERASEBKGND not needed
+    wc.hbrBackground = nullptr; // layered window - WM_ERASEBKGND not needed
     wc.lpszClassName = kToastClass;
     RegisterClassExW(&wc);
     s_classRegistered = true;

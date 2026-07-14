@@ -10,6 +10,7 @@
 #include "../filters/CustomFilter.h"
 #include "Appearance.h"
 #include "PopupWindow.h"
+#include "../diff/TextDiff.h"
 #include <imgui.h>
 #include <windows.h>
 #include <commdlg.h>
@@ -33,9 +34,9 @@ enum Section {
     SEC_HOTKEYS    = 1,
     SEC_APPEARANCE = 2,
     SEC_HISTORY    = 3,
-    SEC_FILTERS    = 4,
-    SEC_EDITOR     = 5,
-    SEC_IMAGES     = 6,
+    SEC_IMAGES     = 4,
+    SEC_FILTERS    = 5,
+    SEC_EDITOR     = 6,
     SEC_ANDROID    = 7,
     SEC_PRIVACY    = 8,
 #ifndef NDEBUG
@@ -49,16 +50,20 @@ enum Section {
 
 static const char* kSectionLabels[SEC_COUNT] = {
 #ifndef NDEBUG
-    "General", "Hotkeys", "Appearance", "History",
-    "Filters", "Editor", "Images", "Android", "Privacy", "Developer", "About",
+    "General", "Hotkeys", "Customize", "History",
+    "Images", "Filters", "Editor", "Android", "Privacy", "Developer", "About",
 #else
-    "General", "Hotkeys", "Appearance", "History",
-    "Filters", "Editor", "Images", "Android", "Privacy", "About",
+    "General", "Hotkeys", "Customize", "History",
+    "Images", "Filters", "Editor", "Android", "Privacy", "About",
 #endif
 };
 
 static int s_activeSection = SEC_GENERAL;
 static int s_focusFrames = 0;
+static bool s_diffOpen = false;
+static std::string s_diffLeftLabel;
+static std::string s_diffRightLabel;
+static std::vector<TextDiffRow> s_diffRows;
 
 namespace MainWindowInternal {
 
@@ -114,8 +119,7 @@ bool BindingHasConflict(const HotkeySettings& settings, size_t index) {
     for (size_t i = 0; i < settings.bindings.size(); ++i) {
         if (i == index) continue;
         const KeyBinding& b = settings.bindings[i];
-        if (a.ctrl == b.ctrl && a.shift == b.shift &&
-            a.alt == b.alt && a.vkey == b.vkey) {
+        if (a.Overlaps(b)) {
             return true;
         }
     }
@@ -197,7 +201,11 @@ float IntInputWidth(int maxVal) {
 
 float ButtonWidthForText(const char* text, float minWidth) {
     const ImGuiStyle& style = ImGui::GetStyle();
-    return std::max(minWidth, ImGui::CalcTextSize(text).x + style.FramePadding.x * 2.0f);
+    // Button labels often carry a ##suffix for a stable ImGui ID. Measure only
+    // the rendered portion; including the hidden suffix can make the requested
+    // button width hundreds of pixels wider than its table cell.
+    return std::max(minWidth,
+                    ImGui::CalcTextSize(text, nullptr, true).x + style.FramePadding.x * 2.0f);
 }
 
 ImVec2 ButtonSizeForText(const char* text, float minWidth) {
@@ -224,6 +232,59 @@ bool BlueButton(const char* label, float minWidth) {
     const bool clicked = PaddedButton(label, minWidth);
     ImGui::PopStyleColor(3);
     return clicked;
+}
+
+void PageHeader(const char* title, const char* description) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_Text));
+    ImGui::TextUnformatted(title);
+    ImGui::PopStyleColor();
+    if (description && description[0]) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", description);
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::Spacing();
+}
+
+bool BeginSettingsCard(const char* id, const char* title, const char* description) {
+    const ImVec4 frameBg = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+    ImVec4 cardBg = frameBg;
+    cardBg.w = std::min(1.0f, frameBg.w * 0.72f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, cardBg);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14.0f, 12.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.0f, 9.0f});
+    const bool visible = ImGui::BeginChild(
+        id, {0.0f, 0.0f},
+        ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding |
+        ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if (visible) {
+        ImGui::TextUnformatted(title);
+        if (description && description[0]) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", description);
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
+    return visible;
+}
+
+void EndSettingsCard() {
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+}
+
+bool SameLineIfFits(float nextItemWidth) {
+    const float nextX = ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x;
+    const float contentRight = ImGui::GetWindowPos().x + ImGui::GetContentRegionMax().x;
+    if (nextX + nextItemWidth > contentRight)
+        return false;
+    ImGui::SameLine();
+    return true;
 }
 
 void SectionHeader(const char* label) {
@@ -380,11 +441,11 @@ void DrawClipboardIconAt(ImDrawList* dl, ImVec2 pos, float sz,
     dl->AddRectFilled(P(13, 18), P(51, 61), C(ap.iconPaper), 2.0f * s);
     dl->AddRect(P(13, 18), P(51, 61), outline, 2.0f * s, 0, 1.75f * s);
 
-    // Red margin line (vertical) — double-stroke
+    // Red margin line (vertical) - double-stroke
     dl->AddLine(P(20, 22), P(20, 58), IM_COL32(0,0,0,255),    5.75f * s);
     dl->AddLine(P(20, 22), P(20, 58), C(ap.iconMarginLine),    4.0f  * s);
 
-    // 4 ruled lines (horizontal) — double-stroke
+    // 4 ruled lines (horizontal) - double-stroke
     for (int i = 0; i < 4; i++) {
         float y = 28.0f + i * 9.0f;
         dl->AddLine(P(23, y), P(48, y), IM_COL32(0,0,0,255),  3.25f * s);
@@ -537,6 +598,61 @@ void MainWindow::RequestFocus() {
     s_focusFrames = 3;
 }
 
+void MainWindow::OpenDiffView(const ClipboardItem& left,
+                              const ClipboardItem& right) {
+    s_diffLeftLabel = "Item " + std::to_string(left.id);
+    s_diffRightLabel = "Item " + std::to_string(right.id);
+    const std::string leftText = left.IsText() ? left.text : left.Preview(4096);
+    const std::string rightText = right.IsText() ? right.text : right.Preview(4096);
+    s_diffRows = BuildTextDiff(leftText, rightText);
+    s_diffOpen = true;
+#ifndef NDEBUG
+    s_activeSection = SEC_DEVELOPER;
+#endif
+    if (Application* app = Application::Get())
+        app->OpenSettingsWindow();
+    RequestFocus();
+}
+
+void MainWindow::DrawDiffView() {
+    if (!s_diffOpen) return;
+    ImGui::SetNextWindowSize({S(900.0f), S(560.0f)}, ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Clipboard item diff", &s_diffOpen,
+                      ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+    ImGui::TextDisabled("Line-aligned comparison. Red is removed/changed; green is added/changed.");
+    if (ImGui::BeginTable("##clipboard_diff", 2,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+            ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
+            {0.0f, -1.0f})) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn(s_diffLeftLabel.c_str(), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(s_diffRightLabel.c_str(), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        for (const TextDiffRow& row : s_diffRows) {
+            ImGui::TableNextRow();
+            if (row.kind == DiffRowKind::LeftOnly || row.kind == DiffRowKind::Changed)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
+                                       IM_COL32(120, 35, 35, 95), 0);
+            if (row.kind == DiffRowKind::RightOnly || row.kind == DiffRowKind::Changed)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
+                                       IM_COL32(30, 110, 55, 95), 1);
+            ImGui::TableSetColumnIndex(0);
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(row.left.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::TableSetColumnIndex(1);
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(row.right.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
 void MainWindow::Draw(bool& open) {
     Application* app = Application::Get();
     ImGuiIO& io = ImGui::GetIO();
@@ -610,21 +726,31 @@ void MainWindow::Draw(bool& open) {
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
 
+    DrawDiffView();
+
     ImGui::End();
 }
 
 // -- Sidebar nav ---------------------------------------------------------------
 
 void MainWindow::DrawSidebarNav(int& selected) {
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 6.0f});
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {14.0f, 8.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 4.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {14.0f, 7.0f});
     const AppearanceSettings appearance = Application::Get()
         ? Application::Get()->GetAppearance()
         : AppearanceSettings{};
     const ImVec4 selectedColor = appearance.customColors
         ? appearance.selectedTab
         : ThemeDefaults(appearance.theme).selectedTab;
+    auto drawGroup = [](const char* label) {
+        if (ImGui::GetCursorPosY() > ImGui::GetStyle().WindowPadding.y)
+            ImGui::Dummy({0.0f, 5.0f});
+        ImGui::TextDisabled("%s", label);
+    };
     for (int i = 0; i < SEC_COUNT; ++i) {
+        if (i == SEC_HISTORY) drawGroup("CLIPBOARD");
+        if (i == SEC_EDITOR)  drawGroup("TOOLS & SYNC");
+        if (i == SEC_PRIVACY) drawGroup("SYSTEM");
         bool active = (i == selected);
         if (active)
             ImGui::PushStyleColor(ImGuiCol_Button, selectedColor);

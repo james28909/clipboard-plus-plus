@@ -20,15 +20,15 @@
   <ellipse cx="256" cy="368" rx="188" ry="50"
            fill="#BF360C" stroke="#111" stroke-width="20"/>
 
-  <!-- Shelf ring 1 — front arc only, at 1/3 height -->
+  <!-- Shelf ring 1 - front arc only, at 1/3 height -->
   <path d="M 68,229 A 188,50 0 0,1 444,229"
         fill="none" stroke="#111" stroke-width="15" stroke-linecap="round"/>
 
-  <!-- Shelf ring 2 — front arc only, at 2/3 height -->
+  <!-- Shelf ring 2 - front arc only, at 2/3 height -->
   <path d="M 68,299 A 188,50 0 0,1 444,299"
         fill="none" stroke="#111" stroke-width="15" stroke-linecap="round"/>
 
-  <!-- Top face (bright, highlighted — drawn last so it sits on top) -->
+  <!-- Top face (bright, highlighted - drawn last so it sits on top) -->
   <ellipse cx="256" cy="160" rx="188" ry="50"
            fill="url(#cTop)" stroke="#111" stroke-width="20"/>
 </svg>

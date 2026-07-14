@@ -69,11 +69,11 @@ function Build-Project {
         Remove-Item $BuildDir -Recurse -Force
     }
 
-    # Centralised output dirs — all exes land in <root>\build\<Config>\<Name>\
+    # Centralised output dirs - all exes land in <root>\build\<Config>\<Name>\
     $outRelease = "$Root\build\Release\$Name"
     $outDebug   = "$Root\build\Debug\$Name"
 
-    # Configure once — VS generator supports all configs from one configure.
+    # Configure once - VS generator supports all configs from one configure.
     # RUNTIME_OUTPUT_DIRECTORY_* redirects the final exe for each config.
     cmake -S $SourceDir -B $BuildDir -G $Generator -A x64 `
           "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$outRelease" `

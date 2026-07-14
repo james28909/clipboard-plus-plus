@@ -43,6 +43,7 @@ public:
     bool RemoveItemsById(const std::vector<uint64_t>& ids);
     bool MoveItem(size_t index, MoveTarget target);
     bool MoveItemById(uint64_t id, MoveTarget target);
+    bool MoveItemsById(const std::vector<uint64_t>& ids, MoveTarget target);
     bool MoveItemsByIdToTop(const std::vector<uint64_t>& ids);
     bool MoveItemsByIdToBottom(const std::vector<uint64_t>& ids);
     bool MoveItemsByIdBefore(const std::vector<uint64_t>& ids, uint64_t beforeId);
@@ -53,6 +54,7 @@ public:
                                   const std::string& description);
     void SetMaxItems(int n);
     void SetNewItemsAtTop(bool top);
+    void SetDeduplicationEnabled(bool enabled);
     void SetOverflowCallback(OverflowCb cb);
     void SetChangedCallback(ChangedCb cb);
 
@@ -69,6 +71,7 @@ private:
     std::vector<ClipboardItem> m_items;
     int                        m_maxItems{100};
     bool                       m_newAtTop{true};
+    bool                       m_deduplicate{true};
     uint64_t                   m_nextId{1};
     uint64_t                   m_version{1};
     OverflowCb                 m_overflowCb;

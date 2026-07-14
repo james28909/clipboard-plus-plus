@@ -12,6 +12,9 @@
 
 struct ImGuiContext;
 struct AppearanceSettings;
+struct RegexTransformDefinition;
+struct PasteTemplateDefinition;
+enum class StructuredFormat;
 
 class PopupWindow {
 public:
@@ -37,6 +40,7 @@ public:
 
     void PasteHistorySlot(int slot, HWND targetWindow);
     void PastePinnedSlot(int slot, HWND targetWindow);
+    void PasteNamedSlot(int64_t slotId, HWND targetWindow = nullptr);
     void PasteVisibleSlot(int slot);
     void PasteSelectedItems();
     void ClearSelectedItems();
@@ -91,6 +95,7 @@ private:
     void DrawItemList();
     void DrawAndroidPanel();
     void DrawImageBrowser();
+    void DrawNamedSlots();
     bool ItemPassesFilter(const ClipboardItem& item) const;
     void InvalidateVisibleHistoryCache() const;
     void EnsureVisibleHistoryCache() const;
@@ -109,8 +114,18 @@ private:
 
     // -- Paste -----------------------------------------------------------------
     void PasteItemKeepOpen(const ClipboardItem& item);
+    void PasteItemWithTransformKeepOpen(
+        const ClipboardItem& item, const RegexTransformDefinition& transform);
+    bool PasteSelectionWithTemplateKeepOpen(
+        const std::vector<uint64_t>& itemIds,
+        const PasteTemplateDefinition& pasteTemplate);
+    bool PasteItemFormattedKeepOpen(const ClipboardItem& item,
+                                    StructuredFormat format);
+    void PasteItemAsFormatKeepOpen(const ClipboardItem& item,
+                                   const ClipboardFormatRecord& format);
     void PasteSelectedItemsInOrder();
     void WriteToClipboard(const ClipboardItem& item, HWND targetWindow = nullptr) const;
+    bool WriteFormatToClipboard(const ClipboardFormatRecord& format) const;
     HWND ResolvePasteTarget() const;
     bool WaitForForeground(HWND target, DWORD timeoutMs) const;
     void RestoreFocusAndPaste(HWND preferredTarget = nullptr);
@@ -152,6 +167,7 @@ private:
     int   m_lastRegionRadius{-1};
     bool  m_lastRegionMaximized{false};
     bool  m_androidPanelOpen{false};
+    bool  m_namedSlotsPanelOpen{false};
     bool  m_appendNewlineAfterPaste{false};
     ClipboardHistory::MoveTarget m_pasteMoveTarget{ClipboardHistory::MoveTarget::None};
     AppearanceSettings m_appearance{};

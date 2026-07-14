@@ -457,6 +457,25 @@ void Application::LogDebug(const std::string& event) {
         m_debugWindow->AddLine(line);
 }
 
+void Application::SetIncognito(bool enabled) {
+    if (m_incognito == enabled)
+        return;
+
+    m_incognito = enabled;
+    if (m_monitor)
+        m_monitor->SetCaptureEnabled(!enabled);
+    if (m_tray)
+        m_tray->SetIncognito(enabled);
+
+    LogDebug(enabled
+        ? "Incognito mode enabled; clipboard capture suspended"
+        : "Incognito mode disabled; clipboard capture resumed");
+}
+
+void Application::ToggleIncognito() {
+    SetIncognito(!m_incognito);
+}
+
 void Application::RequestAppearance(const AppearanceSettings& settings) {
     {
         std::ostringstream out;
@@ -573,11 +592,129 @@ void Application::AddDeveloperEvent(const std::string& event) {
 #endif
 }
 
+void Application::RecordGeneratedPaste(const std::string& sourceProcess,
+                                       const std::string& destinationProcess) {
+    m_lastGeneratedPasteSource = sourceProcess;
+    m_lastGeneratedPasteDestination = destinationProcess;
+    AddDeveloperEvent("generated paste source=" + sourceProcess +
+                      " destination=" + destinationProcess);
+}
+
 void Application::SetNewItemsAtTop(bool value) {
     m_config.newItemsAtTop = value;
     if (m_clipboardProfiles)
         m_clipboardProfiles->SetNewItemsAtTop(value);
     SaveConfig();
+}
+
+void Application::SetActiveHistoryLimit(int value) {
+    value = std::clamp(value, 1, kMaxClipboardHistoryItems);
+    if (m_config.activeHistoryLimit == value) return;
+    m_config.activeHistoryLimit = value;
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SetHistoryLimit(value);
+    SaveConfig();
+}
+
+void Application::SetHistoryDeduplicationEnabled(bool enabled) {
+    if (m_config.deduplicateHistory == enabled) return;
+    m_config.deduplicateHistory = enabled;
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SetDeduplicationEnabled(enabled);
+    SaveConfig();
+}
+
+void Application::SetVaultLimit(bool unlimited, int limitMB) {
+    m_config.vaultUnlimited = unlimited;
+    m_config.vaultLimitMB = std::clamp(limitMB, 1, 102400);
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->ApplyVaultLimit();
+    SaveConfig();
+}
+
+size_t Application::GetVaultCount() const {
+    return m_clipboardProfiles ? m_clipboardProfiles->VaultCount() : 0;
+}
+
+std::vector<ClipboardVaultEntry> Application::SearchVault(
+    const std::string& query) const {
+    std::vector<ClipboardVaultEntry> entries;
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->SearchVault(query, entries);
+    return entries;
+}
+
+bool Application::PromoteVaultItem(int64_t archiveId) {
+    return m_clipboardProfiles && m_clipboardProfiles->PromoteVaultItem(archiveId);
+}
+
+bool Application::DeleteVaultItem(int64_t archiveId) {
+    return m_clipboardProfiles && m_clipboardProfiles->DeleteVaultItem(archiveId);
+}
+
+std::vector<NamedClipboardSlot> Application::GetNamedSlots() const {
+    std::vector<NamedClipboardSlot> slots;
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->LoadNamedSlots(slots);
+    return slots;
+}
+
+bool Application::SaveNamedSlot(NamedClipboardSlot& slot) {
+    return m_clipboardProfiles && m_clipboardProfiles->SaveNamedSlot(slot);
+}
+
+bool Application::DeleteNamedSlot(int64_t slotId) {
+    if (!m_clipboardProfiles || !m_clipboardProfiles->DeleteNamedSlot(slotId))
+        return false;
+    m_config.hotkeys.bindings.erase(std::remove_if(
+        m_config.hotkeys.bindings.begin(), m_config.hotkeys.bindings.end(),
+        [&](const KeyBinding& binding) {
+            return binding.action == HotkeyAction::PasteNamedSlot &&
+                   binding.data == static_cast<int>(slotId);
+        }), m_config.hotkeys.bindings.end());
+    RequestHotkeySettings(m_config.hotkeys);
+    return true;
+}
+
+std::vector<RegexTransformDefinition> Application::GetRegexTransforms() const {
+    std::vector<RegexTransformDefinition> transforms;
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->LoadRegexTransforms(transforms);
+    return transforms;
+}
+
+bool Application::SaveRegexTransform(RegexTransformDefinition& transform) {
+    return m_clipboardProfiles && m_clipboardProfiles->SaveRegexTransform(transform);
+}
+
+bool Application::DeleteRegexTransform(int64_t transformId) {
+    return m_clipboardProfiles &&
+           m_clipboardProfiles->DeleteRegexTransform(transformId);
+}
+
+std::vector<PasteTemplateDefinition> Application::GetPasteTemplates() const {
+    std::vector<PasteTemplateDefinition> templates;
+    if (m_clipboardProfiles)
+        m_clipboardProfiles->LoadPasteTemplates(templates);
+    return templates;
+}
+
+bool Application::SavePasteTemplate(PasteTemplateDefinition& value) {
+    return m_clipboardProfiles && m_clipboardProfiles->SavePasteTemplate(value);
+}
+
+bool Application::DeletePasteTemplate(int64_t templateId) {
+    return m_clipboardProfiles && m_clipboardProfiles->DeletePasteTemplate(templateId);
+}
+
+bool Application::CopyTextToClipboard(const std::string& text) {
+    const std::wstring wide = win32util::Utf8ToWide(text);
+    if (m_monitor)
+        m_monitor->BeginSelfWrite();
+    const bool written = win32util::SetClipboardUnicodeText(m_hwnd, wide.c_str(), wide.size());
+    if (m_monitor)
+        m_monitor->EndSelfWrite();
+    return written;
 }
 
 bool Application::IsStartWithWindowsEnabled() const {
@@ -944,23 +1081,27 @@ void Application::SwitchClipboardForProcess(const std::string& processName) {
 
 bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
     if (!m_history || cds.dwData != CD_CLIPBOARD_TEXT ||
-        cds.cbData < sizeof(ClipboardTextCommand))
+        !cds.lpData ||
+        cds.cbData < sizeof(ClipboardTextCommand) + sizeof(wchar_t))
         return false;
 
-    const auto* cmd = static_cast<const ClipboardTextCommand*>(cds.lpData);
-    const size_t headerBytes = offsetof(ClipboardTextCommand, text);
+    ClipboardTextCommand command{};
+    std::memcpy(&command, cds.lpData, sizeof(command));
+    const size_t headerBytes = sizeof(ClipboardTextCommand);
     const size_t textBytes = cds.cbData - headerBytes;
-    if (textBytes < sizeof(wchar_t))
+    if (textBytes < sizeof(wchar_t) || textBytes % sizeof(wchar_t) != 0)
         return false;
 
+    const auto* text = reinterpret_cast<const wchar_t*>(
+        static_cast<const unsigned char*>(cds.lpData) + headerBytes);
     const size_t maxChars = textBytes / sizeof(wchar_t);
-    const size_t chars = wcsnlen_s(cmd->text, maxChars);
-    if (chars == 0)
+    const size_t chars = wcsnlen_s(text, maxChars);
+    if (chars == 0 || chars == maxChars)
         return false;
 
-    const std::vector<std::wstring> filePaths = win32util::ExistingPathList(cmd->text);
+    const std::vector<std::wstring> filePaths = win32util::ExistingPathList(text);
 
-    int utf8Bytes = WideCharToMultiByte(CP_UTF8, 0, cmd->text, static_cast<int>(chars),
+    int utf8Bytes = WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(chars),
                                         nullptr, 0, nullptr, nullptr);
     if (utf8Bytes <= 0)
         return false;
@@ -968,29 +1109,81 @@ bool Application::HandleClipboardTextCommand(const COPYDATASTRUCT& cds) {
     ClipboardItem item;
     item.type = filePaths.empty() ? ContentType::Text : ContentType::FilePaths;
     item.text.resize(static_cast<size_t>(utf8Bytes));
-    WideCharToMultiByte(CP_UTF8, 0, cmd->text, static_cast<int>(chars),
+    WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(chars),
                         item.text.data(), utf8Bytes, nullptr, nullptr);
     item.sourceProcess = "clipboardpp.exe";
     item.tags = ContentDetector::DetectTags(item.text);
 
     size_t index = 0;
-    if (cmd->position == -1) {
+    if (command.position == -1) {
         index = m_history->Size();
-    } else if (cmd->position > 0) {
-        index = static_cast<size_t>(std::clamp(cmd->position, 1, kMaxClipboardHistoryItems) - 1);
+    } else if (command.position > 0) {
+        index = static_cast<size_t>(std::clamp(command.position, 1, kMaxClipboardHistoryItems) - 1);
     }
 
-    if (cmd->setSystemClipboard) {
+    if (command.setSystemClipboard) {
         if (m_monitor)
-            m_monitor->SuppressNextUpdate();
+            m_monitor->BeginSelfWrite();
         if (!filePaths.empty())
             win32util::SetClipboardFileDrop(m_hwnd, filePaths);
         else
-            win32util::SetClipboardUnicodeText(m_hwnd, cmd->text, chars);
+            win32util::SetClipboardUnicodeText(m_hwnd, text, chars);
+        if (m_monitor)
+            m_monitor->EndSelfWrite();
     }
 
     m_history->Insert(std::move(item), index);
     return true;
+}
+
+bool Application::HandleHistoryMutationCommand(const COPYDATASTRUCT& cds) {
+    if (cds.dwData != CD_HISTORY_MUTATION || !cds.lpData)
+        return false;
+    const size_t headerBytes = sizeof(HistoryMutationCommand);
+    if (cds.cbData < headerBytes + sizeof(wchar_t))
+        return false;
+
+    HistoryMutationCommand command{};
+    std::memcpy(&command, cds.lpData, sizeof(command));
+    if (command.version != kHistoryMutationVersion)
+        return false;
+    const size_t profileBytes = cds.cbData - headerBytes;
+    if (profileBytes % sizeof(wchar_t) != 0)
+        return false;
+    const auto* profileIdText = reinterpret_cast<const wchar_t*>(
+        static_cast<const unsigned char*>(cds.lpData) + headerBytes);
+    const size_t maxChars = profileBytes / sizeof(wchar_t);
+    const size_t chars = wcsnlen_s(profileIdText, maxChars);
+    if (chars == 0 || chars == maxChars)
+        return false;
+
+    const std::string profileId = win32util::WideToUtf8(
+        profileIdText, static_cast<int>(chars));
+    ClipboardHistory* history = HistoryForProfile(profileId);
+    if (!history)
+        return false;
+
+    bool changed = false;
+    switch (static_cast<HistoryMutationOperation>(command.operation)) {
+    case HistoryMutationOperation::Delete:
+        changed = command.itemId != 0 && history->RemoveItemById(command.itemId);
+        break;
+    case HistoryMutationOperation::Pin:
+        changed = command.itemId != 0 && history->SetPinnedById(command.itemId, true);
+        break;
+    case HistoryMutationOperation::Unpin:
+        changed = command.itemId != 0 && history->SetPinnedById(command.itemId, false);
+        break;
+    case HistoryMutationOperation::Clear:
+        history->Clear();
+        changed = true;
+        break;
+    default:
+        return false;
+    }
+    if (changed)
+        AddDeveloperEvent("CLI history mutation applied to profile: " + profileId);
+    return changed;
 }
 
 // -- Private: initialisation ---------------------------------------------------
@@ -1077,6 +1270,11 @@ bool Application::Init() {
 
     // Clipboard histories + monitor
     RebuildClipboardHistories();
+    m_imageStore->SetProtectedImageIdsProvider([this]() {
+        return m_clipboardProfiles
+            ? m_clipboardProfiles->ReferencedImageIds()
+            : std::unordered_set<std::string>{};
+    });
     m_monitor = std::make_unique<ClipboardMonitor>();
     m_monitor->SetImageStore(m_imageStore.get());
     m_monitor->SetProfileIdGetter([this]() -> std::string {
@@ -1410,7 +1608,7 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     // -- Remove all native non-client area so we own every pixel --------------
     case WM_NCCALCSIZE:
-        // Returning 0 for wParam==TRUE discards the NC area — entire window rect
+        // Returning 0 for wParam==TRUE discards the NC area - entire window rect
         // becomes the client rect.  WM_GETMINMAXINFO already constrains the
         // maximized rect to the work area, so no thin strip or taskbar overlap.
         if (wParam == TRUE) return 0;
@@ -1551,8 +1749,13 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
 
     case WM_COPYDATA:
-        if (app)
-            return app->HandleClipboardTextCommand(*reinterpret_cast<COPYDATASTRUCT*>(lParam)) ? TRUE : FALSE;
+        if (app) {
+            const auto& cds = *reinterpret_cast<COPYDATASTRUCT*>(lParam);
+            if (cds.dwData == CD_CLIPBOARD_TEXT)
+                return app->HandleClipboardTextCommand(cds) ? TRUE : FALSE;
+            if (cds.dwData == CD_HISTORY_MUTATION)
+                return app->HandleHistoryMutationCommand(cds) ? TRUE : FALSE;
+        }
         return FALSE;
 
     case WM_HOTKEYACTION: {
@@ -1579,8 +1782,7 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             app->OpenSettingsWindow();
             break;
         case HotkeyAction::Incognito:
-            if (app->m_tray)
-                app->m_tray->SetIncognito(!app->m_tray->IsIncognito());
+            app->ToggleIncognito();
             break;
         case HotkeyAction::PasteHistorySlot: {
             // Direct paste - no popup shown.
@@ -1630,6 +1832,12 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (app->m_popup)
                 app->m_popup->ClearSelectedItems();
             break;
+        case HotkeyAction::PasteNamedSlot: {
+            HWND target = GetForegroundWindow();
+            if (app->m_popup)
+                app->m_popup->PasteNamedSlot(data, target);
+            break;
+        }
         default: break;
         }
         return 0;
