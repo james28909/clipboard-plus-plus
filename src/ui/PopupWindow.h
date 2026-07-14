@@ -99,7 +99,7 @@ private:
     bool ItemPassesFilter(const ClipboardItem& item) const;
     void InvalidateVisibleHistoryCache() const;
     void EnsureVisibleHistoryCache() const;
-    std::vector<size_t> BuildVisibleHistoryIndices(bool pinnedOnly) const;
+    std::vector<uint64_t> BuildVisibleHistoryItemIds(bool pinnedOnly) const;
     std::vector<uint64_t> BuildVisibleItemIds() const;
     bool IsItemSelected(uint64_t itemId) const;
     std::vector<uint64_t> ContextSelectionFor(uint64_t itemId) const;
@@ -197,8 +197,8 @@ private:
     mutable int m_visibleHistoryCacheFilterMode{-1};
     mutable std::string m_visibleHistoryCacheCustomFilterId;
     mutable std::string m_visibleHistoryCacheSearch;
-    mutable std::vector<size_t> m_visiblePinnedIndices;
-    mutable std::vector<size_t> m_visibleRegularIndices;
+    mutable std::vector<uint64_t> m_visiblePinnedItemIds;
+    mutable std::vector<uint64_t> m_visibleRegularItemIds;
     mutable std::vector<uint64_t> m_visibleItemIds;
 
     // -- Image browser ---------------------------------------------------------

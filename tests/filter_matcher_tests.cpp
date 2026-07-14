@@ -4,6 +4,9 @@
 #include "../src/templates/PasteTemplate.h"
 #include "../src/formatting/StructuredFormatter.h"
 #include "../src/diff/TextDiff.h"
+#include "../src/ui/GeneratedPaste.h"
+#include "../src/clipboard/ClipboardHistory.h"
+#include "../src/clipboard/ClipboardWriteSuppression.h"
 
 #include <iostream>
 
@@ -111,6 +114,67 @@ int main() {
     pasteTemplate.body = "{{unknown}}";
     ok &= Expect(!ValidatePasteTemplate(pasteTemplate).empty(),
                  "unknown template placeholder is rejected");
+
+    {
+        ClipboardHistory history(10);
+        ClipboardItem first = TextItem("James");
+        ClipboardItem second = TextItem("james@example.com");
+        ClipboardItem below = TextItem("row below selection");
+        history.Push(std::move(first));
+        history.Push(std::move(second));
+        history.Push(std::move(below));
+
+        const std::vector<ClipboardItem> before = history.Snapshot();
+        const std::vector<uint64_t> stableFrameIds = {
+            before[0].id, before[1].id, before[2].id};
+        PasteTemplateDefinition regressionTemplate;
+        regressionTemplate.name = "Foreground target regression";
+        regressionTemplate.body = "Name: {{1}}; Email: {{2}}";
+        const PasteTemplateResult rendered = ApplyPasteTemplate(
+            regressionTemplate,
+            {before[0].text, before[1].text}, {});
+        ClipboardItem generated = MakeGeneratedTextPaste(rendered.output);
+        const GeneratedPasteProvenance provenance =
+            DescribeGeneratedPaste(generated, "chatgpt.exe");
+
+        int generatedWrites = 0;
+        const auto writeGeneratedClipboard = [&](const ClipboardItem&) {
+            ++generatedWrites;
+        };
+        const size_t historySizeBeforePaste = history.Size();
+        if (rendered.ok)
+            writeGeneratedClipboard(generated);
+        history.MoveItemsById(
+            {stableFrameIds[0], stableFrameIds[1]},
+            ClipboardHistory::MoveTarget::None);
+
+        bool generatedWasCaptured = false;
+        for (const ClipboardItem& stored : history.Snapshot())
+            generatedWasCaptured |= stored.text == generated.text;
+        size_t rowsStillResolvable = 0;
+        for (uint64_t id : stableFrameIds) {
+            ClipboardItem row;
+            if (history.GetByIdCopy(id, row))
+                ++rowsStillResolvable;
+        }
+
+        ok &= Expect(rendered.ok && generatedWrites == 1,
+                     "template paste emits exactly one generated clipboard write");
+        ok &= Expect(history.Size() == historySizeBeforePaste &&
+                     !generatedWasCaptured,
+                     "generated template output is not inserted as duplicate history");
+        ok &= Expect(provenance.sourceProcess == "clipboardpp.exe" &&
+                     provenance.destinationProcess == "chatgpt.exe",
+                     "generated paste records source and foreground destination separately");
+        ok &= Expect(rowsStillResolvable == stableFrameIds.size(),
+                     "stable popup frame IDs remain resolvable after paste-use mutation");
+        ok &= Expect(
+            IsSelfGeneratedClipboardUpdate(false, false, 42, 42) &&
+            IsSelfGeneratedClipboardUpdate(false, true, 43, 42) &&
+            IsSelfGeneratedClipboardUpdate(false, true, 44, 42) &&
+            !IsSelfGeneratedClipboardUpdate(false, false, 45, 42),
+            "self-write suppression covers final, coalesced, and delayed token updates only");
+    }
 
     const StructuredFormatResult prettyJson = FormatStructuredText(
         R"({"name":"Jane","items":[1,2]})", StructuredFormat::Json);

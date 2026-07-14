@@ -42,9 +42,9 @@ bool PopupWindow::ItemPassesFilter(const ClipboardItem& item) const {
     }
 }
 
-std::vector<size_t> PopupWindow::BuildVisibleHistoryIndices(bool pinnedOnly) const {
+std::vector<uint64_t> PopupWindow::BuildVisibleHistoryItemIds(bool pinnedOnly) const {
     EnsureVisibleHistoryCache();
-    return pinnedOnly ? m_visiblePinnedIndices : m_visibleRegularIndices;
+    return pinnedOnly ? m_visiblePinnedItemIds : m_visibleRegularItemIds;
 }
 
 void PopupWindow::InvalidateVisibleHistoryCache() const {
@@ -54,8 +54,8 @@ void PopupWindow::InvalidateVisibleHistoryCache() const {
 void PopupWindow::EnsureVisibleHistoryCache() const {
     ClipboardHistory* hist = Application::Get()->GetHistory();
     if (!hist) {
-        m_visiblePinnedIndices.clear();
-        m_visibleRegularIndices.clear();
+        m_visiblePinnedItemIds.clear();
+        m_visibleRegularItemIds.clear();
         m_visibleItemIds.clear();
         m_visibleHistoryCacheValid = true;
         m_visibleHistoryCacheHistory = nullptr;
@@ -77,8 +77,8 @@ void PopupWindow::EnsureVisibleHistoryCache() const {
         return;
     }
 
-    m_visiblePinnedIndices.clear();
-    m_visibleRegularIndices.clear();
+    m_visiblePinnedItemIds.clear();
+    m_visibleRegularItemIds.clear();
     m_visibleItemIds.clear();
     m_visibleHistoryCacheHistory = hist;
     m_visibleHistoryCacheVersion = version;
@@ -91,21 +91,24 @@ void PopupWindow::EnsureVisibleHistoryCache() const {
     std::transform(lquery.begin(), lquery.end(), lquery.begin(),
                    [](unsigned char c){ return (char)std::tolower(c); });
 
-    for (size_t i = 0; i < hist->Size(); ++i) {
-        const ClipboardItem* item = hist->Get(i);
-        if (!item || !ItemPassesFilter(*item)) continue;
+    // Filter one immutable history snapshot. Never retain vector indices or raw
+    // pointers across calls: a paste, capture, or context action may reorder the
+    // live history while the current ImGui frame is still being assembled.
+    const std::vector<ClipboardItem> snapshot = hist->Snapshot();
+    for (const ClipboardItem& item : snapshot) {
+        if (!ItemPassesFilter(item)) continue;
         if (!lquery.empty()) {
-            std::string lt = item->text;
+            std::string lt = item.text;
             std::transform(lt.begin(), lt.end(), lt.begin(),
                            [](unsigned char c){ return (char)std::tolower(c); });
             if (lt.find(lquery) == std::string::npos) continue;
         }
 
-        if (item->pinned)
-            m_visiblePinnedIndices.push_back(i);
+        if (item.pinned)
+            m_visiblePinnedItemIds.push_back(item.id);
         else
-            m_visibleRegularIndices.push_back(i);
-        m_visibleItemIds.push_back(item->id);
+            m_visibleRegularItemIds.push_back(item.id);
+        m_visibleItemIds.push_back(item.id);
     }
 }
 
@@ -155,36 +158,39 @@ void PopupWindow::DrawItemList() {
     itemFlags |= ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::BeginChild("##items", {0.f, 0.f}, ImGuiChildFlags_None, itemFlags);
 
-    const std::vector<size_t> pinned = BuildVisibleHistoryIndices(true);
-    const std::vector<size_t> regular = BuildVisibleHistoryIndices(false);
+    // These ID vectors are the stable frame snapshot. Mutations may reorder or
+    // delete live items, but they cannot invalidate the remaining row keys.
+    const std::vector<uint64_t> pinned = BuildVisibleHistoryItemIds(true);
+    const std::vector<uint64_t> regular = BuildVisibleHistoryItemIds(false);
 
     auto drawSection = [&](const char* title,
-                           const std::vector<size_t>& indices,
-                           bool pinnedSection) -> bool {
-        if (indices.empty())
-            return false;
+                           const std::vector<uint64_t>& itemIds,
+                           bool pinnedSection) {
+        if (itemIds.empty())
+            return;
 
         if (pinnedSection) {
             char header[128]{};
-            std::snprintf(header, sizeof(header), "%s (%zu)", title, indices.size());
+            std::snprintf(header, sizeof(header), "%s (%zu)", title, itemIds.size());
             if (!ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Spacing();
-                return false;
+                return;
             }
         } else {
-            ImGui::TextDisabled("%s (%zu)", title, indices.size());
+            ImGui::TextDisabled("%s (%zu)", title, itemIds.size());
             ImGui::Separator();
         }
 
-        for (size_t sectionSlot = 0; sectionSlot < indices.size(); ++sectionSlot) {
-            const size_t i = indices[sectionSlot];
-            const ClipboardItem* item = hist->Get(i);
-            if (!item) continue;
+        for (size_t sectionSlot = 0; sectionSlot < itemIds.size(); ++sectionSlot) {
+            const uint64_t itemId = itemIds[sectionSlot];
+            const ClipboardItem* item = hist->GetById(itemId);
+            if (!item)
+                continue;
 
             const std::string key = HotkeyManager::SlotLabelText(static_cast<int>(sectionSlot));
 
             const int selectionPos = HasMultipleSelectedItems()
-                ? m_itemSelection.PositionOf(item->id)
+                ? m_itemSelection.PositionOf(itemId)
                 : -1;
 
             const bool isSecret = (item->tags & TAG_SECRET) != 0;
@@ -198,13 +204,16 @@ void PopupWindow::DrawItemList() {
             char label[1024]{};
             const char* pin = pinnedSection ? "[P] " : "";
             if (selectionPos >= 0)
-                std::snprintf(label, sizeof(label), " %s [%d]  %s%s##r%zu",
-                              key.c_str(), selectionPos, pin, preview.c_str(), i);
+                std::snprintf(label, sizeof(label), " %s [%d]  %s%s##r%llu",
+                              key.c_str(), selectionPos, pin, preview.c_str(),
+                              static_cast<unsigned long long>(itemId));
             else
-                std::snprintf(label, sizeof(label), " %s   %s%s##r%zu",
-                              key.c_str(), pin, preview.c_str(), i);
+                std::snprintf(label, sizeof(label), " %s   %s%s##r%llu",
+                              key.c_str(), pin, preview.c_str(),
+                              static_cast<unsigned long long>(itemId));
 
-            const bool selected = IsItemSelected(item->id);
+            const bool selected = IsItemSelected(itemId);
+            bool rowMutated = false;
             if (ImGui::Selectable(label, selected,
                                    ImGuiSelectableFlags_SpanAllColumns |
                                    ImGuiSelectableFlags_AllowDoubleClick)) {
@@ -219,23 +228,30 @@ void PopupWindow::DrawItemList() {
                 const bool doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 
                 if (shiftHeld) {
-                    SelectRangeTo(item->id);
+                    SelectRangeTo(itemId);
                 } else if (ctrlHeld) {
-                    ToggleItemSelection(item->id);
+                    ToggleItemSelection(itemId);
                 } else {
                     const bool keepMultiSelection = HasMultipleSelectedItems();
                     if (doubleClick) {
-                        if (isSecret) ImGui::PopStyleColor();
-                        const uint64_t itemId = item->id;
                         if (!keepMultiSelection)
                             SelectOnlyItem(itemId);
-                        PasteItemKeepOpen(*item);
+                        ClipboardItem pasteItem;
+                        if (hist->GetByIdCopy(itemId, pasteItem))
+                            PasteItemKeepOpen(pasteItem);
                         hist->MoveItemById(itemId, m_pasteMoveTarget);
-                        return true;
+                        rowMutated = true;
+                    } else if (!keepMultiSelection) {
+                        SelectOnlyItem(itemId);
                     }
-                    if (!keepMultiSelection)
-                        SelectOnlyItem(item->id);
                 }
+            }
+
+            // Moving the current item can relocate its backing vector storage.
+            // Finish this row from cached state, then continue the stable ID list.
+            if (rowMutated) {
+                if (isSecret) ImGui::PopStyleColor();
+                continue;
             }
 
             if (pinnedSection) {
@@ -246,25 +262,17 @@ void PopupWindow::DrawItemList() {
                                     3.0f, IM_COL32(255, 196, 64, 255), 12);
             }
 
-            if (DrawItemContextMenu(*item)) {
-                if (isSecret) ImGui::PopStyleColor();
-                return true;
-            }
-            DrawItemDragDrop(item->id);
+            const bool changed = DrawItemContextMenu(*item);
+            if (!changed)
+                DrawItemDragDrop(itemId);
             if (isSecret) ImGui::PopStyleColor();
         }
 
         ImGui::Spacing();
-        return false;
     };
 
-    if (drawSection("Pinned entries", pinned, true) ||
-        drawSection("History", regular, false)) {
-        SmoothScrollCurrentWindow("popup_items", 112.0f, 0.22f);
-        ImGui::EndChild();
-        ImGui::PopStyleColor();
-        return;
-    }
+    drawSection("Pinned entries", pinned, true);
+    drawSection("History", regular, false);
 
     if (!pinned.empty() || !regular.empty()) {
         ImGui::InvisibleButton("##drop_end", {ImGui::GetContentRegionAvail().x, 8.0f});
@@ -467,8 +475,15 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
                 ClipboardItem selected;
                 return hist->GetByIdCopy(id, selected) && selected.IsText();
             });
-        if (ImGui::BeginMenu("Paste with template...",
+        const std::string templateMenuLabel = multi
+            ? "Paste " + std::to_string(ids.size()) + " selected with template..."
+            : "Paste with template...";
+        if (ImGui::BeginMenu(templateMenuLabel.c_str(),
                              !pasteTemplates.empty() && templateInputsAreText)) {
+            if (multi) {
+                ImGui::TextDisabled("{{1}}, {{2}}, ... use the displayed selection order");
+                ImGui::Separator();
+            }
             for (const PasteTemplateDefinition& pasteTemplate : pasteTemplates) {
                 ImGui::PushID(static_cast<int>(pasteTemplate.templateId));
                 if (ImGui::MenuItem(pasteTemplate.name.c_str()) &&

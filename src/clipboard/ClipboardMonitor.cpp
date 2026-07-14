@@ -1,4 +1,5 @@
 #include "ClipboardMonitor.h"
+#include "ClipboardWriteSuppression.h"
 #include "ContentDetector.h"
 #include "ImageStore.h"
 #include "ScreenshotTracker.h"
@@ -311,16 +312,18 @@ void ClipboardMonitor::OnClipboardUpdate() {
     if (!m_captureEnabled)
         return;
 
-    if (m_selfWriteDepth.load() > 0)
-        return;
-
+    const bool writeInProgress = m_selfWriteDepth.load() > 0;
     // A token survives additional sequence changes caused by delayed or
     // incrementally rendered formats, unlike a one-notification flag.
-    if (ClipboardHasCurrentSelfWriteToken())
+    const bool matchingToken = !writeInProgress &&
+                               ClipboardHasCurrentSelfWriteToken();
+    DWORD completedSequence = m_suppressedSelfSeq.load();
+    if (IsSelfGeneratedClipboardUpdate(writeInProgress, matchingToken,
+                                       seq, completedSequence)) {
+        if (seq == completedSequence)
+            m_suppressedSelfSeq.compare_exchange_strong(completedSequence, 0);
         return;
-
-    if (seq == m_suppressedSelfSeq.exchange(0))
-        return;
+    }
 
     if (m_suppressNextArmed.load() &&
         seq != m_suppressNextBaseline.load() &&

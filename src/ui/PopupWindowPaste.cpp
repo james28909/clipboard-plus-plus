@@ -8,6 +8,7 @@
 #include "../formatting/StructuredFormatter.h"
 #include "../util/Win32Util.h"
 #include "PasteDiagnostics.h"
+#include "GeneratedPaste.h"
 #include "ToastWindow.h"
 
 #include <windows.h>
@@ -332,7 +333,7 @@ void PopupWindow::PastePinnedSlot(int slot, HWND targetWindow) {
 }
 
 void PopupWindow::PasteVisibleSlot(int slot) {
-    const std::vector<size_t> regular = BuildVisibleHistoryIndices(false);
+    const std::vector<uint64_t> regular = BuildVisibleHistoryItemIds(false);
     if (slot < 0 || static_cast<size_t>(slot) >= regular.size()) {
         PLog("[PASTE-SLOT] slot=%d INVALID (visible count=%zu)", slot, regular.size());
         return;
@@ -341,7 +342,7 @@ void PopupWindow::PasteVisibleSlot(int slot) {
     if (!hist) return;
 
     ClipboardItem item;
-    if (!hist->GetCopy(regular[static_cast<size_t>(slot)], item)) {
+    if (!hist->GetByIdCopy(regular[static_cast<size_t>(slot)], item)) {
         PLog("[PASTE-SLOT] slot=%d GetCopy FAILED", slot);
         return;
     }
@@ -373,11 +374,7 @@ void PopupWindow::PasteItemWithTransformKeepOpen(
         return;
     }
 
-    ClipboardItem transformed = item;
-    transformed.type = ContentType::Text;
-    transformed.text = result.output;
-    transformed.formats.clear();
-    transformed.tags = ContentDetector::DetectTags(transformed.text);
+    ClipboardItem transformed = MakeGeneratedTextPaste(result.output);
     PasteItemKeepOpen(transformed);
 }
 
@@ -411,11 +408,7 @@ bool PopupWindow::PasteSelectionWithTemplateKeepOpen(
         return false;
     }
 
-    ClipboardItem templated;
-    templated.type = ContentType::Text;
-    templated.text = result.output;
-    templated.sourceProcess = "clipboardpp.exe";
-    templated.tags = ContentDetector::DetectTags(templated.text);
+    ClipboardItem templated = MakeGeneratedTextPaste(result.output);
     PasteItemKeepOpen(templated);
     return true;
 }
@@ -428,11 +421,7 @@ bool PopupWindow::PasteItemFormattedKeepOpen(const ClipboardItem& item,
         ToastWindow::Show(message.c_str());
         return false;
     }
-    ClipboardItem formatted = item;
-    formatted.type = ContentType::Text;
-    formatted.text = result.output;
-    formatted.formats.clear();
-    formatted.tags = ContentDetector::DetectTags(formatted.text);
+    ClipboardItem formatted = MakeGeneratedTextPaste(result.output);
     PasteItemKeepOpen(formatted);
     return true;
 }
@@ -513,11 +502,12 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow)
 
     Application* app = Application::Get();
     ScopedClipboardSelfWrite selfWrite(app ? app->GetMonitor() : nullptr);
-    if (app && targetWindow && item.sourceProcess == "clipboardpp.exe") {
+    if (app && targetWindow && IsClipboardPlusPlusGeneratedPaste(item)) {
         std::string destination = win32util::ProcessNameFromWindow(targetWindow);
-        if (destination.empty())
-            destination = "unknown";
-        app->RecordGeneratedPaste("clipboardpp.exe", destination);
+        const GeneratedPasteProvenance provenance =
+            DescribeGeneratedPaste(item, std::move(destination));
+        app->RecordGeneratedPaste(provenance.sourceProcess,
+                                  provenance.destinationProcess);
     }
 
     // Normal paste republishes the complete audited bundle so the destination

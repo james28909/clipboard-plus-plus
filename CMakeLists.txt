@@ -78,6 +78,7 @@ set(APP_SOURCES
     src/ui/PopupWindowImages.cpp
     src/ui/PopupWindowPaste.cpp
     src/ui/PopupSelectionModel.cpp
+    src/ui/GeneratedPaste.cpp
     src/ui/PasteDiagnostics.cpp
     src/ui/TrayPopupWindow.cpp
     src/ui/TextEditorWindow.cpp
@@ -227,7 +228,9 @@ add_executable(filter_matcher_tests
     src/templates/PasteTemplate.cpp
     src/formatting/StructuredFormatter.cpp
     src/diff/TextDiff.cpp
+    src/ui/GeneratedPaste.cpp
     src/clipboard/ClipboardItem.cpp
+    src/clipboard/ClipboardHistory.cpp
     src/clipboard/ContentDetector.cpp
 )
 
@@ -238,6 +241,13 @@ target_include_directories(filter_matcher_tests PRIVATE
 )
 
 target_link_libraries(filter_matcher_tests PRIVATE pcre2-8-static)
+
+if(WIN32)
+    target_compile_definitions(filter_matcher_tests PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+endif()
 
 set_property(TARGET filter_matcher_tests PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
