@@ -69,14 +69,12 @@ for ($run = 1; $run -le $Runs; $run++) {
         FirstFrameMs = $timings["total to first rendered frame"].Duration
         ActiveHistoryReadyMs = $timings["deferred active profile hydration"].Completed
         ActiveDeserializeMs = $timings["active history deserialization"].Duration
-        ActiveSerializeMs = $timings["active history JSON serialization benchmark"].Duration
         Profiles = $metrics["profile count"]
         ActiveItems = $metrics["active history item count"]
         Images = $metrics["image count"]
         VaultItems = $metrics["active vault item count"]
         ClipboardDbBytes = $metrics["clipboard.db bytes"]
         ImagesDbBytes = $metrics["images.db bytes"]
-        HistoryJsonBytes = $metrics["active history JSON bytes"]
     }
 
     Stop-Process -Id $process.Id

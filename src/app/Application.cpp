@@ -8,7 +8,6 @@
 #include "../ui/TextEditorWindow.h"
 #include "../ui/DebugWindow.h"
 #include "../clipboard/ClipboardHistory.h"
-#include "../clipboard/ClipboardHistoryStore.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
 #include "../clipboard/ImageStore.h"
@@ -1378,16 +1377,80 @@ void Application::AdvanceDeferredStartup() {
     const auto started = m_startupProfiler.BeginStage();
     switch (m_deferredStartupPhase) {
     case DeferredStartupPhase::ProfileMetadata:
-        if (m_clipboardProfiles)
+        if (!m_clipboardProfiles) {
+            m_deferredStartupPhase = DeferredStartupPhase::ActiveHistory;
+            break;
+        }
+        if (!m_clipboardProfiles->CanInitializeMetadataAsync()) {
             m_clipboardProfiles->InitializeProfileMetadata();
+            InvalidateDatabaseCaches();
+            m_startupProfiler.FinishStage("deferred profile metadata", started);
+            m_deferredStartupPhase = DeferredStartupPhase::ActiveHistory;
+            break;
+        }
+        if (!m_profileMetadataLoad.valid()) {
+            const std::filesystem::path databasePath =
+                ConfigStore::Directory() / "clipboard.db";
+            m_profileMetadataLoadStarted = m_startupProfiler.BeginStage();
+            m_profileMetadataLoad = std::async(
+                std::launch::async,
+                [databasePath]() {
+                    return ClipboardProfileManager::LoadProfileMetadataDetached(
+                        databasePath);
+                });
+            break;
+        }
+        if (m_profileMetadataLoad.wait_for(std::chrono::milliseconds(0)) !=
+            std::future_status::ready)
+            break;
+        {
+            ClipboardProfileMetadataLoadResult result =
+                m_profileMetadataLoad.get();
+            m_startupProfiler.RecordDuration(
+                "encrypted clipboard DB + profile metadata", result.durationMs);
+            m_clipboardProfiles->InstallDetachedProfileMetadata(
+                std::move(result));
+        }
         InvalidateDatabaseCaches();
-        m_startupProfiler.FinishStage("deferred profile metadata", started);
+        m_startupProfiler.FinishStage(
+            "deferred profile metadata", m_profileMetadataLoadStarted);
         m_deferredStartupPhase = DeferredStartupPhase::ActiveHistory;
         break;
     case DeferredStartupPhase::ActiveHistory:
-        if (m_clipboardProfiles)
+        if (!m_clipboardProfiles) {
+            m_deferredStartupPhase = DeferredStartupPhase::ImageStoreAndMonitor;
+            break;
+        }
+        if (!m_clipboardProfiles->CanLoadHistoryAsync()) {
             m_clipboardProfiles->LoadActiveHistory();
-        m_startupProfiler.FinishStage("deferred active profile hydration", started);
+            m_startupProfiler.FinishStage("deferred active profile hydration", started);
+            m_deferredStartupPhase = DeferredStartupPhase::ImageStoreAndMonitor;
+            break;
+        }
+        if (!m_activeHistoryLoad.valid()) {
+            const std::string profileId = m_config.activeClipboardId;
+            const std::filesystem::path databasePath =
+                ConfigStore::Directory() / "clipboard.db";
+            m_activeHistoryLoadStarted = m_startupProfiler.BeginStage();
+            m_activeHistoryLoad = std::async(
+                std::launch::async,
+                [databasePath, profileId]() {
+                    return ClipboardProfileManager::LoadHistoryDetached(
+                        databasePath, profileId);
+                });
+            break;
+        }
+        if (m_activeHistoryLoad.wait_for(std::chrono::milliseconds(0)) !=
+            std::future_status::ready)
+            break;
+        {
+            ClipboardHistoryLoadResult result = m_activeHistoryLoad.get();
+            m_startupProfiler.RecordDuration(
+                "active history deserialization", result.durationMs);
+            m_clipboardProfiles->InstallDetachedHistory(std::move(result));
+        }
+        m_startupProfiler.FinishStage(
+            "deferred active profile hydration", m_activeHistoryLoadStarted);
         m_deferredStartupPhase = DeferredStartupPhase::ImageStoreAndMonitor;
         break;
     case DeferredStartupPhase::ImageStoreAndMonitor:
@@ -1411,15 +1474,6 @@ void Application::AdvanceDeferredStartup() {
         m_startupProfiler.RecordMetric(
             "active history item count",
             std::to_string(m_history ? m_history->Size() : 0));
-        if (m_history) {
-            const auto serializeStarted = m_startupProfiler.BeginStage();
-            const std::string payload = ClipboardHistoryStore::Serialize(
-                m_config.activeClipboardId, *m_history);
-            m_startupProfiler.FinishStage(
-                "active history JSON serialization benchmark", serializeStarted);
-            m_startupProfiler.RecordMetric(
-                "active history JSON bytes", std::to_string(payload.size()));
-        }
         {
             std::error_code error;
             const auto clipboardDb = ConfigStore::Directory() / "clipboard.db";

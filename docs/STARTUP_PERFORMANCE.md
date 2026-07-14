@@ -51,8 +51,8 @@ A representative warm Debug run on the reference system produced:
 | Profile metadata ready | 1,189.3 ms |
 | Active history ready | 2,797.4 ms |
 | Active history JSON decode | 1,603.2 ms |
-| Active history JSON encode benchmark | 424.0 ms |
-| Active history | 500 items / 7,759,360 JSON bytes |
+| Active history JSON encode benchmark | 424.0 ms (one-time diagnostic measurement) |
+| Active history | 500 items / 7,759,360 JSON bytes (one-time diagnostic measurement) |
 | Clipboard database | 15,667,200 bytes |
 | Image database | 5,697,536 bytes / 16 images |
 
@@ -63,16 +63,17 @@ This sample improves first-frame time by approximately **96.1%** from the origin
 Run `tools/benchmark-startup.ps1 -Mode Warm -Runs 5` for a repeatable warm set. Use `-Mode Cold -Runs 5` only after arranging a genuine cold-cache condition before each prompted run (an approved standby-list tool or a reboot). The script refuses to run while Clipboard++ is already open, waits for the deferred-startup report to finish, stops only the process it launched, and writes `startup-benchmark.csv` with:
 
 - first-frame and active-history-ready times;
-- serialization and deserialization times;
+- active-history deserialization time;
 - profile, active-item, image, and vault counts;
-- clipboard/image database sizes and active-history JSON size.
+- clipboard and image database sizes.
 
 Stable-release evidence should include the median and slowest value from five cold and five warm **Release** runs. Debug builds remain useful for finding stage regressions but are not the public-release acceptance build.
 
 ## Initialization safety audit
 
-- Deferred startup is an explicit main-thread state machine. SQLite connections and ImGui/D3D objects never cross worker threads.
-- No startup worker survives shutdown, so cancellation and connection handoff are not required.
+- Deferred startup is coordinated by an explicit main-thread state machine. Encrypted profile metadata and active-history decoding run in futures; only completed value objects are installed into UI-owned state. The metadata SQLite connection is transferred to the main thread only after its worker finishes and is never used concurrently across those threads.
+- History persistence uses one dedicated worker-owned SQLite connection and a 200 ms coalescing queue. The UI thread only schedules a profile pointer; shutdown drains and joins the worker before any history object is destroyed.
+- Startup futures own no ImGui/D3D state. Their future objects are destroyed before the profile manager, so an in-progress load is joined before its destination can disappear.
 - The clipboard listener starts only after both the active history and image store are ready; captures are not accepted into a half-initialized store.
 - Existing encrypted databases no longer reparse every profile merely to verify it on every launch. Full integrity verification remains part of the one-time legacy migration transaction, where legacy data is retained until verification succeeds.
 - Required schema/key migrations run only after the first frame. Image protection migration runs when the deferred image store opens. Vault pruning runs in the final deferred phase.

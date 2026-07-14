@@ -46,10 +46,13 @@ ClipboardProfileManager::ClipboardProfileManager(
       m_startupTiming(std::move(startupTiming))
 {}
 
-ClipboardProfileManager::~ClipboardProfileManager() = default;
+ClipboardProfileManager::~ClipboardProfileManager() {
+    StopHistorySaveWorker();
+}
 
 void ClipboardProfileManager::Rebuild() {
     const auto rebuildStarted = std::chrono::steady_clock::now();
+    StopHistorySaveWorker();
     InitializeProfileMetadata();
     LoadActiveHistory();
     if (m_startupTiming) {
@@ -80,6 +83,57 @@ bool ClipboardProfileManager::InitializeProfileMetadata() {
     return databaseReady;
 }
 
+ClipboardProfileMetadataLoadResult
+ClipboardProfileManager::LoadProfileMetadataDetached(
+    const std::filesystem::path& databasePath) {
+    ClipboardProfileMetadataLoadResult result;
+    const auto started = std::chrono::steady_clock::now();
+    result.database = std::make_shared<ClipboardDatabase>();
+    if (!result.database->Open(databasePath, &result.error) ||
+        !result.database->LoadProfiles(result.profiles) ||
+        result.profiles.empty()) {
+        if (result.error.empty())
+            result.error = "encrypted clipboard database has no readable profiles";
+        result.database.reset();
+        result.durationMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        return result;
+    }
+    result.database->GetActiveProfileId(result.activeProfileId);
+    const auto active = std::find_if(
+        result.profiles.begin(), result.profiles.end(),
+        [&](const ClipboardProfileConfig& profile) {
+            return profile.id == result.activeProfileId;
+        });
+    if (active == result.profiles.end())
+        result.activeProfileId = result.profiles.front().id;
+    result.database->SetActiveProfileId(result.activeProfileId);
+    result.ok = true;
+    result.durationMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    return result;
+}
+
+bool ClipboardProfileManager::InstallDetachedProfileMetadata(
+    ClipboardProfileMetadataLoadResult result) {
+    m_persistenceErrors.clear();
+    m_histories.clear();
+    if (!result.ok || !result.database || result.profiles.empty()) {
+        const std::string message = "encrypted clipboard database unavailable" +
+            (result.error.empty() ? std::string{} : ": " + result.error);
+        m_persistenceErrors.push_back(message);
+        if (m_addEvent) m_addEvent(message);
+        m_histories.resize(m_config.clipboards.size());
+        return false;
+    }
+    m_config.clipboards = std::move(result.profiles);
+    m_config.activeClipboardId = std::move(result.activeProfileId);
+    m_database = std::move(result.database);
+    m_histories.resize(m_config.clipboards.size());
+    StartHistorySaveWorker(ConfigStore::Directory() / "clipboard.db");
+    return true;
+}
+
 bool ClipboardProfileManager::LoadActiveHistory() {
     const auto started = std::chrono::steady_clock::now();
     ClipboardHistory* history = EnsureHistoryLoaded(m_config.activeClipboardId);
@@ -90,6 +144,59 @@ bool ClipboardProfileManager::LoadActiveHistory() {
     }
     NotifyActiveHistory();
     return history != nullptr;
+}
+
+ClipboardHistoryLoadResult ClipboardProfileManager::LoadHistoryDetached(
+    const std::filesystem::path& databasePath,
+    const std::string& profileId) {
+    ClipboardHistoryLoadResult result;
+    const auto started = std::chrono::steady_clock::now();
+    result.profileId = profileId;
+    ClipboardDatabase database;
+    if (!database.Open(databasePath, &result.error)) {
+        result.durationMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        return result;
+    }
+    ClipboardHistory history(kMaxClipboardHistoryItems);
+    if (!database.LoadHistory(profileId, history, result.found)) {
+        result.error = "could not deserialize encrypted history";
+        result.durationMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        return result;
+    }
+    result.items = history.Snapshot();
+    result.nextId = history.NextId();
+    result.ok = true;
+    result.durationMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    return result;
+}
+
+bool ClipboardProfileManager::InstallDetachedHistory(
+    ClipboardHistoryLoadResult result) {
+    if (!result.ok) {
+        const std::string message = "Encrypted clipboard database could not load profile " +
+            result.profileId + (result.error.empty() ? std::string{} : ": " + result.error);
+        m_persistenceErrors.push_back(message);
+        if (m_addEvent) m_addEvent(message);
+        return false;
+    }
+    for (size_t i = 0; i < m_config.clipboards.size(); ++i) {
+        if (m_config.clipboards[i].id != result.profileId)
+            continue;
+        auto history = std::make_unique<ClipboardHistory>(m_config.activeHistoryLimit);
+        history->SetNewItemsAtTop(m_config.newItemsAtTop);
+        history->SetDeduplicationEnabled(m_config.deduplicateHistory);
+        history->LoadSnapshot(std::move(result.items), result.nextId);
+        ConfigureOverflow(result.profileId, *history);
+        history->SetChangedCallback(
+            [this, profileId = result.profileId]() { SaveHistory(profileId); });
+        m_histories[i] = std::move(history);
+        NotifyActiveHistory();
+        return true;
+    }
+    return false;
 }
 
 bool ClipboardProfileManager::IsHistoryLoaded(const std::string& profileId) const {
@@ -336,6 +443,7 @@ bool ClipboardProfileManager::DeleteActiveProfile() {
         [&](const ClipboardProfileConfig& profile) { return profile.id == deletedId; });
     if (it == m_config.clipboards.end())
         return false;
+    StopHistorySaveWorker();
 
     const size_t index = static_cast<size_t>(std::distance(m_config.clipboards.begin(), it));
     m_config.clipboards.erase(it);
@@ -362,6 +470,8 @@ bool ClipboardProfileManager::DeleteActiveProfile() {
     EnsureHistoryLoaded(m_config.activeClipboardId);
     if (m_database)
         m_database->SetActiveProfileId(m_config.activeClipboardId);
+    if (m_database)
+        StartHistorySaveWorker(ConfigStore::Directory() / "clipboard.db");
     NotifyActiveHistory();
     if (m_saveConfig)
         m_saveConfig();
@@ -425,16 +535,16 @@ void ClipboardProfileManager::SwitchForProcess(const std::string& processName) {
         m_saveConfig();
 }
 
-void ClipboardProfileManager::SaveHistory(const std::string& profileId) const {
+void ClipboardProfileManager::SaveHistory(const std::string& profileId) {
     if (ClipboardHistory* history = LoadedHistoryForProfile(profileId)) {
         if (m_database)
-            m_database->SaveHistory(profileId, *history);
+            ScheduleHistorySave(profileId, history);
         else
             ClipboardHistoryStore::Save(profileId, *history);
     }
 }
 
-void ClipboardProfileManager::SaveActiveHistory() const {
+void ClipboardProfileManager::SaveActiveHistory() {
     SaveHistory(m_config.activeClipboardId);
 }
 
@@ -523,7 +633,7 @@ void ClipboardProfileManager::ConfigureOverflow(
 
 bool ClipboardProfileManager::InitializeDatabase() {
     m_database.reset();
-    auto database = std::make_unique<ClipboardDatabase>();
+    auto database = std::make_shared<ClipboardDatabase>();
     std::string error;
     if (!database->Open(ConfigStore::Directory() / "clipboard.db", &error)) {
         if (m_addEvent)
@@ -595,11 +705,108 @@ bool ClipboardProfileManager::InitializeDatabase() {
         ? activeId : m_config.clipboards.front().id;
     database->SetActiveProfileId(m_config.activeClipboardId);
     m_database = std::move(database);
+    StartHistorySaveWorker(ConfigStore::Directory() / "clipboard.db");
     if (!m_config.profilesStoredInDatabase) {
         m_config.profilesStoredInDatabase = true;
         if (m_saveConfig) m_saveConfig();
     }
     return true;
+}
+
+void ClipboardProfileManager::ScheduleHistorySave(
+    const std::string& profileId, ClipboardHistory* history) {
+    if (!history)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(m_saveMutex);
+        if (m_stopSaveWorker || !m_saveThread.joinable())
+            return;
+        m_pendingSaves[profileId] = history;
+        ++m_saveGeneration;
+    }
+    m_saveCv.notify_all();
+}
+
+void ClipboardProfileManager::StartHistorySaveWorker(
+    const std::filesystem::path& databasePath) {
+    StopHistorySaveWorker();
+    {
+        std::lock_guard<std::mutex> lock(m_saveMutex);
+        m_stopSaveWorker = false;
+        m_saveGeneration = 0;
+    }
+    m_saveThread = std::thread(
+        [this, databasePath]() { HistorySaveWorkerMain(databasePath); });
+}
+
+void ClipboardProfileManager::StopHistorySaveWorker() {
+    {
+        std::lock_guard<std::mutex> lock(m_saveMutex);
+        if (!m_saveThread.joinable()) {
+            m_stopSaveWorker = false;
+            return;
+        }
+        m_stopSaveWorker = true;
+        ++m_saveGeneration;
+    }
+    m_saveCv.notify_all();
+    m_saveThread.join();
+    std::lock_guard<std::mutex> lock(m_saveMutex);
+    m_pendingSaves.clear();
+    m_saveInFlight = false;
+    m_stopSaveWorker = false;
+}
+
+void ClipboardProfileManager::HistorySaveWorkerMain(
+    std::filesystem::path databasePath) {
+    ClipboardDatabase database;
+    std::string error;
+    const bool databaseReady = database.Open(databasePath, &error);
+    if (!databaseReady) {
+        const std::string message =
+            "Clipboard++ background history persistence unavailable: " + error + "\n";
+        OutputDebugStringA(message.c_str());
+    }
+
+    for (;;) {
+        std::unordered_map<std::string, ClipboardHistory*> saves;
+        {
+            std::unique_lock<std::mutex> lock(m_saveMutex);
+            m_saveCv.wait(lock, [this]() {
+                return m_stopSaveWorker || !m_pendingSaves.empty();
+            });
+            if (!m_stopSaveWorker) {
+                const uint64_t observedGeneration = m_saveGeneration;
+                m_saveCv.wait_for(lock, std::chrono::milliseconds(200),
+                    [this, observedGeneration]() {
+                        return m_stopSaveWorker ||
+                               m_saveGeneration != observedGeneration;
+                    });
+                if (!m_stopSaveWorker && m_saveGeneration != observedGeneration)
+                    continue;
+            }
+            if (m_pendingSaves.empty()) {
+                if (m_stopSaveWorker)
+                    break;
+                continue;
+            }
+            saves.swap(m_pendingSaves);
+            m_saveInFlight = true;
+        }
+
+        if (databaseReady) {
+            for (const auto& [profileId, history] : saves)
+                if (history)
+                    database.SaveHistory(profileId, *history);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_saveMutex);
+            m_saveInFlight = false;
+        }
+        m_saveCv.notify_all();
+    }
+    m_saveCv.notify_all();
 }
 
 bool ClipboardProfileManager::SaveProfile(const ClipboardProfileConfig& profile) {

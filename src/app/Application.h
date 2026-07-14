@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -252,6 +253,10 @@ private:
         Complete
     };
     DeferredStartupPhase m_deferredStartupPhase{DeferredStartupPhase::AwaitFirstFrame};
+    std::future<ClipboardHistoryLoadResult> m_activeHistoryLoad;
+    StartupProfiler::TimePoint m_activeHistoryLoadStarted{};
+    std::future<ClipboardProfileMetadataLoadResult> m_profileMetadataLoad;
+    StartupProfiler::TimePoint m_profileMetadataLoadStarted{};
 
     static Application* s_instance;
 };

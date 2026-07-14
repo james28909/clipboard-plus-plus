@@ -4,8 +4,13 @@
 #include "../app/ConfigStore.h"
 
 #include <functional>
+#include <filesystem>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 #include <unordered_set>
 
@@ -14,6 +19,25 @@ struct ClipboardVaultEntry;
 struct NamedClipboardSlot;
 struct RegexTransformDefinition;
 struct PasteTemplateDefinition;
+
+struct ClipboardHistoryLoadResult {
+    std::string profileId;
+    bool ok{false};
+    bool found{false};
+    std::vector<ClipboardItem> items;
+    uint64_t nextId{1};
+    double durationMs{0.0};
+    std::string error;
+};
+
+struct ClipboardProfileMetadataLoadResult {
+    bool ok{false};
+    std::shared_ptr<ClipboardDatabase> database;
+    std::vector<ClipboardProfileConfig> profiles;
+    std::string activeProfileId;
+    double durationMs{0.0};
+    std::string error;
+};
 
 class ClipboardProfileManager {
 public:
@@ -33,7 +57,19 @@ public:
 
     void Rebuild();
     bool InitializeProfileMetadata();
+    bool CanInitializeMetadataAsync() const {
+        return m_config.profilesStoredInDatabase;
+    }
+    static ClipboardProfileMetadataLoadResult LoadProfileMetadataDetached(
+        const std::filesystem::path& databasePath);
+    bool InstallDetachedProfileMetadata(
+        ClipboardProfileMetadataLoadResult result);
     bool LoadActiveHistory();
+    bool CanLoadHistoryAsync() const { return m_database != nullptr; }
+    static ClipboardHistoryLoadResult LoadHistoryDetached(
+        const std::filesystem::path& databasePath,
+        const std::string& profileId);
+    bool InstallDetachedHistory(ClipboardHistoryLoadResult result);
     bool IsHistoryLoaded(const std::string& profileId) const;
     void SetNewItemsAtTop(bool value);
     void SetDeduplicationEnabled(bool enabled);
@@ -75,8 +111,8 @@ public:
     void BindActiveToProcess(const std::string& processName);
     void SwitchForProcess(const std::string& processName);
 
-    void SaveHistory(const std::string& profileId) const;
-    void SaveActiveHistory() const;
+    void SaveHistory(const std::string& profileId);
+    void SaveActiveHistory();
 
 private:
     ClipboardProfileConfig* FindForProcess(const std::string& processName);
@@ -89,6 +125,11 @@ private:
     bool SaveProfile(const ClipboardProfileConfig& profile);
     void ConfigureOverflow(const std::string& profileId,
                            ClipboardHistory& history);
+    void ScheduleHistorySave(const std::string& profileId,
+                             ClipboardHistory* history);
+    void StartHistorySaveWorker(const std::filesystem::path& databasePath);
+    void StopHistorySaveWorker();
+    void HistorySaveWorkerMain(std::filesystem::path databasePath);
 
     AppConfig& m_config;
     SaveConfigCallback m_saveConfig;
@@ -97,10 +138,17 @@ private:
     ActiveHistoryCallback m_activeHistoryChanged;
     TimingCallback m_startupTiming;
     std::vector<std::unique_ptr<ClipboardHistory>> m_histories;
-    std::unique_ptr<ClipboardDatabase> m_database;
+    std::shared_ptr<ClipboardDatabase> m_database;
     std::vector<std::string> m_persistenceErrors;
     std::string m_manualProcessOverride;
     mutable bool m_vaultCountCached{false};
     mutable std::string m_vaultCountProfileId;
     mutable size_t m_vaultCountCache{0};
+    std::mutex m_saveMutex;
+    std::condition_variable m_saveCv;
+    std::unordered_map<std::string, ClipboardHistory*> m_pendingSaves;
+    std::thread m_saveThread;
+    uint64_t m_saveGeneration{0};
+    bool m_saveInFlight{false};
+    bool m_stopSaveWorker{false};
 };
