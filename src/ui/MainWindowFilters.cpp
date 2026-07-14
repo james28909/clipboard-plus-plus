@@ -35,8 +35,6 @@ void MainWindow::DrawFilters() {
     Application* app = Application::Get();
     if (!app) return;
 
-    PageHeader("Filters", "Create custom popup buttons that show only matching clipboard items.");
-
     std::vector<CustomFilter> filters = app->GetCustomFilters();
     static std::string selectedId;
     static CustomFilter draft;
@@ -71,7 +69,7 @@ void MainWindow::DrawFilters() {
     if (BeginSettingsCard("##filters_saved", "Saved filters",
                           "Saved filters appear here and as buttons in the popup. Click one to edit it; drag to reorder.")) {
         if (filters.empty()) {
-            ImGui::TextDisabled("No custom filters yet.");
+            EmptyState("No custom filters yet. Create one to add a filter button to the popup.");
         } else {
             for (int i = 0; i < static_cast<int>(filters.size()); ++i) {
                 ImGui::PushID(filters[i].id.c_str());
@@ -203,11 +201,11 @@ void MainWindow::DrawFilters() {
     const bool routingOk = !draft.routeToProfile || !draft.routeProfileId.empty();
     if (BeginSettingsCard("##filter_test", "Test", "Try the draft against sample text before saving.")) {
         if (validation.ok)
-            ImGui::TextDisabled("Pattern is valid.");
+            StatusMessage(SettingsStatus::Success, "Pattern is valid.");
         else
-            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", validation.message.c_str());
+            StatusMessage(SettingsStatus::Error, validation.message.c_str());
         if (!routingOk)
-            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f), "Choose a destination profile for routing.");
+            StatusMessage(SettingsStatus::Warning, "Choose a destination profile for routing.");
 
         ImGui::TextUnformatted("Sample text");
         ImGui::SetNextItemWidth(-1.0f);

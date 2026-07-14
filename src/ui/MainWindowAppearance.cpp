@@ -29,7 +29,7 @@
 
 using namespace MainWindowInternal;
 
-// -- Section: Customize -------------------------------------------------------
+// -- Section: Appearance ------------------------------------------------------
 
 static bool ColorControl(const char* label, ImVec4& color) {
     ImGui::SetNextItemWidth(220.0f);
@@ -131,7 +131,7 @@ static void DrawSettingsPreview(const AppearanceSettings& draft) {
     dl->AddRectFilled(sideA, sideB, ImGui::GetColorU32(preview.panelBg), 4.0f);
     dl->AddRectFilled({sideA.x + 8.0f, sideA.y + 10.0f}, {sideB.x - 8.0f, sideA.y + 34.0f},
                       ImGui::GetColorU32(toggles.on), 3.0f);
-    PreviewText(dl, {sideA.x + 14.0f, sideA.y + 14.0f}, {sideB.x - 10.0f, sideA.y + 32.0f}, text, "Customize");
+    PreviewText(dl, {sideA.x + 14.0f, sideA.y + 14.0f}, {sideB.x - 10.0f, sideA.y + 32.0f}, text, "Appearance");
     PreviewText(dl, {sideA.x + 14.0f, sideA.y + 44.0f}, {sideB.x - 10.0f, sideA.y + 62.0f}, muted, "General");
 
     ImVec2 paneA = {sideB.x + 14.0f, sideA.y};
@@ -153,7 +153,7 @@ void MainWindow::DrawAppearance() {
     Application* app = Application::Get();
     if (!app) return;
 
-    PageHeader("Customize", "Personalize themes, popup effects, window layout, fonts, icons, and colors.");
+    PageHeader("Appearance", "Personalize themes, popup effects, window layout, fonts, icons, and colors.");
 
     static AppearanceSettings draft = app->GetAppearance();
     static char fontPath[512]{};
@@ -383,7 +383,7 @@ void MainWindow::DrawAppearance() {
         ImGui::Separator();
         ImGui::TextDisabled("User configured");
         if (draft.savedThemes.empty()) {
-            ImGui::TextDisabled("No saved themes");
+            EmptyState("No saved custom themes.");
         } else {
             for (const SavedAppearanceTheme& saved : draft.savedThemes) {
                 const bool selected = draft.customColors && saved.name == draft.customThemeName;
@@ -717,7 +717,7 @@ void MainWindow::DrawAppearance() {
             scrollbarChanged |= ColorControlWithReset("Scrollbar active", draft.scrollbarGrabActive, resetForScrollbars.scrollbarGrabActive);
         }
     } else {
-        ImGui::TextDisabled("Scrollbar controls are hidden while scrollbars are disabled.");
+        EmptyState("Scrollbar controls are hidden while scrollbars are disabled.");
     }
     if (scrollbarChanged) {
         draft.scrollbarSize = std::clamp(draft.scrollbarSize, 0.0f, 24.0f);
@@ -747,8 +747,8 @@ void MainWindow::DrawAppearance() {
     const AppearanceSettings reset = ThemeDefaults(draft.theme);
     bool colorsChanged = ImGui::Checkbox("Enable custom colors", &draft.customColors);
     if (!draft.customColors) {
-        ImGui::TextDisabled("Color controls are hidden while custom colors are disabled.");
-    } else if (ImGui::BeginTable("##appearance_color_preview", 2, ImGuiTableFlags_SizingStretchProp)) {
+        EmptyState("Color controls are hidden while custom colors are disabled.");
+    } else if (BeginSettingsTable("##appearance_color_preview", 2, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Colors", ImGuiTableColumnFlags_WidthStretch, 0.55f);
         ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 0.45f);
         ImGui::TableNextRow();
@@ -812,7 +812,7 @@ void MainWindow::DrawAppearance() {
         DrawPopupPreview(draft);
         ImGui::Spacing();
         DrawSettingsPreview(draft);
-        ImGui::EndTable();
+        EndSettingsTable();
     }
     if (colorsChanged) {
         AppearanceSettings next = draft;

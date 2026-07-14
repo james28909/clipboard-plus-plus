@@ -32,30 +32,24 @@ using namespace MainWindowInternal;
 // -- Section: About -----------------------------------------------------------
 
 void MainWindow::DrawAbout() {
-    ImGui::TextDisabled("About");
-    ImGui::Separator();
-    ImGui::Spacing();
+    PageHeader("About", "Version, architecture, bundled tools, and project information.");
 
     // -- Icon + app identity --------------------------------------------------
     Application* app = Application::Get();
+    if (BeginSettingsCard("##about_identity", "Clipboard++",
+                          "A lean Windows clipboard manager built with C++17, Dear ImGui, and DirectX 11.")) {
     float iconSz = S(64.0f);
     if (app) {
         DrawClipboardIcon(iconSz, app->GetAppearance());
         ImGui::SameLine(0, S(16.0f));
     }
     ImGui::BeginGroup();
-    ImGui::Text("Clipboard++");
     ImGui::TextDisabled("Version 0.1.0  (Beta 7)");
-    ImGui::Spacing();
-    ImGui::TextWrapped(
-        "A lean, modern Windows clipboard manager built with\n"
-        "C++17, Dear ImGui (docking branch), and DirectX 11.");
     ImGui::EndGroup();
+    }
+    EndSettingsCard();
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
+    if (BeginSettingsCard("##about_components", "Components", nullptr)) {
     ImGui::TextDisabled("Built with:");
     ImGui::BulletText("Dear ImGui (docking branch)  -  ocornut/imgui");
     ImGui::BulletText("nlohmann/json v3.11.3");
@@ -66,7 +60,11 @@ void MainWindow::DrawAbout() {
     ImGui::TextDisabled("Tools:");
     ImGui::BulletText("SQLite Editor  -  standalone database browser");
     ImGui::BulletText("JSON Viewer    -  standalone JSON file viewer");
+    }
+    EndSettingsCard();
 
-    ImGui::Spacing();
-    ImGui::TextDisabled("License: MIT");
+    if (BeginSettingsCard("##about_license", "License", nullptr)) {
+        ImGui::TextUnformatted("MIT");
+    }
+    EndSettingsCard();
 }

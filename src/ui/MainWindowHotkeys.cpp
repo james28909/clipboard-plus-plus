@@ -175,7 +175,7 @@ void MainWindow::DrawHotkeys() {
         }
         const float actionButtonW = uniformButtonWidth({"Reset"});
         const float tableCellPadding = ImGui::GetStyle().CellPadding.x * 2.0f;
-        if (ImGui::BeginTable("##hotkeys", 3,
+        if (BeginSettingsTable("##hotkeys", 3,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
         {
             ImGui::TableSetupColumn("Function", ImGuiTableColumnFlags_WidthStretch);
@@ -236,7 +236,7 @@ void MainWindow::DrawHotkeys() {
                     }
                 }
             }
-            ImGui::EndTable();
+            EndSettingsTable();
         }
 
         if (captureIndex >= 0) {
@@ -296,7 +296,7 @@ void MainWindow::DrawHotkeys() {
         }
         const float bankActionButtonW = uniformButtonWidth({"Reset"});
         const float bankCellPadding = ImGui::GetStyle().CellPadding.x * 2.0f;
-        if (ImGui::BeginTable("##slot_bank_table", 5,
+        if (BeginSettingsTable("##slot_bank_table", 5,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("List", ImGuiTableColumnFlags_WidthFixed, 230.0f);
@@ -344,7 +344,7 @@ void MainWindow::DrawHotkeys() {
                 }
                 ImGui::PopID();
             }
-            ImGui::EndTable();
+            EndSettingsTable();
         }
         if (bankCaptureIndex >= 0) {
             ImGui::TextDisabled("Press any combination of Left/Right Ctrl, Shift, or Alt, then release the modifiers to save. Esc cancels.");
@@ -385,8 +385,8 @@ void MainWindow::DrawHotkeys() {
         const float namedActionColumnW = namedActionButtonW * 3.0f +
             ImGui::GetStyle().ItemSpacing.x * 2.0f + namedCellPadding;
         if (slots.empty()) {
-            ImGui::TextDisabled("No named slots yet.");
-        } else if (ImGui::BeginTable("##named_slot_hotkeys", 4,
+            EmptyState("No named slots yet. Create one below to assign its content and shortcut.");
+        } else if (BeginSettingsTable("##named_slot_hotkeys", 4,
                                      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                      ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("Named slot", ImGuiTableColumnFlags_WidthFixed, 165.0f);
@@ -462,7 +462,7 @@ void MainWindow::DrawHotkeys() {
                 }
                 ImGui::PopID();
             }
-            ImGui::EndTable();
+            EndSettingsTable();
         }
 
         if (requestNamedSlotDelete)
@@ -566,7 +566,7 @@ void MainWindow::DrawHotkeys() {
 
     if (BeginSettingsCard("##hotkeys_effective_routes", "Effective routes",
                           "Review the active resolver order. Explicit shortcuts win over banks; higher banks win when bank definitions overlap.")) {
-        if (ImGui::BeginTable("##effective_hotkey_routes", 4,
+        if (BeginSettingsTable("##effective_hotkey_routes", 4,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("Priority", ImGuiTableColumnFlags_WidthFixed, 72.0f);
@@ -625,7 +625,7 @@ void MainWindow::DrawHotkeys() {
                 ImGui::TextUnformatted(HotkeyManager::ModifierChordText(bank.chord).c_str());
                 gridTextColumn(3); ImGui::TextDisabled("%s", keys.c_str());
             }
-            ImGui::EndTable();
+            EndSettingsTable();
         }
     }
     EndSettingsCard();
@@ -633,11 +633,11 @@ void MainWindow::DrawHotkeys() {
     if (BeginSettingsCard("##hotkeys_passthrough", "Popup pass-through",
                           "These combinations bypass Clipboard++ while the popup is open and continue to Windows.")) {
       if (draft.passthroughHotkeys.empty()) {
-          ImGui::TextDisabled("No pass-through hotkeys defined.");
+          EmptyState("No pass-through hotkeys defined.");
       } else {
         const float removeButtonW = ButtonWidthForText("Remove", 84.0f);
         const float actionColumnW = removeButtonW + hotkeyGridCellPadding.x * 2.0f;
-        if (ImGui::BeginTable("##popup_passthrough_table", 2,
+        if (BeginSettingsTable("##popup_passthrough_table", 2,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("Hotkey", ImGuiTableColumnFlags_WidthStretch);
@@ -656,7 +656,7 @@ void MainWindow::DrawHotkeys() {
                     break;
                 }
             }
-            ImGui::EndTable();
+            EndSettingsTable();
         }
       }
 

@@ -33,7 +33,7 @@ Clipboard++ observes the normal Windows clipboard with `AddClipboardFormatListen
 4. Press `Ctrl+Shift+V` to open the quick-paste popup.
 5. Click an item or use a slot key to paste it into the application that was active before the popup opened.
 
-Use the tray menu or `Ctrl+Shift+,` to open Settings. The General page includes the **Start with Windows** option.
+Use the tray menu or `Ctrl+Shift+,` to open Settings. **General** owns Windows startup and interface-help controls; feature-specific behavior lives beside the feature it affects.
 
 ## Screenshots
 
@@ -62,7 +62,7 @@ Use the tray menu or `Ctrl+Shift+,` to open Settings. The General page includes 
 
 ### Capture and organize
 
-Clipboard++ continuously captures supported formats. History deduplication is enabled by default, so re-copying existing content refreshes and moves that item according to the configured history order. Disable **Consolidate duplicate clipboard items** under Settings → History to keep every copy as a separate entry.
+Clipboard++ continuously captures supported formats. History deduplication is enabled by default, so re-copying existing content refreshes and moves that item according to the configured history order. Disable **Consolidate duplicate items** under Settings → Clipboard → History to keep every copy as a separate entry.
 
 History features include:
 
@@ -71,7 +71,7 @@ History features include:
 - Process bindings and optional automatic profile switching.
 - Search, content filters, custom filters, drag-and-drop ordering, and bulk actions.
 - Ordered multi-selection for pasting several items in a chosen order.
-- Configurable active-history limits and optional persistence.
+- Configurable active-history limits with encrypted persistence.
 - Source-process tracking and timestamps.
 
 ### Quick-paste popup
@@ -82,14 +82,18 @@ Ten built-in filter buttons cover All, Text, Image, URL, File, Code, Secret, JSO
 
 ### Advanced paste tools
 
-Developer mode adds tools for inspecting and deliberately transforming clipboard content:
+Clipboard → Paste Tools contains the user-facing operations that deliberately transform content during paste:
+
+- PCRE2 regex transforms apply named pattern/replacement rules immediately before paste, with a settings preview.
+- Templates interpolate named slots with `{{slot:name}}` and popup selections with `{{1}}`, `{{2}}`, and later ordered placeholders.
+- Structured formatting offers normalized JSON, XML, and SQL paste choices.
+
+Developer mode remains focused on diagnostics and clipboard inspection:
 
 - The format inspector lists every captured Win32 format in order and preserves exact bytes for an audited safe allowlist. A selected safe format or complete safe bundle can be replayed without converting it through plain text.
 - The hex viewer displays full preserved payloads, normalized text, and stored image bytes with offset, hexadecimal, and ASCII columns.
 - Named slots store reusable encrypted snippets independently of history limits and can be pasted from the popup or assigned global shortcuts.
-- PCRE2 regex transforms apply named pattern/replacement rules immediately before paste, with a settings preview.
-- Templates interpolate named slots with `{{slot:name}}` and popup selections with `{{1}}`, `{{2}}`, and later ordered placeholders.
-- The diff viewer compares two selected items side by side, while structured formatting offers normalized JSON, XML, and SQL paste choices.
+- The diff viewer compares two selected items side by side.
 
 Clipboard++ marks its own clipboard-write transactions with a private token. Generated template, transform, and formatted output is therefore not captured back into history as a duplicate, including when Windows emits multiple or delayed format notifications. Developer diagnostics record Clipboard++ as the generator and the receiving foreground process separately.
 
@@ -97,12 +101,13 @@ Clipboard++ marks its own clipboard-write transactions with a private token. Gen
 
 Copied images and screenshots can be stored as PNG, JPEG, or raw DIB data. The image browser provides thumbnails, profile filtering, copying, deletion, and configurable quality, dimensions, and retention limits.
 
-### Privacy controls
+### Privacy and storage
 
-- Likely-secret detection, highlighting, and optional automatic discard.
-- Clear history when Windows locks.
-- Per-process exclusions, with common password managers excluded by default.
+- Incognito mode immediately pauses clipboard capture.
+- Planned secret detection, clear-on-lock, and per-process exclusion controls are shown disabled in Settings so they cannot be mistaken for active protections.
 - AES-256-XTS page encryption for persistent history, profile metadata, and images, with current-user DPAPI protection for the database keys.
+
+Settings uses a plain, flat sidebar: **General**, **Clipboard**, **Popup**, **Hotkeys**, **Appearance**, **Integrations**, **Privacy**, **Developer** (Debug builds), and **About**. See [Settings UI architecture](docs/SETTINGS_UI.md) for the page map and layout rules.
 
 ## Keyboard shortcuts
 

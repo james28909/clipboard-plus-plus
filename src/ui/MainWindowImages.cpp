@@ -35,13 +35,12 @@ void MainWindow::DrawImages() {
     Application* app = Application::Get();
     if (!app) return;
 
-    ImGui::TextDisabled("Images");
-    ImGui::Separator();
-    ImGui::Spacing();
-
     AppConfig cfg = app->GetConfig();
     ImageSettings& s = cfg.images;
     bool changed = false;
+
+    if (BeginSettingsCard("##image_capture_storage", "Image capture & retention",
+                          "Choose which images are stored, their representation, and retention limits.")) {
 
     // -- Capture toggle --------------------------------------------------------
     changed |= ImGui::Checkbox("Capture images from clipboard", &s.captureImages);
@@ -132,12 +131,15 @@ void MainWindow::DrawImages() {
     if (!s.captureImages)
         ImGui::EndDisabled();
 
+    }
+    EndSettingsCard();
+
     if (changed)
         app->SetImageSettings(s);
 
     // -- DB stats --------------------------------------------------------------
-    ImGui::Spacing();
-    ImGui::SeparatorText("Database");
+    if (BeginSettingsCard("##image_database", "Image database",
+                          "Review encrypted image storage and perform destructive cleanup.")) {
 
     ImageStore* store = app->GetImageStore();
     if (store && store->IsOpen()) {
@@ -187,6 +189,9 @@ void MainWindow::DrawImages() {
             ImGui::EndPopup();
         }
     } else {
-        ImGui::TextDisabled("Image database not open.");
+        StatusMessage(SettingsStatus::Warning,
+                      "Image database is still loading or could not be opened.");
     }
+    }
+    EndSettingsCard();
 }

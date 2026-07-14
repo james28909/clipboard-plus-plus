@@ -35,16 +35,15 @@ void MainWindow::DrawAndroid() {
     Application* app = Application::Get();
     if (!app) return;
 
-    ImGui::TextDisabled("Android Sync");
-    ImGui::Separator();
-    ImGui::Spacing();
-
     const bool running = app->IsAndroidSyncServerRunning();
     const unsigned short port = app->AndroidSyncServerPort();
     const std::string localhostHealth = "http://127.0.0.1:" + std::to_string(port) + "/health";
     const std::string hotspotEndpoint = "http://192.168.137.1:" + std::to_string(port);
 
-    ImGui::Text("Windows receiver: %s", running ? "listening" : "not running");
+    if (BeginSettingsCard("##android_receiver", "Windows receiver",
+                          "Connection details used by the Android companion app.")) {
+    StatusMessage(running ? SettingsStatus::Success : SettingsStatus::Warning,
+                  running ? "Receiver is listening." : "Receiver is not running.");
     ImGui::Text("Port: %hu", port);
     ImGui::TextWrapped("In the Android app, set Windows Endpoint to this PC's reachable address, for example:");
     ImGui::BulletText("%s", hotspotEndpoint.c_str());
@@ -58,10 +57,11 @@ void MainWindow::DrawAndroid() {
     if (ImGui::Button("Open local health check")) {
         ShellExecuteA(nullptr, "open", localhostHealth.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
+    }
+    EndSettingsCard();
 
-    ImGui::Spacing();
-    ImGui::SeparatorText("Android endpoint");
-    ImGui::TextWrapped("Set the Android app API endpoint used when Clipboard++ sends items to Android or requests a sync.");
+    if (BeginSettingsCard("##android_endpoint", "Android endpoint",
+                          "Address used when Clipboard++ sends items to Android or requests a sync.")) {
 
     static char endpointBuf[256]{};
     static std::string lastLoadedEndpoint;
@@ -113,16 +113,23 @@ void MainWindow::DrawAndroid() {
     else
         ImGui::TextDisabled("Saved: %s", app->GetAndroidDeviceEndpoint().c_str());
     if (!endpointStatus.empty())
-        ImGui::TextDisabled("%s", endpointStatus.c_str());
+        StatusMessage(endpointStatus.find("failed") != std::string::npos
+                          ? SettingsStatus::Error : SettingsStatus::Success,
+                      endpointStatus.c_str());
+    }
+    EndSettingsCard();
 
-    ImGui::Spacing();
-    ImGui::SeparatorText("Android app");
+    if (BeginSettingsCard("##android_setup", "Companion app setup",
+                          "Install and connect the Android capture keyboard.")) {
     ImGui::TextWrapped("Install the latest debug APK, enable Clipboard++ Capture Keyboard, then turn on Push captured items to Windows Clipboard++.");
     ImGui::TextWrapped("If the phone cannot reach the health URL, allow inbound TCP %hu in Windows Firewall.", port);
 
-    ImGui::Spacing();
-    ImGui::SeparatorText("Current behavior");
+    SectionHeader("Current behavior");
     ImGui::BulletText("Captured Android text is shown in the dedicated Android popup list.");
     ImGui::BulletText("Clipboard++ can send selected text items to the saved Android endpoint.");
     ImGui::BulletText("Android may show a clipboard access banner when the IME reads copied text.");
+    ImGui::Spacing();
+    SettingsLinkButton("Open integration hotkeys", SettingsDestination::Hotkeys);
+    }
+    EndSettingsCard();
 }

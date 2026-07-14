@@ -353,7 +353,7 @@ void PopupWindow::DrawNamedSlots() {
         ImGui::PopID();
     }
     if (slots.empty())
-        ImGui::TextDisabled("Create a named slot in Settings > Developer > Automation.");
+        ImGui::TextDisabled("Create a named slot in Settings > Hotkeys.");
     else if (visible == 0)
         ImGui::TextDisabled("No named slots match the search.");
     SmoothScrollCurrentWindow("popup_named_slots_scroll", 78.0f);

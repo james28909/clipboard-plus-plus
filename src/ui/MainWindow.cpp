@@ -30,35 +30,37 @@
 // -- Section nav ---------------------------------------------------------------
 
 enum Section {
-    SEC_GENERAL    = 0,
-    SEC_HOTKEYS    = 1,
-    SEC_APPEARANCE = 2,
-    SEC_HISTORY    = 3,
-    SEC_IMAGES     = 4,
-    SEC_FILTERS    = 5,
-    SEC_EDITOR     = 6,
-    SEC_ANDROID    = 7,
-    SEC_PRIVACY    = 8,
+    SEC_GENERAL         = 0,
+    SEC_CLIPBOARD       = 1,
+    SEC_POPUP           = 2,
+    SEC_HOTKEYS         = 3,
+    SEC_APPEARANCE      = 4,
+    SEC_INTEGRATIONS    = 5,
+    SEC_PRIVACY         = 6,
 #ifndef NDEBUG
-    SEC_DEVELOPER  = 9,
-    SEC_ABOUT      = 10,
+    SEC_DEVELOPER       = 7,
+    SEC_ABOUT           = 8,
 #else
-    SEC_ABOUT      = 9,
+    SEC_ABOUT           = 7,
 #endif
     SEC_COUNT
 };
 
 static const char* kSectionLabels[SEC_COUNT] = {
 #ifndef NDEBUG
-    "General", "Hotkeys", "Customize", "History",
-    "Images", "Filters", "Editor", "Android", "Privacy", "Developer", "About",
+    "General", "Clipboard", "Popup", "Hotkeys", "Appearance",
+    "Integrations", "Privacy", "Developer", "About",
 #else
-    "General", "Hotkeys", "Customize", "History",
-    "Images", "Filters", "Editor", "Android", "Privacy", "About",
+    "General", "Clipboard", "Popup", "Hotkeys", "Appearance",
+    "Integrations", "Privacy", "About",
 #endif
 };
 
 static int s_activeSection = SEC_GENERAL;
+static int s_clipboardTab = 0;
+static int s_integrationTab = 0;
+static bool s_clipboardTabSelectionPending = false;
+static bool s_integrationTabSelectionPending = false;
 static int s_focusFrames = 0;
 static bool s_diffOpen = false;
 static std::string s_diffLeftLabel;
@@ -234,6 +236,42 @@ bool BlueButton(const char* label, float minWidth) {
     return clicked;
 }
 
+void NavigateToSettings(SettingsDestination destination, int subTab) {
+    switch (destination) {
+    case SettingsDestination::General:        s_activeSection = SEC_GENERAL; break;
+    case SettingsDestination::Clipboard:      s_activeSection = SEC_CLIPBOARD; break;
+    case SettingsDestination::Popup:          s_activeSection = SEC_POPUP; break;
+    case SettingsDestination::Hotkeys:        s_activeSection = SEC_HOTKEYS; break;
+    case SettingsDestination::Appearance:     s_activeSection = SEC_APPEARANCE; break;
+    case SettingsDestination::Integrations:   s_activeSection = SEC_INTEGRATIONS; break;
+    case SettingsDestination::Privacy:        s_activeSection = SEC_PRIVACY; break;
+    case SettingsDestination::Developer:
+#ifndef NDEBUG
+        s_activeSection = SEC_DEVELOPER;
+#endif
+        break;
+    case SettingsDestination::About:          s_activeSection = SEC_ABOUT; break;
+    }
+    if (subTab >= 0) {
+        if (destination == SettingsDestination::Clipboard) {
+            s_clipboardTab = subTab;
+            s_clipboardTabSelectionPending = true;
+        }
+        if (destination == SettingsDestination::Integrations) {
+            s_integrationTab = subTab;
+            s_integrationTabSelectionPending = true;
+        }
+    }
+}
+
+bool SettingsLinkButton(const char* label, SettingsDestination destination,
+                        int subTab) {
+    if (!PaddedButton(label, ButtonWidthForText(label, 120.0f)))
+        return false;
+    NavigateToSettings(destination, subTab);
+    return true;
+}
+
 void PageHeader(const char* title, const char* description) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_Text));
     ImGui::TextUnformatted(title);
@@ -251,8 +289,8 @@ bool BeginSettingsCard(const char* id, const char* title, const char* descriptio
     ImVec4 cardBg = frameBg;
     cardBg.w = std::min(1.0f, frameBg.w * 0.72f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, cardBg);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14.0f, 12.0f});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.0f, 9.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {12.0f, 9.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {7.0f, 6.0f});
     const bool visible = ImGui::BeginChild(
         id, {0.0f, 0.0f},
         ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding |
@@ -269,6 +307,35 @@ bool BeginSettingsCard(const char* id, const char* title, const char* descriptio
         ImGui::Spacing();
     }
     return visible;
+}
+
+void StatusMessage(SettingsStatus status, const char* text) {
+    ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    if (status == SettingsStatus::Success) color = {0.35f, 0.9f, 0.48f, 1.0f};
+    if (status == SettingsStatus::Warning) color = {1.0f, 0.72f, 0.25f, 1.0f};
+    if (status == SettingsStatus::Error) color = {1.0f, 0.35f, 0.3f, 1.0f};
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::TextWrapped("%s", text ? text : "");
+    ImGui::PopStyleColor();
+}
+
+void EmptyState(const char* text) {
+    StatusMessage(SettingsStatus::Muted, text);
+}
+
+bool BeginSettingsTable(const char* id, int columns, ImGuiTableFlags flags) {
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {7.0f, 4.0f});
+    const bool visible = ImGui::BeginTable(id, columns,
+        flags | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_SizingStretchProp);
+    if (!visible)
+        ImGui::PopStyleVar();
+    return visible;
+}
+
+void EndSettingsTable() {
+    ImGui::EndTable();
+    ImGui::PopStyleVar();
 }
 
 void EndSettingsCard() {
@@ -698,8 +765,8 @@ void MainWindow::Draw(bool& open) {
 
     ImGui::SameLine(0, pad);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {S(22.0f), S(20.0f)});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {S(10.0f), S(13.0f)});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {S(18.0f), S(16.0f)});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {S(8.0f), S(9.0f)});
     ImGuiWindowFlags contentFlags = app && !app->GetAppearance().showScrollbars
         ? ImGuiWindowFlags_NoScrollbar
         : ImGuiWindowFlags_None;
@@ -708,27 +775,94 @@ void MainWindow::Draw(bool& open) {
                       ImGuiChildFlags_AlwaysUseWindowPadding,
                       contentFlags);
     switch (s_activeSection) {
-    case SEC_GENERAL:    DrawGeneral();    break;
-    case SEC_HOTKEYS:    DrawHotkeys();    break;
-    case SEC_APPEARANCE: DrawAppearance(); break;
-    case SEC_HISTORY:    DrawHistory();    break;
-    case SEC_FILTERS:    DrawFilters();    break;
-    case SEC_EDITOR:     DrawEditor();     break;
-    case SEC_IMAGES:     DrawImages();     break;
-    case SEC_ANDROID:    DrawAndroid();    break;
-    case SEC_PRIVACY:    DrawPrivacy();    break;
+    case SEC_GENERAL:         DrawGeneral();         break;
+    case SEC_CLIPBOARD:       DrawClipboard();       break;
+    case SEC_POPUP:           DrawPopupSettings();   break;
+    case SEC_HOTKEYS:         DrawHotkeys();         break;
+    case SEC_APPEARANCE:      DrawAppearance();      break;
+    case SEC_INTEGRATIONS:    DrawIntegrations();    break;
+    case SEC_PRIVACY:         DrawPrivacy();         break;
 #ifndef NDEBUG
     case SEC_DEVELOPER:  DrawDeveloper();  break;
 #endif
     case SEC_ABOUT:      DrawAbout();      break;
     }
-    SmoothScrollCurrentWindow("settings_content");
+    const std::string settingsScrollId =
+        "settings_content_" + std::to_string(s_activeSection);
+    SmoothScrollCurrentWindow(settingsScrollId.c_str());
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
 
     DrawDiffView();
 
     ImGui::End();
+}
+
+void MainWindow::DrawClipboard() {
+    PageHeader("Clipboard", "Manage history, profiles, filters, images, and overflow storage in one place.");
+    if (ImGui::BeginTabBar("##clipboard_settings_tabs")) {
+        if (ImGui::BeginTabItem("History", nullptr,
+                s_clipboardTabSelectionPending && s_clipboardTab == 0
+                    ? ImGuiTabItemFlags_SetSelected : 0)) {
+            s_clipboardTab = 0;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Profiles", nullptr,
+                s_clipboardTabSelectionPending && s_clipboardTab == 1
+                    ? ImGuiTabItemFlags_SetSelected : 0)) {
+            s_clipboardTab = 1;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Capture Rules", nullptr,
+                s_clipboardTabSelectionPending && s_clipboardTab == 2
+                    ? ImGuiTabItemFlags_SetSelected : 0)) {
+            s_clipboardTab = 2;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Paste Tools", nullptr,
+                s_clipboardTabSelectionPending && s_clipboardTab == 3
+                    ? ImGuiTabItemFlags_SetSelected : 0)) {
+            s_clipboardTab = 3;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Images", nullptr,
+                s_clipboardTabSelectionPending && s_clipboardTab == 4
+                    ? ImGuiTabItemFlags_SetSelected : 0)) {
+            s_clipboardTab = 4;
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+        s_clipboardTabSelectionPending = false;
+    }
+    ImGui::Spacing();
+    if (s_clipboardTab == 0) DrawHistory();
+    else if (s_clipboardTab == 1) DrawProfiles();
+    else if (s_clipboardTab == 2) DrawFilters();
+    else if (s_clipboardTab == 3) DrawPasteTools();
+    else DrawImages();
+}
+
+void MainWindow::DrawIntegrations() {
+    PageHeader("Integrations", "Configure tools and devices that exchange content with Clipboard++.");
+    if (ImGui::BeginTabBar("##integration_settings_tabs")) {
+        if (ImGui::BeginTabItem("Editor", nullptr,
+                s_integrationTabSelectionPending && s_integrationTab == 0
+                    ? ImGuiTabItemFlags_SetSelected : 0)) {
+            s_integrationTab = 0;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Android", nullptr,
+                s_integrationTabSelectionPending && s_integrationTab == 1
+                    ? ImGuiTabItemFlags_SetSelected : 0)) {
+            s_integrationTab = 1;
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+        s_integrationTabSelectionPending = false;
+    }
+    ImGui::Spacing();
+    if (s_integrationTab == 0) DrawEditor();
+    else DrawAndroid();
 }
 
 // -- Sidebar nav ---------------------------------------------------------------
@@ -742,15 +876,7 @@ void MainWindow::DrawSidebarNav(int& selected) {
     const ImVec4 selectedColor = appearance.customColors
         ? appearance.selectedTab
         : ThemeDefaults(appearance.theme).selectedTab;
-    auto drawGroup = [](const char* label) {
-        if (ImGui::GetCursorPosY() > ImGui::GetStyle().WindowPadding.y)
-            ImGui::Dummy({0.0f, 5.0f});
-        ImGui::TextDisabled("%s", label);
-    };
     for (int i = 0; i < SEC_COUNT; ++i) {
-        if (i == SEC_HISTORY) drawGroup("CLIPBOARD");
-        if (i == SEC_EDITOR)  drawGroup("TOOLS & SYNC");
-        if (i == SEC_PRIVACY) drawGroup("SYSTEM");
         bool active = (i == selected);
         if (active)
             ImGui::PushStyleColor(ImGuiCol_Button, selectedColor);

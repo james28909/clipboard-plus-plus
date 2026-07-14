@@ -35,12 +35,11 @@ void MainWindow::DrawEditor() {
     Application* app = Application::Get();
     if (!app) return;
 
-    ImGui::TextDisabled("Text / Script Editor");
-    ImGui::Separator();
-    ImGui::Spacing();
-
     EditorSettings s = app->GetEditorSettings();
     bool changed = false;
+
+    if (BeginSettingsCard("##editor_configuration", "Text & script editor",
+                          "Choose the editor provider, clipboard handoff, and editing behavior.")) {
 
     changed |= ImGui::Checkbox("Enable editor hotkey and menu actions", &s.enabled);
     ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -150,6 +149,15 @@ void MainWindow::DrawEditor() {
     if (!s.enabled)
         ImGui::EndDisabled();
 
+    }
+    EndSettingsCard();
+
     if (changed)
         app->SetEditorSettings(s);
+
+    if (BeginSettingsCard("##editor_shortcuts", "Editor shortcut",
+                          "The editor shortcut is managed with all other global actions.")) {
+        SettingsLinkButton("Open editor hotkey", SettingsDestination::Hotkeys);
+    }
+    EndSettingsCard();
 }

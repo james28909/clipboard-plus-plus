@@ -15,7 +15,7 @@
 - [x] get --list, get --search, get --item <n> - per-profile encrypted-history reads with stable one-based positions and text/JSON output
 - [x] set --delete <n>, set --pin <n>, set --unpin <n>, set --clear - stable-ID mutations routed through the running app with optional profile selection; clear leaves the vault intact
 
-## Developer mode (advanced features)
+## Advanced clipboard and developer features
 - [x] Format inspector - capture the ordered Win32 format manifest, retain exact bytes for an audited safe allowlist, inspect metadata/hex previews, replay safe bundles, and offer per-format Paste as choices
 - [x] Hex viewer - virtualized full-payload offset/hex/ASCII view for preserved formats, normalized text, and stored image bytes
 - [x] Named persistent slots - encrypted reusable text snippets unaffected by history limits, with popup search/paste/copy, per-slot global hotkeys, and management under Hotkeys
@@ -60,18 +60,18 @@
   - [x] Audit all background initialization for SQLite connection ownership, shutdown cancellation, and ImGui/main-thread boundaries
 
 ## Settings information architecture (P1)
-- [ ] Inventory every setting and assign one clear owner; identify duplicates, misplaced controls, vague labels, and settings that belong beside the feature they affect
-- [ ] Decide the final top-level navigation before adding a `Global` tab; candidate structure: General, Clipboard, Popup, Hotkeys, Appearance, Integrations, Privacy & Storage, Developer, About
-- [ ] Consider renaming `General` to `Application` or `System`, and `History` to `Clipboard & History`; do not add a catch-all Global page without a defined content map
-- [ ] Keep Hotkeys standalone, but cross-link relevant shortcut controls from Popup, Profiles, Named slots, and Integrations
-- [ ] Create shared compact UI primitives for page headers, cards, field rows, tables, action columns, status messages, destructive actions, and hidden-until-edit forms
-- [ ] Define one compact density system: control height, row height, cell padding, card padding, label width, section spacing, action-button width, and text wrapping
-- [ ] Make every settings grid use predictable stretch/fixed columns, aligned headers, centered controls, stable action widths, and graceful behavior at minimum window size
-- [ ] Standardize list-first editing: show saved entries first; reveal editors only for New/Edit; keep Save/Cancel/Delete placement consistent
-- [ ] Audit long text, localization growth, custom fonts, UI scaling, Windows DPI scaling, narrow windows, and scrollbar ownership on every page
-- [ ] Add empty, loading, error, and disabled states with consistent wording and colors
+- [x] Inventory every setting and assign one clear owner; identify duplicates, misplaced controls, vague labels, and settings that belong beside the feature they affect
+- [x] Use a flat top-level navigation with no category headings: General, Clipboard, Popup, Hotkeys, Appearance, Integrations, Privacy, Developer, About
+- [x] Consider renaming `General` to `Application` or `System`, and `History` to `Clipboard & History`; do not add a catch-all Global page without a defined content map
+- [x] Keep Hotkeys standalone, but cross-link relevant shortcut controls from Popup, Profiles, Named slots, and Integrations
+- [x] Create shared compact UI primitives for page headers, cards, field rows, tables, action columns, status messages, destructive actions, and hidden-until-edit forms
+- [x] Define one compact density system: control height, row height, cell padding, card padding, label width, section spacing, action-button width, and text wrapping
+- [x] Make every settings grid use predictable stretch/fixed columns, aligned headers, centered controls, stable action widths, and graceful behavior at minimum window size
+- [x] Standardize list-first editing: show saved entries first; reveal editors only for New/Edit; keep Save/Cancel/Delete placement consistent
+- [x] Audit long text, localization growth, custom fonts, UI scaling, Windows DPI scaling, narrow windows, and scrollbar ownership on every page
+- [x] Add empty, loading, error, and disabled states with consistent wording and colors
 - [ ] Walk every settings page manually and capture before/after screenshots at 100%, 125%, 150%, and the minimum supported window size
-- [ ] Remove obsolete helper text and replace dense explanations with concise labels plus optional tooltips/details
+- [x] Remove obsolete helper text and replace dense explanations with concise labels plus optional tooltips/details
 
 ## Support and diagnostics (P1 / stable-release)
 - [ ] Add a user-facing **Support & diagnostics** Settings page or About sub-page; keep it available in Release builds and separate it from advanced Developer tooling

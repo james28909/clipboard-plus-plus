@@ -33,57 +33,57 @@ using namespace MainWindowInternal;
 
 void MainWindow::DrawHistory() {
     Application* app = Application::Get();
-    ImGui::TextDisabled("History");
-    ImGui::Separator();
-    ImGui::Spacing();
+    if (!app) return;
 
     if (app) {
         for (const std::string& error : app->GetHistoryPersistenceErrors()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.3f, 1.0f));
-            ImGui::TextWrapped("%s", error.c_str());
-            ImGui::PopStyleColor();
+            StatusMessage(SettingsStatus::Error, error.c_str());
         }
         if (!app->GetHistoryPersistenceErrors().empty())
             ImGui::Spacing();
     }
 
-    int activeLimit = app ? app->GetActiveHistoryLimit() : kMaxClipboardHistoryItems;
-    static bool persistHistory = true;
-    static bool sessionOnly    = false;
+    int activeLimit = app->GetActiveHistoryLimit();
 
-    ImGui::Text("Active history size (items)");
-    ImGui::SetNextItemWidth(120.0f);
-    if (SliderIntWheel("##active", &activeLimit, 1,
-                       kMaxClipboardHistoryItems, "%d", 1) && app)
-        app->SetActiveHistoryLimit(activeLimit);
+    if (BeginSettingsCard("##history_behavior", "History behavior",
+                          "Set ordering, capacity, duplicate handling, and retention.")) {
+        ImGui::TextUnformatted("Active history limit");
+        ImGui::SetNextItemWidth(160.0f);
+        if (SliderIntWheel("##active", &activeLimit, 1,
+                           kMaxClipboardHistoryItems, "%d items", 1))
+            app->SetActiveHistoryLimit(activeLimit);
 
-    bool deduplicateHistory = app ? app->IsHistoryDeduplicationEnabled() : true;
-    if (ImGui::Checkbox("Consolidate duplicate clipboard items", &deduplicateHistory) && app)
-        app->SetHistoryDeduplicationEnabled(deduplicateHistory);
-    ImGui::TextDisabled(deduplicateHistory
-        ? "Repeated content refreshes the existing item instead of adding another copy."
-        : "Repeated content is kept as a separate history item each time.");
+        bool newItemsAtTop = app->GetNewItemsAtTop();
+        if (ImGui::Checkbox("Place new captures at the top", &newItemsAtTop))
+            app->SetNewItemsAtTop(newItemsAtTop);
 
-    ImGui::Spacing();
-    ImGui::Checkbox("Persist history across sessions", &persistHistory);
-    if (persistHistory) {
-        ImGui::Indent();
-        ImGui::Checkbox("Session only (clear on exit)", &sessionOnly);
-        ImGui::Unindent();
+        bool deduplicateHistory = app->IsHistoryDeduplicationEnabled();
+        if (ImGui::Checkbox("Consolidate duplicate items", &deduplicateHistory))
+            app->SetHistoryDeduplicationEnabled(deduplicateHistory);
+        StatusMessage(SettingsStatus::Muted, deduplicateHistory
+            ? "Repeated content refreshes the existing item."
+            : "Repeated content creates a separate history item.");
+
+        bool persistHistory = true;
+        ImGui::BeginDisabled();
+        ImGui::Checkbox("Persist encrypted history across sessions", &persistHistory);
+        ImGui::EndDisabled();
+        StatusMessage(SettingsStatus::Muted,
+                      "Encrypted persistence is currently always enabled. Session-only mode is not available yet.");
     }
+    EndSettingsCard();
 
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-    ImGui::Text("Vault (overflow archive)");
-    ImGui::TextDisabled("Items pushed beyond the active-history limit are archived here.");
-    bool vaultUnlimited = app ? app->IsVaultUnlimited() : true;
-    int vaultLimitMB = app ? app->GetVaultLimitMB() : 256;
-    if (ImGui::Checkbox("Unlimited vault size", &vaultUnlimited) && app)
+    if (BeginSettingsCard("##history_vault", "Overflow vault",
+                          "Items beyond the active-history limit are archived here.")) {
+    bool vaultUnlimited = app->IsVaultUnlimited();
+    int vaultLimitMB = app->GetVaultLimitMB();
+    if (ImGui::Checkbox("Unlimited vault size", &vaultUnlimited))
         app->SetVaultLimit(vaultUnlimited, vaultLimitMB);
     if (!vaultUnlimited) {
         ImGui::SetNextItemWidth(120.0f);
         if (ImGui::InputInt("Max vault size (MB)", &vaultLimitMB)) {
             vaultLimitMB = std::clamp(vaultLimitMB, 1, 102400);
-            if (app) app->SetVaultLimit(false, vaultLimitMB);
+            app->SetVaultLimit(false, vaultLimitMB);
         }
     }
 
@@ -106,8 +106,7 @@ void MainWindow::DrawHistory() {
         cachedProfileId = profileId;
         cachedQuery = query;
         cachedVaultCount = vaultCount;
-        cachedVaultEntries = app ? app->SearchVault(query)
-                                 : std::vector<ClipboardVaultEntry>{};
+        cachedVaultEntries = app->SearchVault(query);
     }
 
     ImGui::TextDisabled("%zu archived item%s%s", vaultCount,
@@ -118,7 +117,7 @@ void MainWindow::DrawHistory() {
     if (ImGui::BeginChild("##vaultitems", {-1.0f, 190.0f},
                           ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding)) {
         if (cachedVaultEntries.empty()) {
-            ImGui::TextDisabled(query.empty()
+            EmptyState(query.empty()
                 ? "The vault is empty. Overflow items will appear here."
                 : "No archived items match this search.");
         }
@@ -150,12 +149,15 @@ void MainWindow::DrawHistory() {
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
+    }
+    EndSettingsCard();
+
     // -- Live history preview --------------------------------------------------
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+    if (BeginSettingsCard("##history_live_preview", "Live history",
+                          "A compact preview of the active profile in stored order.")) {
     ClipboardHistory* hist = Application::Get()->GetHistory();
     size_t count = hist ? hist->Size() : 0;
-    ImGui::Text("Live history  (%zu / %d items)", count, activeLimit);
-    ImGui::Spacing();
+    ImGui::TextDisabled("%zu / %d items", count, activeLimit);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {12.0f, 10.0f});
         ImGuiWindowFlags childFlags = Application::Get()->GetAppearance().showScrollbars
@@ -166,7 +168,7 @@ void MainWindow::DrawHistory() {
                               ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
                               childFlags)) {
         if (count == 0) {
-            ImGui::TextDisabled("  Nothing captured yet - copy something!");
+            EmptyState("Nothing captured yet. Copy something to populate this profile.");
         } else {
             for (size_t i = 0; i < count; ++i) {
                 const ClipboardItem* item = hist->Get(i);
@@ -206,4 +208,6 @@ void MainWindow::DrawHistory() {
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
+    }
+    EndSettingsCard();
 }

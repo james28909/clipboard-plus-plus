@@ -13,6 +13,13 @@
 
 namespace MainWindowInternal {
 
+enum class SettingsDestination {
+    General, Clipboard, Popup, Hotkeys, Appearance,
+    Integrations, Privacy, Developer, About
+};
+
+enum class SettingsStatus { Muted, Success, Warning, Error };
+
 extern const ContentTag kDisplayTagOrder[30];
 
 using ImGuiWidgets::KeepMouseWheelOnLastItem;
@@ -38,9 +45,17 @@ ImVec2 ButtonSizeForText(const char* text, float minWidth = 0.0f);
 bool PaddedButton(const char* label, float minWidth = 0.0f);
 bool DangerButton(const char* label, float minWidth = 0.0f);
 bool BlueButton(const char* label, float minWidth = 0.0f);
+void NavigateToSettings(SettingsDestination destination, int subTab = -1);
+bool SettingsLinkButton(const char* label, SettingsDestination destination,
+                        int subTab = -1);
 void PageHeader(const char* title, const char* description);
 bool BeginSettingsCard(const char* id, const char* title, const char* description = nullptr);
 void EndSettingsCard();
+void StatusMessage(SettingsStatus status, const char* text);
+void EmptyState(const char* text);
+bool BeginSettingsTable(const char* id, int columns,
+                        ImGuiTableFlags flags = ImGuiTableFlags_None);
+void EndSettingsTable();
 bool SameLineIfFits(float nextItemWidth);
 void SectionHeader(const char* label);
 float SidebarWidth();
