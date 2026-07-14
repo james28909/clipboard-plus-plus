@@ -117,40 +117,44 @@ bool SetClipboardUnicodeText(HWND owner, const wchar_t* text, size_t chars) {
     return true;
 }
 
+std::vector<uint8_t> BuildFileDropPayload(const std::vector<std::wstring>& paths) {
+    if (paths.empty()) return {};
+    size_t chars = 1;
+    for (const std::wstring& path : paths)
+        chars += path.size() + 1;
+    std::vector<uint8_t> payload(sizeof(DROPFILES) + chars * sizeof(wchar_t), 0);
+    auto* drop = reinterpret_cast<DROPFILES*>(payload.data());
+    drop->pFiles = sizeof(DROPFILES);
+    drop->fWide = TRUE;
+    wchar_t* out = reinterpret_cast<wchar_t*>(payload.data() + sizeof(DROPFILES));
+    for (const std::wstring& path : paths) {
+        std::memcpy(out, path.c_str(), path.size() * sizeof(wchar_t));
+        out += path.size() + 1;
+    }
+    return payload;
+}
+
 bool SetClipboardFileDrop(HWND owner, const std::vector<std::wstring>& paths) {
-    if (paths.empty() || !OpenClipboard(owner))
+    const std::vector<uint8_t> payload = BuildFileDropPayload(paths);
+    if (payload.empty() || !OpenClipboard(owner))
         return false;
     if (!EmptyClipboard()) {
         CloseClipboard();
         return false;
     }
 
-    size_t chars = 1;
-    for (const std::wstring& path : paths)
-        chars += path.size() + 1;
-
-    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT,
-                              sizeof(DROPFILES) + chars * sizeof(wchar_t));
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, payload.size());
     if (!mem) {
         CloseClipboard();
         return false;
     }
-
-    auto* drop = static_cast<DROPFILES*>(GlobalLock(mem));
-    if (!drop) {
+    void* data = GlobalLock(mem);
+    if (!data) {
         GlobalFree(mem);
         CloseClipboard();
         return false;
     }
-
-    drop->pFiles = sizeof(DROPFILES);
-    drop->fWide = TRUE;
-
-    wchar_t* out = reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(drop) + sizeof(DROPFILES));
-    for (const std::wstring& path : paths) {
-        std::memcpy(out, path.c_str(), path.size() * sizeof(wchar_t));
-        out += path.size() + 1;
-    }
+    std::memcpy(data, payload.data(), payload.size());
 
     GlobalUnlock(mem);
     if (!SetClipboardData(CF_HDROP, mem)) {

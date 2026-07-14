@@ -1,0 +1,35 @@
+name: Security-sensitive triage
+description: Request private security-reporting help without publishing vulnerability details.
+title: "[Security triage]: "
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not disclose vulnerability details, secrets, clipboard data, or proof-of-concept code here. Use the Private security report link in the issue chooser whenever possible."
+  - type: dropdown
+    id: area
+    attributes:
+      label: General affected area
+      options:
+        - Encryption or key handling
+        - Clipboard privacy
+        - Logs or support bundles
+        - Network or Android integration
+        - Packaging or executable integrity
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: contact
+    attributes:
+      label: Nonsensitive coordination note
+      description: Provide only enough information to arrange private follow-up. Do not include technical vulnerability details.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Public disclosure warning
+      options:
+        - label: I understand this issue is public and have omitted all sensitive technical details.
+          required: true

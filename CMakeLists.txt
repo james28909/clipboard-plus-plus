@@ -60,6 +60,7 @@ set(APP_SOURCES
     src/diff/TextDiff.cpp
     src/security/DpapiProtection.cpp
     src/security/EncryptedSqliteVfs.cpp
+    src/support/SupportBundle.cpp
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
     src/ui/MainWindowGeneral.cpp
@@ -73,6 +74,7 @@ set(APP_SOURCES
     src/ui/MainWindowPrivacy.cpp
     src/ui/MainWindowDeveloper.cpp
     src/ui/MainWindowAbout.cpp
+    src/ui/MainWindowSupport.cpp
     src/ui/PopupWindow.cpp
     src/ui/PopupWindowAndroid.cpp
     src/ui/PopupWindowHistory.cpp
@@ -235,6 +237,32 @@ add_executable(filter_matcher_tests
     src/clipboard/ClipboardHistory.cpp
     src/clipboard/ContentDetector.cpp
 )
+
+if(WIN32)
+    add_executable(support_bundle_tests
+        tests/support_bundle_tests.cpp
+        src/support/SupportBundle.cpp
+        src/util/Win32Util.cpp
+    )
+
+    target_include_directories(support_bundle_tests PRIVATE
+        src
+        ${NLOHMANN_DIR}
+    )
+
+    target_link_libraries(support_bundle_tests PRIVATE user32.lib shell32.lib)
+
+    set_property(TARGET support_bundle_tests PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    target_compile_definitions(support_bundle_tests PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+    )
+endif()
 
 target_include_directories(filter_matcher_tests PRIVATE
     src

@@ -19,6 +19,7 @@ Clipboard++ Settings uses feature ownership instead of a catch-all Global page. 
 | Integrations | Android | Receiver, endpoint, companion setup, and shortcut link |
 | Privacy | - | Incognito capture state, planned privacy controls, and encryption status |
 | Developer (Debug) | General / Diagnostics / Inspectors | Debug-only experiments, diagnostics, and clipboard inspection |
+| Support & diagnostics | - | Privacy-reviewed support ZIPs, issue Markdown, and safe GitHub issue launching |
 | About | - | Product identity, component versions, and license |
 
 Hotkeys remains standalone because bindings affect several features. Popup, Profiles, Named slots, Editor, and Android either contain their shortcut controls or link directly to Hotkeys.

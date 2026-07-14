@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <filesystem>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@ std::vector<std::wstring> ExistingPathList(const wchar_t* text);
 std::vector<std::wstring> ExistingPathListUtf8(const std::string& text);
 
 bool SetClipboardUnicodeText(HWND owner, const wchar_t* text, size_t chars);
+std::vector<uint8_t> BuildFileDropPayload(const std::vector<std::wstring>& paths);
 bool SetClipboardFileDrop(HWND owner, const std::vector<std::wstring>& paths);
 std::string ClipboardUnicodeText();
 

@@ -107,7 +107,13 @@ Copied images and screenshots can be stored as PNG, JPEG, or raw DIB data. The i
 - Planned secret detection, clear-on-lock, and per-process exclusion controls are shown disabled in Settings so they cannot be mistaken for active protections.
 - AES-256-XTS page encryption for persistent history, profile metadata, and images, with current-user DPAPI protection for the database keys.
 
-Settings uses a plain, flat sidebar: **General**, **Clipboard**, **Popup**, **Hotkeys**, **Appearance**, **Integrations**, **Privacy**, **Developer** (Debug builds), and **About**. See [Settings UI architecture](docs/SETTINGS_UI.md) for the page map and layout rules.
+Settings uses a plain, flat sidebar: **General**, **Clipboard**, **Popup**, **Hotkeys**, **Appearance**, **Integrations**, **Privacy**, **Developer** (Debug builds), **Support & diagnostics**, and **About**. See [Settings UI architecture](docs/SETTINGS_UI.md) for the page map and layout rules.
+
+### Support and diagnostics
+
+**Settings → Support & diagnostics** is available in Release and Debug builds. It creates a reviewable ZIP containing selected environment, sanitized feature, database-health, startup-performance, and safe diagnostic information. The bundle manifest lists every included file and the data that is always excluded. Clipboard contents, images, database pages, encryption keys, DPAPI blobs, raw configuration, named-slot/template/transform values, endpoints, credentials, raw crash dumps, and `paste_debug.log` are never bundled.
+
+The ZIP can be copied as a Windows file-drop object for pasting into an upload control. The same page can prepare Markdown for a GitHub issue or open the public issue form with safe text fields; it never uploads the ZIP or stores GitHub credentials. Security-sensitive details should be reported through the repository's private security-advisory form.
 
 ## Keyboard shortcuts
 

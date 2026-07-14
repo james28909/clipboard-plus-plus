@@ -2,6 +2,7 @@
 #include "MainWindowInternal.h"
 #include "ImGuiWidgets.h"
 #include "../app/Application.h"
+#include "../app/Version.h"
 #include "../app/ConfigStore.h"
 #include "../app/TrayIcon.h"
 #include "../clipboard/ImageStore.h"
@@ -33,6 +34,10 @@ using namespace MainWindowInternal;
 
 void MainWindow::DrawAbout() {
     PageHeader("About", "Version, architecture, bundled tools, and project information.");
+    DrawAboutInfo();
+}
+
+void MainWindow::DrawAboutInfo() {
 
     // -- Icon + app identity --------------------------------------------------
     Application* app = Application::Get();
@@ -44,7 +49,7 @@ void MainWindow::DrawAbout() {
         ImGui::SameLine(0, S(16.0f));
     }
     ImGui::BeginGroup();
-    ImGui::TextDisabled("Version 0.1.0  (Beta 7)");
+    ImGui::TextDisabled("Version %s", kClipboardPlusPlusVersion);
     ImGui::EndGroup();
     }
     EndSettingsCard();

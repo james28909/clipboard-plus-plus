@@ -32,5 +32,7 @@ private:
     static void DrawIntegrations();
     static void DrawDeveloper();
     static void DrawAbout();
+    static void DrawAboutInfo();
+    static void DrawSupport();
     static void DrawDiffView();
 };

@@ -39,9 +39,11 @@ enum Section {
     SEC_PRIVACY         = 6,
 #ifndef NDEBUG
     SEC_DEVELOPER       = 7,
-    SEC_ABOUT           = 8,
+    SEC_SUPPORT         = 8,
+    SEC_ABOUT           = 9,
 #else
-    SEC_ABOUT           = 7,
+    SEC_SUPPORT         = 7,
+    SEC_ABOUT           = 8,
 #endif
     SEC_COUNT
 };
@@ -49,10 +51,10 @@ enum Section {
 static const char* kSectionLabels[SEC_COUNT] = {
 #ifndef NDEBUG
     "General", "Clipboard", "Popup", "Hotkeys", "Appearance",
-    "Integrations", "Privacy", "Developer", "About",
+    "Integrations", "Privacy", "Developer", "Support & diagnostics", "About",
 #else
     "General", "Clipboard", "Popup", "Hotkeys", "Appearance",
-    "Integrations", "Privacy", "About",
+    "Integrations", "Privacy", "Support & diagnostics", "About",
 #endif
 };
 
@@ -250,6 +252,7 @@ void NavigateToSettings(SettingsDestination destination, int subTab) {
         s_activeSection = SEC_DEVELOPER;
 #endif
         break;
+    case SettingsDestination::Support:        s_activeSection = SEC_SUPPORT; break;
     case SettingsDestination::About:          s_activeSection = SEC_ABOUT; break;
     }
     if (subTab >= 0) {
@@ -785,6 +788,7 @@ void MainWindow::Draw(bool& open) {
 #ifndef NDEBUG
     case SEC_DEVELOPER:  DrawDeveloper();  break;
 #endif
+    case SEC_SUPPORT:    DrawSupport();    break;
     case SEC_ABOUT:      DrawAbout();      break;
     }
     const std::string settingsScrollId =

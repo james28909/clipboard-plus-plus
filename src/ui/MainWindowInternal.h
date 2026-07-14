@@ -15,7 +15,7 @@ namespace MainWindowInternal {
 
 enum class SettingsDestination {
     General, Clipboard, Popup, Hotkeys, Appearance,
-    Integrations, Privacy, Developer, About
+    Integrations, Privacy, Developer, Support, About
 };
 
 enum class SettingsStatus { Muted, Success, Warning, Error };

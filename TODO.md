@@ -74,16 +74,16 @@
 - [x] Remove obsolete helper text and replace dense explanations with concise labels plus optional tooltips/details
 
 ## Support and diagnostics (P1 / stable-release)
-- [ ] Add a user-facing **Support & diagnostics** Settings page or About sub-page; keep it available in Release builds and separate it from advanced Developer tooling
-- [ ] Add **Create support bundle**: collect app/build version, Windows version, relevant feature flags, sanitized configuration, database/VFS health and schema versions, recent app/debug logs, crash details, and non-sensitive performance counters into a ZIP
-- [ ] Make support bundles private by default: exclude clipboard contents, images, named-slot/template/transform values, encryption keys, DPAPI blobs, vault exports, tokens, usernames, and unnecessary file paths; redact remaining user/profile/process identifiers and include a manifest of every bundled file
-- [ ] Show a review-and-consent screen before bundle creation, with per-category inclusion toggles and warnings whenever a selected file could contain user data
-- [ ] Add **Copy bundle** using Windows file-drop clipboard data so the ZIP can be pasted into an upload control; also provide **Open containing folder** and automatic age-based cleanup of old bundles
-- [ ] Add an in-app issue composer for category, title, actual behavior, expected behavior, reproduction steps, optional GitHub username, and selectable public labels; generate consistent Markdown containing version/environment details and a reminder to attach the support ZIP
-- [ ] Add **Copy issue text** and **Open GitHub issue** actions that launch the repository's browser issue form with safe prefilled fields; never place the support ZIP contents, secrets, or authentication credentials in a URL
-- [ ] Add repository GitHub Issue Forms for bug reports, feature requests, and security-sensitive reports, with matching categories, required reproduction fields, supported labels, and private security-reporting guidance
-- [ ] Defer one-click direct submission until a proper GitHub App/OAuth device-flow design exists; never ask users to paste or store a personal access token in Clipboard++
-- [ ] Add tests for redaction, bundle manifests, clipboard file-drop copying, deterministic issue Markdown, URL length/encoding limits, cleanup, offline behavior, and failures while logs or databases are in use
+- [x] Add a user-facing **Support & diagnostics** Settings page or About sub-page; keep it available in Release builds and separate it from advanced Developer tooling
+- [x] Add **Create support bundle**: collect app/build version, Windows version, relevant feature flags, sanitized configuration, database/VFS health and schema versions, recent app/debug logs, crash details, and non-sensitive performance counters into a ZIP
+- [x] Make support bundles private by default: exclude clipboard contents, images, named-slot/template/transform values, encryption keys, DPAPI blobs, vault exports, tokens, usernames, and unnecessary file paths; redact remaining user/profile/process identifiers and include a manifest of every bundled file
+- [x] Show a review-and-consent screen before bundle creation, with per-category inclusion toggles and warnings whenever a selected file could contain user data
+- [x] Add **Copy bundle** using Windows file-drop clipboard data so the ZIP can be pasted into an upload control; also provide **Open containing folder** and automatic age-based cleanup of old bundles
+- [x] Add an in-app issue composer for category, title, actual behavior, expected behavior, reproduction steps, optional GitHub username, and selectable public labels; generate consistent Markdown containing version/environment details and a reminder to attach the support ZIP
+- [x] Add **Copy issue text** and **Open GitHub issue** actions that launch the repository's browser issue form with safe prefilled fields; never place the support ZIP contents, secrets, or authentication credentials in a URL
+- [x] Add repository GitHub Issue Forms for bug reports, feature requests, and security-sensitive reports, with matching categories, required reproduction fields, supported labels, and private security-reporting guidance
+- [x] Defer one-click direct submission until a proper GitHub App/OAuth device-flow design exists; never ask users to paste or store a personal access token in Clipboard++
+- [x] Add tests for redaction, bundle manifests, clipboard file-drop copying, deterministic issue Markdown, URL length/encoding limits, cleanup, offline behavior, and failures while logs or databases are in use
 
 ## Popup toolbar and filter redesign (P1)
 - [ ] Redesign the top strip into visually distinct compact groups: content filters, actions/modes, destinations/integrations, and profile/search controls

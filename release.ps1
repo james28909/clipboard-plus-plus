@@ -57,7 +57,7 @@ $build      = [int]$Matches[3]
 $newBuild   = $build + 1
 $newVersion = "$semver-$stage.$newBuild"
 $tagName    = "v$newVersion"
-$displayVer = "Version $semver  (Beta $newBuild)"
+$displayVer = $newVersion
 
 Write-Info "Old: $raw"
 Write-Info "New: $newVersion  (tag: $tagName)"
@@ -69,23 +69,23 @@ if (-not $DryRun) {
     Write-Warn "DryRun — VERSION not written"
 }
 
-# ── 2. Patch version string in MainWindow.cpp ─────────────────────────────────
+# ── 2. Patch shared source version ─────────────────────────────────────────────
 
-Write-Step "Patch source version string"
+Write-Step "Patch shared source version"
 
-$mainWindowPath = Join-Path $Root "src\ui\MainWindowAbout.cpp"
-if (-not (Test-Path $mainWindowPath)) { Write-Fail "MainWindowAbout.cpp not found" }
+$mainWindowPath = Join-Path $Root "src\app\Version.h"
+if (-not (Test-Path $mainWindowPath)) { Write-Fail "Version.h not found" }
 
 $src     = Get-Content $mainWindowPath -Raw
-$patched = $src -replace 'Version \d+\.\d+\.\d+\s+\(Beta \d+\)', $displayVer
+$patched = $src -replace '\d+\.\d+\.\d+-[A-Za-z]+\.\d+', $displayVer
 
 if ($src -eq $patched) {
-    Write-Warn "No version string matched in MainWindow.cpp — check the pattern"
+    Write-Warn "No version string matched in Version.h — check the pattern"
 } elseif (-not $DryRun) {
     Set-Content $mainWindowPath $patched -NoNewline
-    Write-Ok "Patched MainWindow.cpp  ->  $displayVer"
+    Write-Ok "Patched Version.h  ->  $displayVer"
 } else {
-    Write-Warn "DryRun — MainWindow.cpp not patched"
+    Write-Warn "DryRun — Version.h not patched"
 }
 
 # ── 3. Build all projects (Release + Debug) ───────────────────────────────────
@@ -254,7 +254,7 @@ $fullNotes -split "`n" | Select-Object -First 3 | ForEach-Object { Write-Host " 
 Write-Step "Git tag  $tagName"
 
 if (-not $DryRun) {
-    git -C $Root add VERSION "src/ui/MainWindow.cpp"
+    git -C $Root add VERSION "src/app/Version.h"
     git -C $Root commit -m "Release $tagName"
     git -C $Root tag -a $tagName -m "Release $tagName"
     git -C $Root push origin HEAD
