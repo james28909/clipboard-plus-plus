@@ -108,15 +108,15 @@
 - [x] Add import/export with secret-field warnings plus automated tests for interpolation, escaping, conditions, timeouts, failures, and correct paste targets
 
 ## Reliability, performance, and release hardening (P2)
-- [ ] Add an in-app backup/restore workflow using SQLite online backup, including encrypted backup by default and explicit warnings for decrypted exports
-- [ ] Add config/profile/named-slot/transform/template import-export with conflict handling and encrypted options
-- [ ] Add undo for destructive popup actions (delete, clear, bulk move) using stable item IDs
-- [ ] Add database corruption/recovery UX, safe-mode startup, and actionable persistence error reporting
-- [ ] Add memory and latency telemetry to Developer diagnostics: history bytes, format bytes, thumbnail memory, DB query time, render time, and clipboard-event rate
-- [ ] Stress-test 500 history items per profile, many profiles, large HTML/RTF payloads, large images, thousands of vault items, and rapid clipboard bursts
-- [ ] Audit secrets: source-process display, incognito transitions, vault exports, logs, crash dumps, clipboard restoration, and temporary decrypted files
-- [ ] Add automated tests for physical-modifier hotkeys, double-tap routing, filtered slot positions, popup focus restoration, template/transform formatting, and format replay
-- [ ] Add a release-readiness checklist covering upgrade/migration, clean install, uninstall leftovers, shell integration, startup registration, signatures, version metadata, and all Debug/Release executables
+- [x] Add an in-app backup/restore workflow using SQLite online backup, including encrypted backup by default and explicit warnings for decrypted exports
+- [x] Add config/profile/named-slot/transform/template import-export with conflict handling and encrypted options
+- [x] Add undo for destructive popup actions (delete, clear, bulk move) using stable item IDs
+- [x] Add database corruption/recovery UX, safe-mode startup, and actionable persistence error reporting
+- [x] Add memory and latency telemetry to Developer diagnostics: history bytes, format bytes, thumbnail memory, DB query time, render time, and clipboard-event rate
+- [x] Stress-test 500 history items per profile, many profiles, large HTML/RTF payloads, large images, thousands of vault items, and rapid clipboard bursts
+- [x] Audit secrets: source-process display, incognito transitions, vault exports, logs, crash dumps, clipboard restoration, and temporary decrypted files
+- [x] Add automated tests for physical-modifier hotkeys, double-tap routing, filtered slot positions, popup focus restoration, template/transform formatting, and format replay
+- [x] Add a release-readiness checklist covering upgrade/migration, clean install, uninstall leftovers, shell integration, startup registration, signatures, version metadata, and all Debug/Release executables
 
 ## Stable public release gate (1.0)
 

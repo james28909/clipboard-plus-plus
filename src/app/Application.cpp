@@ -13,18 +13,22 @@
 #include "../clipboard/ImageStore.h"
 #include "../clipboard/ScreenshotTracker.h"
 #include "../hotkeys/HotkeyManager.h"
+#include "../security/BackupRestore.h"
+#include "../security/StatePackage.h"
 #include "../util/Win32Util.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
+#include <json.hpp>
 #include <dxgi.h>
 #include <d3dcompiler.h>
 #include <dwmapi.h>
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 #include <shlobj.h>
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <cmath>
 #include <cctype>
@@ -37,6 +41,7 @@
 #include <iomanip>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -72,6 +77,29 @@ std::string Hex32(uint32_t value) {
     std::ostringstream out;
     out << "0x" << std::hex << std::uppercase << value;
     return out.str();
+}
+
+std::string Lowercase(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+template<typename Values, typename Name>
+std::string UniqueImportedName(const std::string& requested,
+                               const Values& values, Name name) {
+    auto exists = [&](const std::string& candidate) {
+        const std::string folded = Lowercase(candidate);
+        return std::any_of(values.begin(), values.end(), [&](const auto& value) {
+            return Lowercase(name(value)) == folded;
+        });
+    };
+    if (!exists(requested)) return requested;
+    for (int suffix = 2;; ++suffix) {
+        const std::string candidate = requested + " (imported " +
+                                      std::to_string(suffix) + ")";
+        if (!exists(candidate)) return candidate;
+    }
 }
 
 std::string ScreenshotDescription(const std::filesystem::path& path, int width, int height) {
@@ -137,14 +165,49 @@ std::string NormalizeExtension(std::string value, int mode) {
     return value;
 }
 
+void SecureDeleteEditorScratch(const std::filesystem::path& path);
+
 std::filesystem::path EditorTempPath(const EditorSettings& settings) {
     std::filesystem::path dir = ConfigStore::Directory() / "editor";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
+    const auto staleBefore = std::filesystem::file_time_type::clock::now() -
+                             std::chrono::hours(24);
+    for (std::filesystem::directory_iterator it(dir, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        const auto name = it->path().filename().string();
+        std::error_code timeError;
+        const auto modified = std::filesystem::last_write_time(it->path(), timeError);
+        if (!timeError && name.rfind("scratch-", 0) == 0 && modified < staleBefore)
+            SecureDeleteEditorScratch(it->path());
+    }
     std::ostringstream name;
     name << "scratch-" << std::hex << GetTickCount64()
          << NormalizeExtension(settings.externalTempExtension, settings.mode);
     return dir / name.str();
+}
+
+void SecureDeleteEditorScratch(const std::filesystem::path& path) {
+    // Best effort only: flash storage and filesystem journaling can retain old
+    // blocks. Overwrite the visible file before deletion so ordinary recovery
+    // does not leave the editor plaintext behind.
+    std::error_code ec;
+    const uintmax_t size = std::filesystem::file_size(path, ec);
+    if (!ec && size > 0) {
+        std::ofstream output(path, std::ios::binary | std::ios::in | std::ios::out);
+        if (output) {
+            std::array<char, 64 * 1024> zeros{};
+            uintmax_t remaining = size;
+            while (remaining > 0 && output) {
+                const auto count = static_cast<std::streamsize>(
+                    std::min<uintmax_t>(remaining, zeros.size()));
+                output.write(zeros.data(), count);
+                remaining -= static_cast<uintmax_t>(count);
+            }
+            output.flush();
+        }
+    }
+    std::filesystem::remove(path, ec);
 }
 
 bool WriteUtf8File(const std::filesystem::path& path, const std::string& text) {
@@ -187,8 +250,10 @@ void ReplaceAll(std::wstring& text, const std::wstring& from, const std::wstring
 
 // -- Construction / destruction ------------------------------------------------
 
-Application::Application(HINSTANCE hInstance)
+Application::Application(HINSTANCE hInstance, bool safeModeRequested)
     : m_hInstance(hInstance),
+      m_safeModeRequested(safeModeRequested),
+      m_safeMode(safeModeRequested),
       m_androidIntegration(std::make_unique<AndroidIntegration>(*this))
 {
     s_instance = this;
@@ -403,7 +468,7 @@ bool Application::LaunchExternalEditor() {
         ? win32util::ClipboardUnicodeText()
         : std::string{};
     if (!WriteUtf8File(tempPath, text)) {
-        LogDebug("LaunchExternalEditor: failed to write temp file " + tempPath.u8string());
+        LogDebug("LaunchExternalEditor: failed to write scratch file");
         return false;
     }
 
@@ -445,13 +510,15 @@ bool Application::LaunchExternalEditor() {
         &pi);
 
     if (!ok) {
-        LogDebug("LaunchExternalEditor: CreateProcess failed for " + editorPath.u8string() +
-                 " gle=" + std::to_string(GetLastError()));
+        SecureDeleteEditorScratch(tempPath);
+        LogDebug("LaunchExternalEditor: CreateProcess failed gle=" +
+                 std::to_string(GetLastError()));
         return false;
     }
 
     CloseHandle(pi.hThread);
-    const bool shouldWait = settings.externalWaitForExit || settings.externalReadBackToClipboard;
+    const bool shouldWait = settings.externalWaitForExit ||
+                            settings.externalReadBackToClipboard;
     if (shouldWait) {
         std::thread([process = pi.hProcess,
                      tempPath,
@@ -463,13 +530,16 @@ bool Application::LaunchExternalEditor() {
                 const std::wstring wide = win32util::Utf8ToWide(edited);
                 win32util::SetClipboardUnicodeText(nullptr, wide.c_str(), wide.size());
             }
+            SecureDeleteEditorScratch(tempPath);
         }).detach();
     } else {
+        // Many GUI launchers exit after handing the file to an existing process;
+        // deleting here would race that editor. The next launch removes scratch
+        // files older than 24 hours instead.
         CloseHandle(pi.hProcess);
     }
 
-    LogDebug("LaunchExternalEditor: opened " + tempPath.u8string() +
-             " with " + editorPath.u8string());
+    LogDebug("LaunchExternalEditor: opened protected scratch workflow");
     return true;
 }
 
@@ -642,8 +712,7 @@ void Application::RecordGeneratedPaste(const std::string& sourceProcess,
                                        const std::string& destinationProcess) {
     m_lastGeneratedPasteSource = sourceProcess;
     m_lastGeneratedPasteDestination = destinationProcess;
-    AddDeveloperEvent("generated paste source=" + sourceProcess +
-                      " destination=" + destinationProcess);
+    AddDeveloperEvent("generated paste recorded (source and destination available in inspector)");
 }
 
 void Application::SetNewItemsAtTop(bool value) {
@@ -868,6 +937,305 @@ bool Application::SetStartWithWindowsEnabled(bool enabled) {
     return true;
 }
 
+bool Application::HasPendingEncryptedRestore() const {
+    return backup_restore::HasPendingRestore(ConfigStore::Directory());
+}
+
+bool Application::CancelPendingEncryptedRestore(std::string& message) {
+    if (!backup_restore::CancelPendingRestore(ConfigStore::Directory(), &message))
+        return false;
+    message = "Pending restore canceled. Current data was not changed.";
+    return true;
+}
+
+std::string Application::LastEncryptedRestoreStatus() const {
+    return backup_restore::ReadLastRestoreStatus(ConfigStore::Directory());
+}
+
+bool Application::RestartForEncryptedRestore() {
+    wchar_t executable[MAX_PATH]{};
+    if (!GetModuleFileNameW(nullptr, executable, MAX_PATH)) return false;
+    std::wstring command = L"\"" + std::wstring(executable) +
+        L"\" --clipboardpp-restart " + std::to_wstring(GetCurrentProcessId());
+    std::vector<wchar_t> buffer(command.begin(), command.end());
+    buffer.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable, buffer.data(), nullptr, nullptr, FALSE,
+                        DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                        nullptr, nullptr, &startup, &process))
+        return false;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    PostMessageW(m_hwnd, WM_DESTROY, 0, 0);
+    return true;
+}
+
+bool Application::QuarantineStorageAndRestart(std::string& message) {
+    if (!m_safeMode) {
+        message = "Storage quarantine is available only while safe mode is active.";
+        return false;
+    }
+    const auto dataDirectory = ConfigStore::Directory();
+    const auto quarantine = dataDirectory / "recovery" /
+        ("Unavailable storage " + std::to_string(GetTickCount64()));
+    std::error_code ec;
+    std::filesystem::create_directories(quarantine, ec);
+    if (ec) {
+        message = "Could not create the recovery folder: " + ec.message();
+        return false;
+    }
+    std::filesystem::copy_file(ConfigStore::Path(), quarantine / "config.json",
+        std::filesystem::copy_options::overwrite_existing, ec);
+    ec.clear();
+    const std::vector<std::string> components = {
+        "clipboard.db", "clipboard.db.key", "clipboard.db-wal",
+        "clipboard.db-shm", "clipboard.db-journal",
+        "images.db", "images.db.key", "images.db-wal",
+        "images.db-shm", "images.db-journal"};
+    std::vector<std::pair<std::filesystem::path, std::filesystem::path>> moved;
+    for (const std::string& component : components) {
+        const auto source = dataDirectory / component;
+        if (!std::filesystem::exists(source, ec)) { ec.clear(); continue; }
+        const auto destination = quarantine / component;
+        std::filesystem::rename(source, destination, ec);
+        if (ec) {
+            for (auto it = moved.rbegin(); it != moved.rend(); ++it) {
+                std::error_code rollbackError;
+                std::filesystem::rename(it->second, it->first, rollbackError);
+            }
+            message = "Could not quarantine " + component + ": " + ec.message();
+            return false;
+        }
+        moved.emplace_back(source, destination);
+    }
+    if (moved.empty()) {
+        message = "No clipboard database files were found to quarantine.";
+        return false;
+    }
+    m_config.profilesStoredInDatabase = false;
+    m_config.activeClipboardId = "default";
+    if (m_config.clipboards.empty()) {
+        const std::string now = NowIsoLocal();
+        m_config.clipboards.push_back({"default", "Default", now, now, ""});
+    }
+    if (!ConfigStore::Save(m_config)) {
+        for (auto it = moved.rbegin(); it != moved.rend(); ++it) {
+            std::error_code rollbackError;
+            std::filesystem::rename(it->second, it->first, rollbackError);
+        }
+        message = "Could not save the fresh-start configuration; storage quarantine was canceled.";
+        return false;
+    }
+    message = "Unavailable storage was retained in " + quarantine.u8string();
+    if (!RestartForEncryptedRestore()) {
+        message += ", but Clipboard++ could not restart automatically.";
+        return false;
+    }
+    return true;
+}
+
+bool Application::ExportStatePackage(const std::filesystem::path& path,
+                                     bool encrypted,
+                                     std::string& message) const {
+    state_package::Data data;
+    {
+        std::ifstream input(ConfigStore::Path(), std::ios::binary);
+        if (input)
+            data.configurationJson.assign(std::istreambuf_iterator<char>(input),
+                                          std::istreambuf_iterator<char>());
+    }
+    data.profiles = GetClipboardProfiles();
+    data.namedSlots = GetNamedSlots();
+    data.transforms = GetRegexTransforms();
+    data.templates = GetPasteTemplates();
+    data.actions = GetCustomActions();
+    const state_package::Result result =
+        state_package::Write(path, data, encrypted);
+    message = result.message;
+    return result.ok;
+}
+
+bool Application::ImportStatePackage(
+    const std::filesystem::path& path, state_package::ConflictPolicy policy,
+    bool& restartRequired, std::string& message) {
+    restartRequired = false;
+    state_package::Data data;
+    const state_package::Result loaded = state_package::Read(path, data);
+    if (!loaded.ok) { message = loaded.message; return false; }
+
+    int imported = 0;
+    int replaced = 0;
+    int skipped = 0;
+    bool failed = false;
+    std::unordered_map<int64_t, int64_t> namedSlotIdMap;
+    std::unordered_map<std::string, std::string> profileIdMap;
+    const ClipboardProfileConfig* activeBeforeImport = GetActiveClipboardProfile();
+    const std::string activeProfileBeforeImport = activeBeforeImport
+        ? activeBeforeImport->id : std::string{};
+
+    auto profiles = GetClipboardProfiles();
+    for (const auto& incoming : data.profiles) {
+        const auto found = std::find_if(profiles.begin(), profiles.end(),
+            [&](const auto& value) {
+                return Lowercase(value.name) == Lowercase(incoming.name);
+            });
+        if (found != profiles.end()) {
+            profileIdMap[incoming.id] = found->id;
+            if (policy == state_package::ConflictPolicy::Replace) {
+                if (m_clipboardProfiles && m_clipboardProfiles->UpdateProfileDefinition(
+                        found->id, incoming.name, incoming.processName)) ++replaced;
+                else failed = true;
+            } else if (policy == state_package::ConflictPolicy::KeepBoth) {
+                const std::string name = UniqueImportedName(incoming.name, profiles,
+                    [](const auto& value) { return value.name; });
+                CreateClipboardProfile(name, incoming.processName);
+                profiles = GetClipboardProfiles(); ++imported;
+                if (const auto* created = GetActiveClipboardProfile())
+                    profileIdMap[incoming.id] = created->id;
+            } else ++skipped;
+        } else {
+            CreateClipboardProfile(incoming.name, incoming.processName);
+            profiles = GetClipboardProfiles(); ++imported;
+            if (const auto* created = GetActiveClipboardProfile())
+                profileIdMap[incoming.id] = created->id;
+        }
+    }
+    if (!activeProfileBeforeImport.empty())
+        SetActiveClipboardProfile(activeProfileBeforeImport);
+
+    auto slots = GetNamedSlots();
+    for (auto incoming : data.namedSlots) {
+        const int64_t sourceId = incoming.slotId;
+        const auto found = std::find_if(slots.begin(), slots.end(),
+            [&](const auto& value) { return Lowercase(value.name) == Lowercase(incoming.name); });
+        if (found != slots.end()) {
+            if (policy == state_package::ConflictPolicy::Skip) {
+                namedSlotIdMap[sourceId] = found->slotId; ++skipped; continue;
+            }
+            if (policy == state_package::ConflictPolicy::Replace) {
+                incoming.slotId = found->slotId; ++replaced;
+            } else {
+                incoming.slotId = 0;
+                incoming.name = UniqueImportedName(incoming.name, slots,
+                    [](const auto& value) { return value.name; });
+                ++imported;
+            }
+        } else { incoming.slotId = 0; ++imported; }
+        if (!SaveNamedSlot(incoming)) { failed = true; continue; }
+        namedSlotIdMap[sourceId] = incoming.slotId;
+        slots = GetNamedSlots();
+    }
+
+    auto transforms = GetRegexTransforms();
+    for (auto incoming : data.transforms) {
+        const auto found = std::find_if(transforms.begin(), transforms.end(),
+            [&](const auto& value) { return Lowercase(value.name) == Lowercase(incoming.name); });
+        if (found != transforms.end()) {
+            if (policy == state_package::ConflictPolicy::Skip) { ++skipped; continue; }
+            if (policy == state_package::ConflictPolicy::Replace) {
+                incoming.transformId = found->transformId; ++replaced;
+            } else {
+                incoming.transformId = 0;
+                incoming.name = UniqueImportedName(incoming.name, transforms,
+                    [](const auto& value) { return value.name; }); ++imported;
+            }
+        } else { incoming.transformId = 0; ++imported; }
+        if (!SaveRegexTransform(incoming)) failed = true;
+        transforms = GetRegexTransforms();
+    }
+
+    auto templates = GetPasteTemplates();
+    for (auto incoming : data.templates) {
+        const auto found = std::find_if(templates.begin(), templates.end(),
+            [&](const auto& value) { return Lowercase(value.name) == Lowercase(incoming.name); });
+        if (found != templates.end()) {
+            if (policy == state_package::ConflictPolicy::Skip) { ++skipped; continue; }
+            if (policy == state_package::ConflictPolicy::Replace) {
+                incoming.templateId = found->templateId; ++replaced;
+            } else {
+                incoming.templateId = 0;
+                incoming.name = UniqueImportedName(incoming.name, templates,
+                    [](const auto& value) { return value.name; }); ++imported;
+            }
+        } else { incoming.templateId = 0; ++imported; }
+        if (!SavePasteTemplate(incoming)) failed = true;
+        templates = GetPasteTemplates();
+    }
+
+    auto actions = GetCustomActions();
+    for (auto incoming : data.actions) {
+        const auto found = std::find_if(actions.begin(), actions.end(),
+            [&](const auto& value) { return Lowercase(value.label) == Lowercase(incoming.label); });
+        if (found != actions.end()) {
+            if (policy == state_package::ConflictPolicy::Skip) { ++skipped; continue; }
+            if (policy == state_package::ConflictPolicy::Replace) {
+                incoming.actionId = found->actionId; ++replaced;
+            } else {
+                incoming.actionId = 0;
+                incoming.label = UniqueImportedName(incoming.label, actions,
+                    [](const auto& value) { return value.label; }); ++imported;
+            }
+        } else { incoming.actionId = 0; ++imported; }
+        if (!SaveCustomAction(incoming)) failed = true;
+        actions = GetCustomActions();
+    }
+
+    if (!data.configurationJson.empty()) {
+        if (policy == state_package::ConflictPolicy::Replace ||
+            !std::filesystem::exists(ConfigStore::Path())) {
+            try {
+                nlohmann::json config = nlohmann::json::parse(data.configurationJson);
+                if (config.contains("hotkeys") && config["hotkeys"].contains("bindings")) {
+                    for (auto& binding : config["hotkeys"]["bindings"]) {
+                        if (binding.value("action", -1) ==
+                            static_cast<int>(HotkeyAction::PasteNamedSlot)) {
+                            const int64_t source = binding.value("data", int64_t{});
+                            const auto remapped = namedSlotIdMap.find(source);
+                            if (remapped != namedSlotIdMap.end())
+                                binding["data"] = remapped->second;
+                        }
+                    }
+                }
+                const std::string importedActive =
+                    config.value("activeClipboardId", std::string{});
+                const auto remappedActive = profileIdMap.find(importedActive);
+                if (remappedActive != profileIdMap.end())
+                    config["activeClipboardId"] = remappedActive->second;
+                if (config.contains("customFilters") &&
+                    config["customFilters"].is_array()) {
+                    for (auto& filter : config["customFilters"]) {
+                        const std::string source =
+                            filter.value("routeProfileId", std::string{});
+                        const auto remapped = profileIdMap.find(source);
+                        if (remapped != profileIdMap.end())
+                            filter["routeProfileId"] = remapped->second;
+                    }
+                }
+                std::string configError;
+                if (!state_package::StageConfigurationImport(
+                        ConfigStore::Directory(), config.dump(2), &configError)) {
+                    message = "Definitions imported, but configuration staging failed: " + configError;
+                    return false;
+                }
+                restartRequired = true; ++replaced;
+            } catch (const std::exception& ex) {
+                message = std::string("Definitions imported, but configuration is invalid: ") + ex.what();
+                return false;
+            }
+        } else ++skipped;
+    }
+
+    std::ostringstream summary;
+    summary << (failed ? "Import completed with persistence errors: " : "State package imported: ")
+            << imported << " added, " << replaced << " replaced, "
+            << skipped << " skipped.";
+    if (restartRequired) summary << " Restart to apply imported app settings.";
+    message = summary.str();
+    return !failed;
+}
+
 void Application::SetAppendNewlineAfterPaste(bool value) {
     m_config.appendNewlineAfterPaste = value;
     if (m_popup)
@@ -913,6 +1281,26 @@ bool Application::CanDeleteActiveClipboardProfile() const {
 const std::vector<std::string>& Application::GetHistoryPersistenceErrors() const {
     static const std::vector<std::string> empty;
     return m_clipboardProfiles ? m_clipboardProfiles->PersistenceErrors() : empty;
+}
+
+RuntimeTelemetry Application::GetRuntimeTelemetry() const {
+    RuntimeTelemetry telemetry;
+    if (m_history) {
+        const auto [historyBytes, formatBytes] = m_history->EstimatedMemoryBytes();
+        telemetry.historyBytes = historyBytes;
+        telemetry.formatBytes = formatBytes;
+    }
+    if (m_popup)
+        telemetry.thumbnailBytes = m_popup->ThumbnailMemoryBytes();
+    if (m_clipboardProfiles)
+        telemetry.databaseQueryMs = m_clipboardProfiles->LastDatabaseQueryMs();
+    telemetry.renderFrameMs = m_renderFrameMs;
+    const auto cutoff = std::chrono::steady_clock::now() - std::chrono::minutes(1);
+    while (!m_clipboardEventTimes.empty() &&
+           m_clipboardEventTimes.front() < cutoff)
+        m_clipboardEventTimes.pop_front();
+    telemetry.clipboardEventsLastMinute = m_clipboardEventTimes.size();
+    return telemetry;
 }
 
 void Application::SetActiveClipboardProfile(const std::string& id) {
@@ -1036,7 +1424,7 @@ void Application::AddScreenshotPair(ClipboardHistory* history,
         history->Push(std::move(imageItem));
     }
 
-    AddDeveloperEvent("added screenshot path + CF_DIB rows: " + pathText);
+    AddDeveloperEvent("added screenshot path + CF_DIB rows");
 }
 
 void Application::ScheduleScreenshotPairAdd(ClipboardHistory* history,
@@ -1060,7 +1448,7 @@ void Application::ScheduleScreenshotPairAdd(ClipboardHistory* history,
             if (path.empty())
                 continue;
 
-            if (Application* app = Application::Get())
+            if (Application* app = Application::Get(); app && !app->IsIncognito())
                 app->AddScreenshotPair(history, path, std::move(imageItem), newAtTop);
             return;
         }
@@ -1080,7 +1468,7 @@ void Application::ApplyLoadedConfig(const AppConfig& config, bool rebuildHistori
             [this](ClipboardHistory* history) { m_history = history; },
             [this](const std::string& name, double durationMs) {
                 m_startupProfiler.RecordDuration(name, durationMs);
-            });
+            }, m_safeModeRequested);
     }
     if (m_androidIntegration)
         m_androidIntegration->SetDeviceEndpoint(m_config.android.deviceEndpoint);
@@ -1344,6 +1732,26 @@ bool Application::HandleHistoryMutationCommand(const COPYDATASTRUCT& cds) {
 // -- Private: initialisation ---------------------------------------------------
 
 bool Application::Init() {
+    if (backup_restore::HasPendingRestore(ConfigStore::Directory())) {
+        const backup_restore::Result restored =
+            backup_restore::ApplyPendingRestore(ConfigStore::Directory());
+        if (!restored.ok) {
+            const std::wstring message = win32util::Utf8ToWide(restored.message);
+            MessageBoxW(nullptr, message.c_str(), L"Clipboard++ restore",
+                        MB_OK | MB_ICONERROR | MB_TOPMOST);
+            if (!restored.safeToContinue)
+                return false;
+        }
+    }
+    std::string configurationImportError;
+    if (!state_package::ApplyPendingConfigurationImport(
+            ConfigStore::Directory(), &configurationImportError)) {
+        const std::wstring message = win32util::Utf8ToWide(
+            "A pending configuration import could not be applied: " +
+            configurationImportError);
+        MessageBoxW(nullptr, message.c_str(), L"Clipboard++ state import",
+                    MB_OK | MB_ICONERROR | MB_TOPMOST);
+    }
     auto stageStarted = m_startupProfiler.BeginStage();
     AppConfig loadedConfig = ConfigStore::Load();
     m_startupProfiler.FinishStage("config load", stageStarted);
@@ -1464,6 +1872,21 @@ bool Application::Init() {
     return true;
 }
 
+void Application::PollBackgroundPersistenceFailure() {
+    if (m_clipboardProfiles && !m_safeMode) {
+        std::string persistenceFailure;
+        if (m_clipboardProfiles->ConsumeBackgroundPersistenceFailure(
+                persistenceFailure)) {
+            if (m_monitor) m_monitor->Stop();
+            m_clipboardProfiles->EnterSafeMode(
+                "Safe mode: " + persistenceFailure);
+            m_safeMode = true;
+            AddDeveloperEvent("safe mode entered after a background persistence failure");
+            OpenSettingsWindow();
+        }
+    }
+}
+
 void Application::AdvanceDeferredStartup() {
     const auto started = m_startupProfiler.BeginStage();
     switch (m_deferredStartupPhase) {
@@ -1473,7 +1896,9 @@ void Application::AdvanceDeferredStartup() {
             break;
         }
         if (!m_clipboardProfiles->CanInitializeMetadataAsync()) {
-            m_clipboardProfiles->InitializeProfileMetadata();
+            if (!m_clipboardProfiles->InitializeProfileMetadata() &&
+                m_clipboardProfiles->IsSafeMode())
+                m_safeMode = true;
             InvalidateDatabaseCaches();
             SyncCustomActionHotkeys();
             m_startupProfiler.FinishStage("deferred profile metadata", started);
@@ -1500,8 +1925,11 @@ void Application::AdvanceDeferredStartup() {
                 m_profileMetadataLoad.get();
             m_startupProfiler.RecordDuration(
                 "encrypted clipboard DB + profile metadata", result.durationMs);
-            m_clipboardProfiles->InstallDetachedProfileMetadata(
-                std::move(result));
+            if (!m_clipboardProfiles->InstallDetachedProfileMetadata(
+                    std::move(result))) {
+                m_safeMode = true;
+                AddDeveloperEvent("safe mode entered after clipboard database startup failure");
+            }
         }
         InvalidateDatabaseCaches();
         SyncCustomActionHotkeys();
@@ -1540,7 +1968,11 @@ void Application::AdvanceDeferredStartup() {
             ClipboardHistoryLoadResult result = m_activeHistoryLoad.get();
             m_startupProfiler.RecordDuration(
                 "active history deserialization", result.durationMs);
-            m_clipboardProfiles->InstallDetachedHistory(std::move(result));
+            if (!m_clipboardProfiles->InstallDetachedHistory(std::move(result))) {
+                m_clipboardProfiles->EnterSafeMode(
+                    "Safe mode: the active encrypted history could not be read. Clipboard capture and storage writes are disabled until recovery.");
+                m_safeMode = true;
+            }
         }
         m_startupProfiler.FinishStage(
             "deferred active profile hydration", m_activeHistoryLoadStarted);
@@ -1601,9 +2033,21 @@ void Application::AdvanceDeferredStartup() {
 }
 
 void Application::InitializeImageStoreAndMonitor() {
+    if (m_safeMode) {
+        LogDebug("Safe mode: image storage and clipboard monitoring were not started");
+        return;
+    }
     if (!m_imageStore) {
         m_imageStore = std::make_unique<ImageStore>();
-        m_imageStore->Open(ConfigStore::Directory() / "images.db");
+        if (!m_imageStore->Open(ConfigStore::Directory() / "images.db")) {
+            m_imageStore.reset();
+            m_safeMode = true;
+            if (m_clipboardProfiles)
+                m_clipboardProfiles->EnterSafeMode(
+                    "Safe mode: encrypted image storage could not be opened. Clipboard capture and storage writes are disabled until recovery.");
+            LogDebug("Safe mode entered after image database startup failure");
+            return;
+        }
         m_imageStore->SetSettings(m_config.images);
         m_imageStore->SetProtectedImageIdsProvider([this]() {
             return m_clipboardProfiles
@@ -1622,18 +2066,17 @@ void Application::InitializeImageStoreAndMonitor() {
         return "default";
     });
     m_monitor->Start(m_hInstance, [this](ClipboardItem item) {
+        m_clipboardEventTimes.push_back(std::chrono::steady_clock::now());
         if (!item.sourceProcess.empty())
             m_lastForegroundProcess = item.sourceProcess;
         SwitchClipboardForProcess(item.sourceProcess);
         if (!m_history)
             return;
 
-        const std::string source = item.sourceProcess.empty() ? "unknown" : item.sourceProcess;
-        const std::string preview = item.Preview(80);
         AddDeveloperEvent("captured " + std::string(ContentTypeName(item.type)) +
-                          " from " + source +
                           " tags=" + Hex32(item.tags) +
-                          " preview=\"" + preview + "\"");
+                          " bytes=" + std::to_string(item.text.size()) +
+                          " formats=" + std::to_string(item.formats.size()));
 
         ClipboardHistory* routeHistory = nullptr;
         std::string routeProfileId;
@@ -1758,6 +2201,7 @@ void Application::Shutdown() {
 // -- Private: render -----------------------------------------------------------
 
 void Application::RenderFrame() {
+    const auto runtimeFrameStarted = std::chrono::steady_clock::now();
     const auto firstFrameStarted = m_startupProfiler.BeginStage();
     if (m_appearanceDirty)
         ApplyAppearanceNow();
@@ -1805,9 +2249,15 @@ void Application::RenderFrame() {
     if (m_editor) m_editor->Render();
     if (m_debugWindow) m_debugWindow->Render();
 
+    if (m_startupProfileComplete)
+        PollBackgroundPersistenceFailure();
     if (m_startupProfileComplete &&
         m_deferredStartupPhase != DeferredStartupPhase::Complete)
         AdvanceDeferredStartup();
+    const double frameMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - runtimeFrameStarted).count();
+    m_renderFrameMs = m_renderFrameMs == 0.0
+        ? frameMs : (m_renderFrameMs * 0.9 + frameMs * 0.1);
 }
 
 bool Application::HasRenderableUi() const {

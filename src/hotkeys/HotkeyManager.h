@@ -184,6 +184,14 @@ struct HotkeySettings {
     bool hotkeyDoubleTaps{false};
 };
 
+struct ConfiguredHotkeyRoute {
+    HotkeyAction action{HotkeyAction::None};
+    int data{-1};
+    bool waitsForDoubleTap{false};
+    HotkeyAction doubleTapAction{HotkeyAction::None};
+    int doubleTapData{-1};
+};
+
 class HotkeyManager {
 public:
     // Install the global keyboard hook.
@@ -253,6 +261,50 @@ public:
         }
         slot = -1;
         return HotkeyAction::None;
+    }
+    static ConfiguredHotkeyRoute ResolveConfiguredRoute(
+        const HotkeySettings& settings,
+        const std::vector<KeyBinding>& bindings,
+        const ModifierState& modifiers, UINT vk, bool popupAvailable) {
+        const KeyBinding* explicitBinding = nullptr;
+        for (int specificity = 6; specificity >= 0 && !explicitBinding; --specificity) {
+            for (const auto& binding : bindings) {
+                int bindingSpecificity = 0;
+                if (binding.exactModifiers) {
+                    uint8_t mask = binding.physicalModifiers;
+                    while (mask) {
+                        bindingSpecificity += mask & 1u;
+                        mask >>= 1;
+                    }
+                } else {
+                    bindingSpecificity =
+                        (binding.ctrl && binding.ctrlSide != ModifierSide::Any ? 1 : 0) +
+                        (binding.shift && binding.shiftSide != ModifierSide::Any ? 1 : 0) +
+                        (binding.alt && binding.altSide != ModifierSide::Any ? 1 : 0);
+                }
+                if (bindingSpecificity == specificity &&
+                    binding.Matches(modifiers, vk)) {
+                    explicitBinding = &binding;
+                    break;
+                }
+            }
+        }
+
+        int bankSlot = -1;
+        const HotkeyAction bankAction = ResolveSlotBank(
+            settings, modifiers, vk, popupAvailable, bankSlot);
+        if (explicitBinding) {
+            if (settings.hotkeyDoubleTaps &&
+                explicitBinding->action == HotkeyAction::PasteNamedSlot &&
+                bankAction != HotkeyAction::None && modifiers.Mask() != 0) {
+                return {bankAction, bankSlot, true,
+                        explicitBinding->action, explicitBinding->data};
+            }
+            return {explicitBinding->action, explicitBinding->data};
+        }
+        if (bankAction != HotkeyAction::None)
+            return {bankAction, bankSlot};
+        return {};
     }
     static std::string ModifiersText(bool ctrl, bool shift, bool alt,
                                      ModifierSide ctrlSide = ModifierSide::Any,

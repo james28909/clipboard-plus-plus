@@ -520,6 +520,46 @@ void MainWindow::DrawDeveloper() {
             }
             EndSettingsCard();
 
+            if (BeginSettingsCard("##developer_live_telemetry", "Live telemetry",
+                                  "Rolling memory, database, render, and clipboard-event measurements.")) {
+                const RuntimeTelemetry telemetry = app->GetRuntimeTelemetry();
+                const auto mib = [](uint64_t bytes) {
+                    return static_cast<double>(bytes) / (1024.0 * 1024.0);
+                };
+                if (BeginSettingsTable("##runtime_telemetry_table", 2,
+                        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                        ImGuiTableFlags_SizingStretchProp)) {
+                    ImGui::TableSetupColumn("Measurement", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+                    ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                    ImGui::TableHeadersRow();
+                    const auto row = [](const char* name, const char* format, auto value) {
+                        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(name); ImGui::TableSetColumnIndex(1);
+                        ImGui::Text(format, value);
+                    };
+                    row("Active-history memory", "%.3f MiB", mib(telemetry.historyBytes));
+                    row("Preserved format payloads", "%.3f MiB", mib(telemetry.formatBytes));
+                    row("Popup thumbnail textures", "%.3f MiB", mib(telemetry.thumbnailBytes));
+                    row("Most recent database query", "%.3f ms", telemetry.databaseQueryMs);
+                    row("Render-frame moving average", "%.3f ms", telemetry.renderFrameMs);
+                    row("Clipboard events (rolling minute)", "%zu", telemetry.clipboardEventsLastMinute);
+                    EndSettingsTable();
+                }
+                if (ImGui::SmallButton("Copy live telemetry")) {
+                    std::ostringstream text;
+                    text << std::fixed << std::setprecision(3)
+                         << "history_bytes\t" << telemetry.historyBytes << '\n'
+                         << "format_bytes\t" << telemetry.formatBytes << '\n'
+                         << "thumbnail_bytes\t" << telemetry.thumbnailBytes << '\n'
+                         << "database_query_ms\t" << telemetry.databaseQueryMs << '\n'
+                         << "render_frame_ms\t" << telemetry.renderFrameMs << '\n'
+                         << "clipboard_events_last_minute\t"
+                         << telemetry.clipboardEventsLastMinute << '\n';
+                    ImGui::SetClipboardText(text.str().c_str());
+                }
+            }
+            EndSettingsCard();
+
             if (BeginSettingsCard("##developer_startup_profile", "Startup profile",
                                   "Timestamped initialization stages through the first rendered frame.")) {
                 const auto& timings = app->GetStartupTimings();

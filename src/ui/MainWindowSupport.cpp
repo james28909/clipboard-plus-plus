@@ -32,6 +32,7 @@ support::Snapshot CaptureSupportSnapshot(Application* app) {
     snapshot.dataDirectory = ConfigStore::Directory();
     const AppConfig& config = app->GetConfig();
     snapshot.incognito = app->IsIncognito();
+    snapshot.safeMode = app->IsSafeMode();
     snapshot.captureImages = config.images.captureImages;
     snapshot.deduplicateHistory = config.deduplicateHistory;
     snapshot.startWithWindows = app->IsStartWithWindowsEnabled();
@@ -45,6 +46,13 @@ support::Snapshot CaptureSupportSnapshot(Application* app) {
     snapshot.profileCount = app->GetClipboardProfiles().size();
     snapshot.activeHistoryCount = app->GetHistory() ? app->GetHistory()->Size() : 0;
     snapshot.vaultCount = app->GetVaultCount();
+    const RuntimeTelemetry telemetry = app->GetRuntimeTelemetry();
+    snapshot.historyBytes = telemetry.historyBytes;
+    snapshot.formatBytes = telemetry.formatBytes;
+    snapshot.thumbnailBytes = telemetry.thumbnailBytes;
+    snapshot.databaseQueryMs = telemetry.databaseQueryMs;
+    snapshot.renderFrameMs = telemetry.renderFrameMs;
+    snapshot.clipboardEventsLastMinute = telemetry.clipboardEventsLastMinute;
     for (const StartupMetric& metric : app->GetStartupMetrics())
         snapshot.startupMetrics.emplace_back(metric.name, metric.value);
     for (const StartupTiming& timing : app->GetStartupTimings())

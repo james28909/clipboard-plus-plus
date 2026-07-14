@@ -24,6 +24,7 @@ struct Snapshot {
     std::string windowsVersion;
     std::filesystem::path dataDirectory;
     bool incognito{};
+    bool safeMode{};
     bool captureImages{};
     bool deduplicateHistory{};
     bool startWithWindows{};
@@ -37,6 +38,12 @@ struct Snapshot {
     size_t profileCount{};
     size_t activeHistoryCount{};
     size_t vaultCount{};
+    uint64_t historyBytes{};
+    uint64_t formatBytes{};
+    uint64_t thumbnailBytes{};
+    double databaseQueryMs{};
+    double renderFrameMs{};
+    size_t clipboardEventsLastMinute{};
     std::vector<std::pair<std::string, std::string>> startupMetrics;
     std::vector<std::pair<std::string, double>> startupTimingsMs;
     std::vector<std::string> persistenceErrors;

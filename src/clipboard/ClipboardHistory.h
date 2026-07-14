@@ -3,6 +3,7 @@
 #include <vector>
 #include <functional>
 #include <mutex>
+#include <utility>
 
 static constexpr int kMaxClipboardHistoryItems = 500;
 
@@ -34,6 +35,8 @@ public:
     bool GetRegularCopy(size_t slot, ClipboardItem& out) const;
     std::vector<ClipboardItem> Snapshot() const;
     void LoadSnapshot(std::vector<ClipboardItem> items, uint64_t nextId);
+    bool RestoreSnapshotByStableId(const std::vector<ClipboardItem>& before,
+                                   uint64_t beforeNextId);
 
     // Returns indices of items whose preview matches query (case-insensitive)
     std::vector<size_t> Search(const std::string& query) const;
@@ -61,6 +64,7 @@ public:
 
     uint64_t NextId() const { return m_nextId; }
     uint64_t Version() const;
+    std::pair<uint64_t, uint64_t> EstimatedMemoryBytes() const;
 
 private:
     void MarkChangedLocked();

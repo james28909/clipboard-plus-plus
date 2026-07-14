@@ -186,6 +186,66 @@ void ClipboardHistory::LoadSnapshot(std::vector<ClipboardItem> items, uint64_t n
     ++m_version;
 }
 
+std::pair<uint64_t, uint64_t> ClipboardHistory::EstimatedMemoryBytes() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    uint64_t total = sizeof(*this) +
+        static_cast<uint64_t>(m_items.capacity()) * sizeof(ClipboardItem);
+    uint64_t formatBytes = 0;
+    for (const ClipboardItem& item : m_items) {
+        total += item.text.capacity() + item.imageStoreId.capacity() +
+                 item.sourceFilePath.capacity() + item.sourceProcess.capacity() +
+                 item.sourceKind.capacity();
+        total += static_cast<uint64_t>(item.formats.capacity()) *
+                 sizeof(ClipboardFormatRecord);
+        for (const ClipboardFormatRecord& format : item.formats) {
+            const uint64_t payload = format.data.capacity();
+            formatBytes += payload;
+            total += payload + format.name.capacity();
+        }
+    }
+    return {total, formatBytes};
+}
+
+bool ClipboardHistory::RestoreSnapshotByStableId(
+    const std::vector<ClipboardItem>& before, uint64_t beforeNextId) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::unordered_set<uint64_t> beforeIds;
+    beforeIds.reserve(before.size());
+    for (const ClipboardItem& item : before) beforeIds.insert(item.id);
+
+    std::vector<ClipboardItem> newer;
+    newer.reserve(m_items.size());
+    for (const ClipboardItem& item : m_items) {
+        if (beforeIds.find(item.id) == beforeIds.end())
+            newer.push_back(item);
+    }
+
+    std::vector<ClipboardItem> restored;
+    restored.reserve(before.size() + newer.size());
+    for (const ClipboardItem& old : before) {
+        const auto current = std::find_if(m_items.begin(), m_items.end(),
+            [&](const ClipboardItem& item) { return item.id == old.id; });
+        restored.push_back(current != m_items.end() ? *current : old);
+    }
+    if (m_newAtTop)
+        restored.insert(restored.begin(), newer.begin(), newer.end());
+    else
+        restored.insert(restored.end(), newer.begin(), newer.end());
+
+    const bool changed = restored.size() != m_items.size() ||
+        !std::equal(restored.begin(), restored.end(), m_items.begin(), m_items.end(),
+            [](const ClipboardItem& left, const ClipboardItem& right) {
+                return left.id == right.id;
+            });
+    if (!changed) return false;
+    m_items = std::move(restored);
+    m_nextId = std::max(m_nextId, beforeNextId);
+    NormalizePinnedOrderLocked();
+    TrimToLimit();
+    MarkChangedLocked();
+    return true;
+}
+
 std::vector<size_t> ClipboardHistory::Search(const std::string& query) const {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     std::vector<size_t> results;

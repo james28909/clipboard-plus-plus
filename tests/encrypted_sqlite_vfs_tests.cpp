@@ -1,4 +1,5 @@
 #include "../src/security/EncryptedSqliteVfs.h"
+#include "../src/security/BackupRestore.h"
 #include "../third_party/sqlite/sqlite3.h"
 
 #include <windows.h>
@@ -59,6 +60,42 @@ bool CreatePlaintext(const std::filesystem::path& path,
         Exec(db, "CREATE TABLE secrets(id TEXT PRIMARY KEY,value TEXT NOT NULL);") &&
         Exec(db, ("INSERT INTO secrets VALUES('legacy','" + secret + "');").c_str());
     sqlite3_close(db);
+    return ok;
+}
+
+bool CreateProtectedTable(const std::filesystem::path& path,
+                          const char* table, const std::string& value) {
+    std::string error;
+    if (!EncryptedSqliteVfs::CreateKey(path, &error)) return false;
+    sqlite3* database = nullptr;
+    if (EncryptedSqliteVfs::Open(path, &database,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+            &error) != SQLITE_OK)
+        return false;
+    const std::string sql = "CREATE TABLE " + std::string(table) +
+        "(value TEXT NOT NULL); INSERT INTO " + table + " VALUES('" + value + "');";
+    const bool ok = Exec(database, "PRAGMA page_size=4096;") &&
+                    Exec(database, sql.c_str());
+    sqlite3_close(database);
+    return ok;
+}
+
+bool ReadProtectedValue(const std::filesystem::path& path, const char* table,
+                        std::string& value) {
+    std::string error;
+    sqlite3* database = nullptr;
+    if (EncryptedSqliteVfs::Open(path, &database,
+            SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, &error) != SQLITE_OK)
+        return false;
+    const std::string sql = "SELECT value FROM " + std::string(table) + " LIMIT 1;";
+    sqlite3_stmt* statement = nullptr;
+    const bool ok = sqlite3_prepare_v2(database, sql.c_str(), -1,
+                                       &statement, nullptr) == SQLITE_OK &&
+                    sqlite3_step(statement) == SQLITE_ROW &&
+                    sqlite3_column_text(statement, 0);
+    if (ok) value = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0));
+    sqlite3_finalize(statement);
+    sqlite3_close(database);
     return ok;
 }
 
@@ -173,6 +210,94 @@ int main() {
     ok &= Expect(db && QueryValue(db, "legacy", loaded) && loaded == legacySecret,
                  "encrypted backup preserves source rows");
     if (db) sqlite3_close(db);
+
+    const auto liveData = directory / "backup-restore-live";
+    const auto backupParent = directory / "backup-destinations";
+    std::filesystem::create_directories(liveData, ec);
+    std::filesystem::create_directories(backupParent, ec);
+    const std::string clipboardBackupSecret = "backup-profile-secret";
+    const std::string imageBackupSecret = "backup-image-secret";
+    ok &= Expect(CreateProtectedTable(liveData / "clipboard.db", "profiles",
+                                     clipboardBackupSecret),
+                 "restore test clipboard database is created");
+    ok &= Expect(CreateProtectedTable(liveData / "images.db", "images",
+                                     imageBackupSecret),
+                 "restore test image database is created");
+    const std::string configBackupSecret = "backup-config-secret";
+    {
+        std::ofstream config(liveData / "config.json", std::ios::binary);
+        config << "{\"testValue\":\"" << configBackupSecret << "\"}";
+    }
+    const backup_restore::Result created =
+        backup_restore::CreateEncryptedBackup(liveData, backupParent);
+    if (!created.ok) std::cerr << "Backup workflow error: " << created.message << '\n';
+    ok &= Expect(created.ok && created.imagesIncluded && created.configIncluded &&
+                 std::filesystem::exists(created.path / "backup-manifest.json") &&
+                 std::filesystem::exists(created.path / "config.json.dpapi") &&
+                 EncryptedSqliteVfs::HasKey(created.path / "clipboard.db") &&
+                 EncryptedSqliteVfs::HasKey(created.path / "images.db"),
+                 "backup workflow creates a manifested encrypted two-database snapshot");
+    ok &= Expect(!Contains(created.path / "clipboard.db", clipboardBackupSecret) &&
+                 !Contains(created.path / "images.db", imageBackupSecret) &&
+                 !Contains(created.path / "config.json.dpapi", configBackupSecret),
+                 "backup workflow does not expose database or configuration payloads");
+
+    std::filesystem::remove(liveData / "clipboard.db", ec);
+    EncryptedSqliteVfs::RemoveKey(liveData / "clipboard.db");
+    std::filesystem::remove(liveData / "images.db", ec);
+    EncryptedSqliteVfs::RemoveKey(liveData / "images.db");
+    ok &= Expect(CreateProtectedTable(liveData / "clipboard.db", "profiles",
+                                     "newer-live-profile"),
+                 "live clipboard database changes after backup");
+    ok &= Expect(CreateProtectedTable(liveData / "images.db", "images",
+                                     "newer-live-image"),
+                 "live image database changes after backup");
+    {
+        std::ofstream config(liveData / "config.json", std::ios::binary | std::ios::trunc);
+        config << "{\"testValue\":\"newer-live-config\"}";
+    }
+
+    const backup_restore::Result staged =
+        backup_restore::StageEncryptedRestore(liveData, created.path);
+    ok &= Expect(staged.ok && backup_restore::HasPendingRestore(liveData),
+                 "restore is re-encrypted and staged without changing live data");
+    loaded.clear();
+    ok &= Expect(ReadProtectedValue(liveData / "clipboard.db", "profiles", loaded) &&
+                 loaded == "newer-live-profile",
+                 "staging leaves the live database untouched");
+    ok &= Expect(Contains(liveData / "config.json", "newer-live-config"),
+                 "staging leaves live application settings untouched");
+    const backup_restore::Result restored =
+        backup_restore::ApplyPendingRestore(liveData);
+    std::string restoredProfile, restoredImage;
+    ok &= Expect(restored.ok && !backup_restore::HasPendingRestore(liveData) &&
+                 !restored.rollbackPath.empty() &&
+                 std::filesystem::exists(restored.rollbackPath),
+                 "pending restore applies and retains encrypted rollback files");
+    ok &= Expect(ReadProtectedValue(liveData / "clipboard.db", "profiles",
+                                    restoredProfile) &&
+                 ReadProtectedValue(liveData / "images.db", "images",
+                                    restoredImage) &&
+                 restoredProfile == clipboardBackupSecret &&
+                 restoredImage == imageBackupSecret,
+                 "restore recovers matching clipboard and image snapshots");
+    ok &= Expect(Contains(liveData / "config.json", configBackupSecret) &&
+                 std::filesystem::exists(restored.rollbackPath / "config.json"),
+                 "restore recovers application settings and retains their rollback copy");
+    ok &= Expect(!backup_restore::ReadLastRestoreStatus(liveData).empty(),
+                 "restore records an actionable startup result");
+
+    const backup_restore::Result stagedForCancel =
+        backup_restore::StageEncryptedRestore(liveData, created.path);
+    std::string cancelError;
+    ok &= Expect(stagedForCancel.ok &&
+                 backup_restore::CancelPendingRestore(liveData, &cancelError) &&
+                 !backup_restore::HasPendingRestore(liveData),
+                 "pending restore can be canceled before restart");
+    const backup_restore::Result invalidRestore =
+        backup_restore::StageEncryptedRestore(liveData, directory / "not-a-backup");
+    ok &= Expect(!invalidRestore.ok && !invalidRestore.message.empty(),
+                 "invalid restore folders fail without modifying live data");
 
     std::filesystem::path keyPath = EncryptedSqliteVfs::KeyPath(migrationPath);
     std::fstream key(keyPath, std::ios::binary | std::ios::in | std::ios::out);

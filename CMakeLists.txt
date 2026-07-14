@@ -62,6 +62,8 @@ set(APP_SOURCES
     src/diff/TextDiff.cpp
     src/security/DpapiProtection.cpp
     src/security/EncryptedSqliteVfs.cpp
+    src/security/BackupRestore.cpp
+    src/security/StatePackage.cpp
     src/support/SupportBundle.cpp
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
@@ -330,12 +332,14 @@ if(WIN32)
 
     add_executable(encrypted_sqlite_vfs_tests
         tests/encrypted_sqlite_vfs_tests.cpp
+        src/security/BackupRestore.cpp
         src/security/DpapiProtection.cpp
         src/security/EncryptedSqliteVfs.cpp
         ${SQLITE_DIR}/sqlite3.c
     )
     target_include_directories(encrypted_sqlite_vfs_tests PRIVATE
         src
+        ${NLOHMANN_DIR}
         ${SQLITE_DIR}
     )
     target_link_libraries(encrypted_sqlite_vfs_tests PRIVATE
@@ -362,6 +366,7 @@ if(WIN32)
         src/formatting/StructuredFormatter.cpp
         src/security/DpapiProtection.cpp
         src/security/EncryptedSqliteVfs.cpp
+        src/security/StatePackage.cpp
         src/util/Win32Util.cpp
         src/clipboard/ClipboardItem.cpp
         src/clipboard/ClipboardHistory.cpp

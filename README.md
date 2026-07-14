@@ -71,6 +71,7 @@ History features include:
 - Process bindings and optional automatic profile switching.
 - Search, content filters, custom filters, drag-and-drop ordering, and bulk actions.
 - Ordered multi-selection for pasting several items in a chosen order.
+- One-level undo for popup deletes, full-history clears, drag reorders, bulk moves, workflow moves, and configured paste-moves. The command-bar button and `Ctrl+Z` restore stable item IDs without discarding captures that arrived afterward.
 - Encrypted workflow buttons that can transform selected data and route it to paste, copy, files, URLs, Android, history operations, or an explicitly chosen executable.
 - Configurable active-history limits with encrypted persistence.
 - Source-process tracking and timestamps.
@@ -99,8 +100,11 @@ Developer mode remains focused on diagnostics and clipboard inspection:
 - The hex viewer displays full preserved payloads, normalized text, and stored image bytes with offset, hexadecimal, and ASCII columns.
 - Named slots store reusable encrypted snippets independently of history limits and can be pasted from the popup or assigned global shortcuts.
 - The diff viewer compares two selected items side by side.
+- Live diagnostics estimate active-history and preserved-format memory, popup thumbnail texture memory, the most recent database query, render-frame moving average, and clipboard events over the rolling last minute. Opted-in support bundles include the same performance measurements.
 
 Clipboard++ marks its own clipboard-write transactions with a private token. Generated template, transform, and formatted output is therefore not captured back into history as a duplicate, including when Windows emits multiple or delayed format notifications. Developer diagnostics record Clipboard++ as the generator and the receiving foreground process separately.
+
+Automated storage stress coverage exercises eight profiles at the full 500-item active limit, large HTML/RTF and 2 MiB native-format payloads, 1,200 vault records, an 8 MiB encrypted image, and 5,000 rapid in-memory clipboard-style pushes.
 
 ### Images
 
@@ -111,6 +115,7 @@ Copied images and screenshots can be stored as PNG, JPEG, or raw DIB data. The i
 - Incognito mode immediately pauses clipboard capture.
 - Planned secret detection, clear-on-lock, and per-process exclusion controls are shown disabled in Settings so they cannot be mistaken for active protections.
 - AES-256-XTS page encryption for persistent history, profile metadata, and images, with current-user DPAPI protection for the database keys.
+- Settings → Privacy provides online encrypted backup and verified restart-time restore for the clipboard and image databases.
 
 Settings uses a plain, flat sidebar: **General**, **Clipboard**, **Popup**, **Hotkeys**, **Appearance**, **Integrations**, **Privacy**, **Developer** (Debug builds), **Support & diagnostics**, and **About**. See [Settings UI architecture](docs/SETTINGS_UI.md) for the page map and layout rules.
 
@@ -151,6 +156,8 @@ Setup and network details are in the [Android companion README](android/clipboar
 
 ## Security and storage
 
+The [clipboard data boundary audit](docs/SECURITY_AUDIT.md) explains source-process metadata, incognito transitions, plaintext exports, diagnostics, crash files, Windows clipboard retention after paste, and external-editor scratch files. Release candidates are evaluated with the [release-readiness checklist](docs/RELEASE_READINESS.md).
+
 Clipboard++ stores its user data under `%APPDATA%\Clipboard++`:
 
 | Path | Contents | Protection |
@@ -166,6 +173,28 @@ Legacy history and plaintext SQLite databases are migrated automatically. Databa
 Windows DPAPI binds each protected database key to the Windows user credentials that encrypted it and, under the normal Clipboard++ configuration, to the same computer. Merely copying a database and its `.key` sidecar to another account or computer does not make the database readable there. DPAPI also applies an integrity check to the protected key blob so unauthorized modification is detected. This is encryption at rest; it does not protect data from software already running with access to the same signed-in Windows account.
 
 The bundled SQLite Editor detects Clipboard++ `.key` sidecars and opens encrypted databases transparently under the same Windows account. It also recognizes the image schema and decrypts the additional protected image BLOB layer for preview in memory. Choosing **Export decrypted image** deliberately creates an unencrypted file and is labeled accordingly.
+
+### Encrypted backup and restore
+
+**Settings → Privacy → Encrypted backup & restore** creates a timestamped backup folder using SQLite's online backup API. It does not copy a live database/WAL pair. Each included database receives a fresh AES-256-XTS key protected by current-user Windows DPAPI, and `config.json` is DPAPI-protected inside the same folder. `backup-manifest.json` records the included components without containing clipboard payloads.
+
+Restore first validates the manifest, configuration JSON, database integrity, expected schemas, and DPAPI keys. Clipboard++ then creates a fresh encrypted restore snapshot while the current data remains open and unchanged. On **Restart and restore now**, the staged state is installed before storage initialization. The previous encrypted databases, keys, sidecars, and configuration are retained under `%APPDATA%\Clipboard++\restore-rollback` so a failed or unwanted restore remains recoverable. A staged restore can be canceled before restart.
+
+A full backup includes profiles and history, pinned and vault content, native clipboard formats, images, named slots, transforms, paste templates, workflow actions, hotkeys, appearance, filters, popup behavior, and other saved settings.
+
+### Storage recovery and safe mode
+
+Clipboard++ checks the encrypted clipboard database before using it. An unreadable key, invalid schema, failed integrity check, active-history load error, image-database open error, or background history-save failure puts the app into storage safe mode. Safe mode does not start clipboard capture and disables further storage writes; it leaves the existing database files untouched and records the reason in History, Developer events, and support bundles.
+
+The History page can open the storage folder, retry a normal restart, direct the user to encrypted restore under Privacy, or quarantine the clipboard and image databases, keys, and sidecars into a timestamped `recovery` folder before creating fresh encrypted storage. For manual diagnosis, launch `clipboardpp.exe --clipboardpp-safe-mode`.
+
+Encrypted backups are normally recoverable only by the same Windows user on the same computer. Vault file/JSON/binary exports and individually exported images are different: they contain decrypted content, are not accepted as restore backups, and must be protected accordingly.
+
+### Settings and definition transfer
+
+**Settings → Privacy → Settings & definition transfer** exports a portable, versioned package containing app configuration, profile definitions, named slots, regex transforms, paste templates, and workflow actions. DPAPI encryption is enabled by default. A plaintext JSON option is available for portability and inspection, but it can expose slot text, templates, executable arguments, endpoints, and other sensitive settings.
+
+Imports resolve names with **Skip existing**, **Replace existing**, or **Keep both**. Keep-both imports receive a distinct name. Profile and named-slot identifiers are remapped for the destination installation, including named-slot hotkeys, active-profile selection, and filter routes. Replacing the singleton app configuration stages it under DPAPI and applies it atomically on restart. Use encrypted backup/restore instead when an exact copy of history, vault entries, images, and IDs is required.
 
 ## Themes and appearance
 
@@ -225,7 +254,7 @@ clipboardpp.exe vault export --output "C:\Temp\vault.cppvault" --format binary
 clipboardpp.exe vault backup --output "D:\Backups\Clipboard++"
 ```
 
-The `files`, `json`, and `binary` export formats contain decrypted clipboard content and must be protected accordingly. File and binary exports preserve image payloads in their exact stored PNG, JPEG, or DIB representation. The `backup` command is different: it uses SQLite's online backup API to create consistent encrypted copies of `clipboard.db` and `images.db`, each with a new DPAPI-protected key, without creating an intermediate plaintext database. Its destination directory must be empty.
+The `files`, `json`, and `binary` export formats contain decrypted clipboard content and must be protected accordingly. File and binary exports preserve image payloads in their exact stored PNG, JPEG, or DIB representation. The `backup` command is different: it uses SQLite's online backup API to create consistent encrypted copies of `clipboard.db` and `images.db`, each with a new DPAPI-protected key, without creating an intermediate plaintext database. Its destination directory must be empty. The Settings workflow provides the same encrypted backup guarantee plus manifest validation and staged restore.
 
 The GUI is single-instance. Commands that change live app state communicate with the running app through the Clipboard++ IPC window.
 

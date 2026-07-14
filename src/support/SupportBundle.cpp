@@ -257,6 +257,7 @@ BundleResult CreateBundle(const Snapshot& snapshot, const BundleOptions& options
                    {"image_schema_version", 1},
                    {"clipboard_key_present", std::filesystem::exists(snapshot.dataDirectory / "clipboard.db.key")},
                    {"image_key_present", std::filesystem::exists(snapshot.dataDirectory / "images.db.key")},
+                   {"safe_mode", snapshot.safeMode},
                    {"persistence_error_count", snapshot.persistenceErrors.size()},
                    {"persistence_errors", snapshot.persistenceErrors}};
         AddEntry(entries, "database_health.json",
@@ -271,7 +272,13 @@ BundleResult CreateBundle(const Snapshot& snapshot, const BundleOptions& options
             metrics.push_back({{"name", name}, {"value", value}});
         json value{{"startup_timings", timings}, {"startup_metrics", metrics},
                    {"active_history_items", snapshot.activeHistoryCount},
-                   {"vault_items", snapshot.vaultCount}};
+                   {"vault_items", snapshot.vaultCount},
+                   {"history_bytes", snapshot.historyBytes},
+                   {"format_bytes", snapshot.formatBytes},
+                   {"thumbnail_bytes", snapshot.thumbnailBytes},
+                   {"database_query_ms", snapshot.databaseQueryMs},
+                   {"render_frame_ms", snapshot.renderFrameMs},
+                   {"clipboard_events_last_minute", snapshot.clipboardEventsLastMinute}};
         AddEntry(entries, "performance.json",
                  SanitizeDiagnosticText(value.dump(2), username));
     }

@@ -124,8 +124,7 @@ static bool SetPreservedFormat(const ClipboardFormatRecord& format) {
 static bool HasReplayableBundle(const ClipboardItem& item) {
     return std::any_of(item.formats.begin(), item.formats.end(),
         [](const ClipboardFormatRecord& format) {
-            return format.replaySafe && format.status == ClipboardFormatStatus::Preserved &&
-                   !format.data.empty();
+            return format.IsReplayable();
         });
 }
 
@@ -307,12 +306,14 @@ void PopupWindow::PasteHistorySlot(int slot, HWND targetWindow) {
     ClipboardItem item;
     if (!hist->GetRegularCopy(static_cast<size_t>(slot), item)) return;
 
-    PLog("[PASTE-HISTORY] slot=%d type=%s target=%s text=%.50s",
-         slot, CtName(item.type), WH(targetWindow).c_str(), item.text.c_str());
+    PLog("[PASTE-HISTORY] slot=%d type=%s target=%s bytes=%zu",
+         slot, CtName(item.type), WH(targetWindow).c_str(), item.text.size());
     m_prevForeground = targetWindow;
     NotePasteTarget(targetWindow, "hidden-history");
     WriteToClipboard(item, targetWindow);
     RestoreFocusAndPaste(targetWindow);
+    if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+        CaptureHistoryUndo("paste move");
     hist->MoveItemById(item.id, m_pasteMoveTarget);
 }
 
@@ -347,15 +348,17 @@ void PopupWindow::PasteVisibleSlot(int slot) {
         return;
     }
 
-    PLog("[PASTE-SLOT] slot=%d type=%s kbCapture=%d txtEntry=%d text=%.50s",
-         slot, CtName(item.type), m_keyboardCapture, IsTextEntryActive(), item.text.c_str());
+    PLog("[PASTE-SLOT] slot=%d type=%s kbCapture=%d txtEntry=%d bytes=%zu",
+         slot, CtName(item.type), m_keyboardCapture, IsTextEntryActive(), item.text.size());
     PasteItemKeepOpen(item);
+    if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+        CaptureHistoryUndo("paste move");
     hist->MoveItemById(item.id, m_pasteMoveTarget);
 }
 
 void PopupWindow::PasteItemKeepOpen(const ClipboardItem& item) {
-    PLog("[PASTE-ITEM] type=%s fg=%s text=%.50s",
-         CtName(item.type), WH(GetForegroundWindow()).c_str(), item.text.c_str());
+    PLog("[PASTE-ITEM] type=%s fg=%s bytes=%zu",
+         CtName(item.type), WH(GetForegroundWindow()).c_str(), item.text.size());
     HWND target = ResolvePasteTarget();
     if (!target) {
         ActivateKeyboardCapture();
@@ -476,6 +479,8 @@ void PopupWindow::PasteSelectedItemsInOrder() {
         return;
     }
     PLog("[PASTE-SELECTED] count=%zu lockedTarget=%s", ids.size(), WH(pasteTarget).c_str());
+    if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+        CaptureHistoryUndo("paste move");
     Hide();
 
     for (size_t qi = 0; qi < ids.size(); ++qi) {
@@ -497,8 +502,8 @@ void PopupWindow::PasteSelectedItems() {
 }
 
 void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow) const {
-    PLog("[WRITE-CB] type=%s len=%zu text=%.60s",
-         CtName(item.type), item.text.size(), item.text.c_str());
+    PLog("[WRITE-CB] type=%s bytes=%zu formats=%zu",
+         CtName(item.type), item.text.size(), item.formats.size());
 
     Application* app = Application::Get();
     ScopedClipboardSelfWrite selfWrite(app ? app->GetMonitor() : nullptr);
@@ -604,10 +609,10 @@ void PopupWindow::WriteToClipboard(const ClipboardItem& item, HWND targetWindow)
             if (HGLOBAL drop = BuildFileDropGlobal({path})) {
                 if (SetClipboardData(CF_HDROP, drop)) {
                     wroteAny = true;
-                    PLog("[WRITE-CB] CF_HDROP set OK path=%s", item.sourceFilePath.c_str());
+                    PLog("[WRITE-CB] CF_HDROP set OK");
                 } else {
                     GlobalFree(drop);
-                    PLog("[WRITE-CB] CF_HDROP set FAILED path=%s", item.sourceFilePath.c_str());
+                    PLog("[WRITE-CB] CF_HDROP set FAILED");
                 }
             }
         }
@@ -699,20 +704,23 @@ bool PopupWindow::WriteFormatToClipboard(const ClipboardFormatRecord& format) co
 
 HWND PopupWindow::ResolvePasteTarget() const {
     HWND fg = GetForegroundWindow();
+    const PasteTargetChoice choice = ChoosePasteTarget(
+        IsValidPasteTarget(m_activePasteTarget), IsValidPasteTarget(fg),
+        IsValidPasteTarget(m_prevForeground));
 
-    if (IsValidPasteTarget(m_activePasteTarget)) {
+    if (choice == PasteTargetChoice::Active) {
         PLog("[RESOLVE-TARGET] active=%s fg=%s -> use active",
              WH(m_activePasteTarget).c_str(), WH(fg).c_str());
         return m_activePasteTarget;
     }
 
-    if (IsValidPasteTarget(fg)) {
+    if (choice == PasteTargetChoice::Foreground) {
         PLog("[RESOLVE-TARGET] fg=%s active=%s -> use fg",
              WH(fg).c_str(), WH(m_activePasteTarget).c_str());
         return GetAncestor(fg, GA_ROOT);
     }
 
-    if (IsValidPasteTarget(m_prevForeground)) {
+    if (choice == PasteTargetChoice::PreviousForeground) {
         PLog("[RESOLVE-TARGET] fg=%s active=%s prevFg=%s -> use prevFg",
              WH(fg).c_str(), WH(m_activePasteTarget).c_str(), WH(m_prevForeground).c_str());
         return GetAncestor(m_prevForeground, GA_ROOT);

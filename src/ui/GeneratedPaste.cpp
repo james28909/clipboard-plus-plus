@@ -29,3 +29,11 @@ GeneratedPasteProvenance DescribeGeneratedPaste(
         : std::move(destinationProcess);
     return result;
 }
+
+PasteTargetChoice ChoosePasteTarget(bool activeValid, bool foregroundValid,
+                                    bool previousForegroundValid) {
+    if (activeValid) return PasteTargetChoice::Active;
+    if (foregroundValid) return PasteTargetChoice::Foreground;
+    if (previousForegroundValid) return PasteTargetChoice::PreviousForeground;
+    return PasteTargetChoice::None;
+}

@@ -34,6 +34,7 @@ public:
     bool IsKeyboardCaptureActive() const { return m_keyboardCapture || IsTextEntryActive(); }
     HWND GetHwnd()   const { return m_hwnd; }
     SIZE GetCurrentSize() const;
+    uint64_t ThumbnailMemoryBytes() const;
 
     // Called each frame from Application - renders the popup if visible.
     void Render();
@@ -58,6 +59,7 @@ public:
     void SetPasteMoveTarget(ClipboardHistory::MoveTarget target) { m_pasteMoveTarget = target; }
     void SetTheme(ThemeId theme) { m_appearance.theme = theme; }
     bool RunCustomAction(int64_t actionId, HWND targetWindow = nullptr);
+    bool UndoHistoryMutation();
 
     // Configurable
     float m_opacity{0.95f};
@@ -122,6 +124,8 @@ private:
                                      const CustomActionPreparation& prepared,
                                      HWND targetWindow,
                                      const std::vector<uint64_t>& itemIds);
+    void CaptureHistoryUndo(const char* label);
+    bool CanUndoHistoryMutation() const;
 
     // -- Paste -----------------------------------------------------------------
     void PasteItemKeepOpen(const ClipboardItem& item);
@@ -198,6 +202,13 @@ private:
     HWINEVENTHOOK m_foregroundHook{};
     std::string m_lastClipboardId;
     std::vector<uint64_t> m_dragIds;
+    struct HistoryUndoState {
+        std::string profileId;
+        std::string label;
+        std::vector<ClipboardItem> before;
+        uint64_t nextId{1};
+        bool valid{false};
+    } m_historyUndo;
     PopupSelectionModel m_itemSelection;
     char m_androidEndpointBuf[256]{};
     bool m_androidEndpointEditing{false};

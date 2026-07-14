@@ -1,5 +1,6 @@
 #include "../src/clipboard/ClipboardDatabase.h"
 #include "../src/security/EncryptedSqliteVfs.h"
+#include "../src/security/StatePackage.h"
 #include "../third_party/sqlite/sqlite3.h"
 
 #include <windows.h>
@@ -509,6 +510,156 @@ int main(int argc, char** argv) {
     ok &= Expect(rejected, "ordinary SQLite cannot read clipboard.db");
     sqlite3_finalize(statement);
     if (ordinary) sqlite3_close(ordinary);
+
+    const auto stressPath = directory / "stress.db";
+    {
+        ClipboardDatabase stress;
+        std::string stressError;
+        ok &= Expect(stress.Open(stressPath, &stressError),
+                     "stress database opens");
+        ok &= Expect(stress.Begin(), "stress profile transaction begins");
+        constexpr int profileTotal = 8;
+        for (int profileIndex = 0; profileIndex < profileTotal && ok; ++profileIndex) {
+            ClipboardProfileConfig profile{
+                "stress-" + std::to_string(profileIndex),
+                "Stress profile " + std::to_string(profileIndex),
+                "created", "updated", "process-" + std::to_string(profileIndex) + ".exe"};
+            ok &= stress.UpsertProfile(profile, profileIndex);
+            std::vector<ClipboardItem> items;
+            items.reserve(kMaxClipboardHistoryItems);
+            for (int itemIndex = 0; itemIndex < kMaxClipboardHistoryItems; ++itemIndex) {
+                ClipboardItem item = MakeItem(
+                    static_cast<uint64_t>(itemIndex + 1),
+                    "stress payload " + std::to_string(profileIndex) + "-" +
+                        std::to_string(itemIndex), false);
+                if (profileIndex == 0 && itemIndex == 0) {
+                    item.type = ContentType::Html;
+                    item.text.assign(256 * 1024, '<');
+                    item.formats[0].name = "HTML Format";
+                    item.formats[0].data.assign(2 * 1024 * 1024, 0x5a);
+                    item.formats[0].byteSize = item.formats[0].data.size();
+                } else if (profileIndex == 0 && itemIndex == 1) {
+                    item.type = ContentType::RichText;
+                    item.text = "{\\rtf1 " + std::string(256 * 1024, 'R') + "}";
+                }
+                item.EnsureContentHash();
+                items.push_back(std::move(item));
+            }
+            ClipboardHistory history(kMaxClipboardHistoryItems);
+            history.LoadSnapshot(std::move(items), kMaxClipboardHistoryItems + 1);
+            ok &= stress.SaveHistory(profile.id, history);
+        }
+        ok &= Expect(stress.Commit(),
+                     "many profiles with 500 items and large formats commit");
+        std::vector<ClipboardProfileConfig> stressProfiles;
+        ok &= Expect(stress.LoadProfiles(stressProfiles) &&
+                     stressProfiles.size() == profileTotal,
+                     "many stress profiles reload");
+        ClipboardHistory stressLoaded(kMaxClipboardHistoryItems);
+        bool stressFound = false;
+        ok &= Expect(stress.LoadHistory("stress-0", stressLoaded, stressFound) &&
+                     stressFound && stressLoaded.Size() == kMaxClipboardHistoryItems,
+                     "500-item history with large HTML and RTF reloads");
+        ClipboardItem largeItem;
+        ok &= Expect(stressLoaded.GetByIdCopy(1, largeItem) &&
+                     largeItem.text.size() == 256 * 1024 &&
+                     !largeItem.formats.empty() &&
+                     largeItem.formats[0].data.size() == 2 * 1024 * 1024,
+                     "large preserved clipboard format round-trips byte for byte");
+
+        ok &= Expect(stress.Begin(), "vault stress transaction begins");
+        for (int index = 0; index < 1200 && ok; ++index) {
+            ClipboardItem archived = MakeItem(
+                static_cast<uint64_t>(index + 1),
+                "vault stress item " + std::to_string(index), false);
+            archived.EnsureContentHash();
+            ok &= stress.ArchiveItem("stress-0", archived);
+        }
+        ok &= Expect(stress.Commit(), "thousands-scale vault transaction commits");
+        size_t stressVaultCount = 0;
+        ok &= Expect(stress.VaultCount("stress-0", stressVaultCount) &&
+                     stressVaultCount == 1200,
+                     "thousands-scale encrypted vault count reloads");
+    }
+
+    ClipboardHistory burstHistory(kMaxClipboardHistoryItems);
+    burstHistory.SetDeduplicationEnabled(false);
+    for (int index = 0; index < 5000; ++index)
+        burstHistory.Push(MakeItem(0, "rapid burst " + std::to_string(index), false));
+    ok &= Expect(burstHistory.Size() == kMaxClipboardHistoryItems &&
+                 burstHistory.NextId() == 5001,
+                 "rapid clipboard-style bursts retain the configured 500-item window");
+
+    ClipboardHistory undoHistory(20);
+    undoHistory.Push(MakeItem(0, "undo one", false));
+    undoHistory.Push(MakeItem(0, "undo two", false));
+    undoHistory.Push(MakeItem(0, "undo three", false));
+    const auto [estimatedHistoryBytes, estimatedFormatBytes] =
+        undoHistory.EstimatedMemoryBytes();
+    ok &= Expect(estimatedHistoryBytes > estimatedFormatBytes &&
+                 estimatedFormatBytes >= 24,
+                 "runtime telemetry estimates history and preserved format memory");
+    const std::vector<ClipboardItem> undoBefore = undoHistory.Snapshot();
+    const uint64_t undoNextId = undoHistory.NextId();
+    undoHistory.MoveItemsByIdToTop({undoBefore.back().id});
+    undoHistory.RemoveItemById(undoBefore[1].id);
+    undoHistory.Push(MakeItem(0, "arrived after destructive action", false));
+    ok &= Expect(undoHistory.RestoreSnapshotByStableId(undoBefore, undoNextId),
+                 "stable-ID undo restores delete and bulk ordering changes");
+    const std::vector<ClipboardItem> undoRestored = undoHistory.Snapshot();
+    ok &= Expect(undoRestored.size() == 4 &&
+                 undoRestored[0].text == "arrived after destructive action" &&
+                 undoRestored[1].id == undoBefore[0].id &&
+                 undoRestored[2].id == undoBefore[1].id &&
+                 undoRestored[3].id == undoBefore[2].id,
+                 "stable-ID undo retains newer captures while restoring prior IDs");
+    const std::vector<ClipboardItem> clearBefore = undoHistory.Snapshot();
+    const uint64_t clearNextId = undoHistory.NextId();
+    undoHistory.Clear();
+    ok &= Expect(undoHistory.RestoreSnapshotByStableId(clearBefore, clearNextId) &&
+                 undoHistory.Snapshot().size() == clearBefore.size(),
+                 "stable-ID undo restores a cleared history");
+
+    state_package::Data package;
+    package.configurationJson = "{\"appearance\":{\"theme\":2},\"secret\":\"CONFIG_PACKAGE_SECRET\"}";
+    package.profiles.push_back({"exported", "Exported profile", "created", "updated", "editor.exe"});
+    package.namedSlots.push_back({42, "Email", "PACKAGE_SLOT_SECRET", 1, 2});
+    package.transforms.push_back({7, "Parentheses", "\\(", "[", true, false, false, true, 1, 2});
+    package.templates.push_back({9, "Greeting", "Hello {{slot:Email}}", 1, 2});
+    CustomActionDefinition packagedAction;
+    packagedAction.actionId = 11;
+    packagedAction.label = "Packaged action";
+    package.actions.push_back(packagedAction);
+    const auto plainPackage = directory / "state.json";
+    const auto encryptedPackage = directory / "state.cppstate";
+    auto packageResult = state_package::Write(plainPackage, package, false);
+    ok &= Expect(packageResult.ok && Contains(plainPackage, "PACKAGE_SLOT_SECRET"),
+                 "plaintext state package is explicit and readable");
+    packageResult = state_package::Write(encryptedPackage, package, true);
+    ok &= Expect(packageResult.ok && !Contains(encryptedPackage, "PACKAGE_SLOT_SECRET") &&
+                 !Contains(encryptedPackage, "CONFIG_PACKAGE_SECRET"),
+                 "DPAPI state package hides configuration and definition secrets");
+    state_package::Data loadedPackage;
+    packageResult = state_package::Read(encryptedPackage, loadedPackage);
+    ok &= Expect(packageResult.ok && packageResult.encrypted &&
+                 loadedPackage.profiles.size() == 1 &&
+                 loadedPackage.namedSlots.size() == 1 &&
+                 loadedPackage.namedSlots[0].text == "PACKAGE_SLOT_SECRET" &&
+                 loadedPackage.transforms.size() == 1 &&
+                 loadedPackage.templates.size() == 1 &&
+                 loadedPackage.actions.size() == 1,
+                 "encrypted state package round-trips every supported definition");
+    std::string configImportError;
+    ok &= Expect(state_package::StageConfigurationImport(
+                     directory, package.configurationJson, &configImportError) &&
+                 state_package::HasPendingConfigurationImport(directory) &&
+                 !Contains(directory / "config-import-pending.dpapi", "CONFIG_PACKAGE_SECRET"),
+                 "configuration import is validated and DPAPI-protected while pending");
+    ok &= Expect(state_package::ApplyPendingConfigurationImport(
+                     directory, &configImportError) &&
+                 !state_package::HasPendingConfigurationImport(directory) &&
+                 Contains(directory / "config.json", "CONFIG_PACKAGE_SECRET"),
+                 "pending configuration applies atomically at startup");
 
     std::filesystem::remove_all(directory, ec);
     if (!ok) return 1;

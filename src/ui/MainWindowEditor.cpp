@@ -144,6 +144,8 @@ void MainWindow::DrawEditor() {
             s.externalWaitForExit = true;
             changed = true;
         }
+        ImGui::TextDisabled("(?) External editors require a temporary plaintext scratch file.");
+        HelpTooltip("With Wait enabled, Clipboard++ removes the scratch file after the editor exits. Otherwise it removes scratch files older than 24 hours on a later editor launch to avoid racing GUI launchers. Removal overwrites the visible file first, but storage journaling and SSD wear leveling prevent guaranteed secure erasure.");
     }
 
     if (!s.enabled)

@@ -239,6 +239,8 @@ void PopupWindow::DrawItemList() {
                         ClipboardItem pasteItem;
                         if (hist->GetByIdCopy(itemId, pasteItem))
                             PasteItemKeepOpen(pasteItem);
+                        if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+                            CaptureHistoryUndo("paste move");
                         hist->MoveItemById(itemId, m_pasteMoveTarget);
                         rowMutated = true;
                     } else if (!keepMultiSelection) {
@@ -278,6 +280,7 @@ void PopupWindow::DrawItemList() {
         ImGui::InvisibleButton("##drop_end", {ImGui::GetContentRegionAvail().x, 8.0f});
         if (ImGui::BeginDragDropTarget()) {
             if (ImGui::AcceptDragDropPayload("CPP_HISTORY_IDS")) {
+                CaptureHistoryUndo("reorder");
                 hist->MoveItemsByIdBefore(m_dragIds, 0);
             }
             ImGui::EndDragDropTarget();
@@ -403,6 +406,8 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
         } else {
             if (ImGui::MenuItem("Paste")) {
                 PasteItemKeepOpen(item);
+                if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+                    CaptureHistoryUndo("paste move");
                 hist->MoveItemById(itemId, m_pasteMoveTarget);
                 changed = true;
             }
@@ -414,6 +419,8 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
                     ImGui::PushID(static_cast<int>(transform.transformId));
                     if (ImGui::MenuItem(transform.name.c_str())) {
                         PasteItemWithTransformKeepOpen(item, transform);
+                        if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+                            CaptureHistoryUndo("paste move");
                         hist->MoveItemById(itemId, m_pasteMoveTarget);
                         changed = true;
                     }
@@ -429,6 +436,8 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
                                                 StructuredFormat format) {
                     if (ImGui::MenuItem(label) &&
                         PasteItemFormattedKeepOpen(item, format)) {
+                        if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+                            CaptureHistoryUndo("paste move");
                         hist->MoveItemById(itemId, m_pasteMoveTarget);
                         changed = true;
                     }
@@ -458,6 +467,8 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
                         std::to_string(format.data.size()) + " bytes)";
                     if (ImGui::MenuItem(label.c_str())) {
                         PasteItemAsFormatKeepOpen(item, format);
+                        if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+                            CaptureHistoryUndo("paste move");
                         hist->MoveItemById(itemId, m_pasteMoveTarget);
                         changed = true;
                     }
@@ -488,6 +499,8 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
                 ImGui::PushID(static_cast<int>(pasteTemplate.templateId));
                 if (ImGui::MenuItem(pasteTemplate.name.c_str()) &&
                     PasteSelectionWithTemplateKeepOpen(ids, pasteTemplate)) {
+                    if (m_pasteMoveTarget != ClipboardHistory::MoveTarget::None)
+                        CaptureHistoryUndo("paste move");
                     hist->MoveItemsById(ids, m_pasteMoveTarget);
                     changed = true;
                 }
@@ -514,10 +527,12 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
         }
 
         if (ImGui::MenuItem(multi ? "Move selected to top" : "Move to top")) {
+            CaptureHistoryUndo("move");
             hist->MoveItemsByIdToTop(ids);
             changed = true;
         }
         if (ImGui::MenuItem(multi ? "Move selected to bottom" : "Move to bottom")) {
+            CaptureHistoryUndo("move");
             hist->MoveItemsByIdToBottom(ids);
             changed = true;
         }
@@ -532,9 +547,22 @@ bool PopupWindow::DrawItemContextMenu(const ClipboardItem& item) {
 
         ImGui::Separator();
         if (ImGui::MenuItem(multi ? "Delete selected" : "Delete")) {
+            CaptureHistoryUndo("delete");
             hist->RemoveItemsById(ids);
             ClearItemSelection();
             changed = true;
+        }
+        if (ImGui::MenuItem("Clear entire active history...")) {
+            const int answer = MessageBoxW(m_hwnd,
+                L"Clear every pinned and regular item in the active clipboard profile?\n\nYou can undo this once from the popup command bar or with Ctrl+Z.",
+                L"Clear active clipboard history",
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+            if (answer == IDYES) {
+                CaptureHistoryUndo("clear");
+                hist->Clear();
+                ClearItemSelection();
+                changed = true;
+            }
         }
 
         ImGui::EndPopup();
@@ -561,6 +589,7 @@ void PopupWindow::DrawItemDragDrop(uint64_t itemId) {
 
     if (ImGui::BeginDragDropTarget()) {
         if (ImGui::AcceptDragDropPayload("CPP_HISTORY_IDS")) {
+            CaptureHistoryUndo("reorder");
             hist->MoveItemsByIdBefore(m_dragIds, itemId);
         }
         ImGui::EndDragDropTarget();

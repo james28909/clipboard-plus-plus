@@ -3,6 +3,8 @@
 #include <d3d11.h>
 #include <filesystem>
 #include <future>
+#include <chrono>
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,6 +17,7 @@
 #include "../ui/Appearance.h"
 #include "../hotkeys/HotkeyManager.h"
 #include "../ipc/IpcProtocol.h"
+#include "../security/StatePackage.h"
 
 class TrayIcon;
 class ClipboardMonitor;
@@ -24,6 +27,15 @@ class TrayPopupWindow;
 class TextEditorWindow;
 class DebugWindow;
 enum class HotkeyAction : WPARAM;
+
+struct RuntimeTelemetry {
+    uint64_t historyBytes{};
+    uint64_t formatBytes{};
+    uint64_t thumbnailBytes{};
+    double databaseQueryMs{};
+    double renderFrameMs{};
+    size_t clipboardEventsLastMinute{};
+};
 
 // Message IDs used across the app
 constexpr UINT WM_TRAYICON      = WM_APP + 1;
@@ -35,7 +47,7 @@ constexpr UINT WM_SHOWTRAYPOPUP = WM_APP + 6;
 
 class Application {
 public:
-    explicit Application(HINSTANCE hInstance);
+    explicit Application(HINSTANCE hInstance, bool safeModeRequested = false);
     ~Application();
 
     int  Run();
@@ -54,6 +66,7 @@ public:
         return m_startupProfiler.Metrics();
     }
     double GetStartupElapsedMs() const { return m_startupProfiler.ElapsedMs(); }
+    RuntimeTelemetry GetRuntimeTelemetry() const;
 
     static Application* Get()  { return s_instance; }
     HWND GetHwnd()             const { return m_hwnd; }
@@ -125,6 +138,17 @@ public:
     bool CopyTextToClipboard(const std::string& text);
     bool IsStartWithWindowsEnabled() const;
     bool SetStartWithWindowsEnabled(bool enabled);
+    bool HasPendingEncryptedRestore() const;
+    bool CancelPendingEncryptedRestore(std::string& message);
+    std::string LastEncryptedRestoreStatus() const;
+    bool RestartForEncryptedRestore();
+    bool IsSafeMode() const { return m_safeMode; }
+    bool QuarantineStorageAndRestart(std::string& message);
+    bool ExportStatePackage(const std::filesystem::path& path, bool encrypted,
+                            std::string& message) const;
+    bool ImportStatePackage(const std::filesystem::path& path,
+                            state_package::ConflictPolicy policy,
+                            bool& restartRequired, std::string& message);
     bool IsIncognito() const { return m_incognito; }
     void SetIncognito(bool enabled);
     void ToggleIncognito();
@@ -188,6 +212,7 @@ private:
     bool LaunchExternalEditor();
     void RebuildClipboardHistories();
     void AdvanceDeferredStartup();
+    void PollBackgroundPersistenceFailure();
     void InitializeImageStoreAndMonitor();
     void InvalidateDatabaseCaches();
     void SyncCustomActionHotkeys();
@@ -266,6 +291,10 @@ private:
     StartupProfiler::TimePoint m_activeHistoryLoadStarted{};
     std::future<ClipboardProfileMetadataLoadResult> m_profileMetadataLoad;
     StartupProfiler::TimePoint m_profileMetadataLoadStarted{};
+    bool m_safeModeRequested{false};
+    bool m_safeMode{false};
+    double m_renderFrameMs{0.0};
+    mutable std::deque<std::chrono::steady_clock::time_point> m_clipboardEventTimes;
 
     static Application* s_instance;
 };

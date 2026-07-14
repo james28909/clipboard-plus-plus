@@ -334,6 +334,9 @@ void PopupWindow::Render() {
 
     DrawTitleBar();
 
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+        UndoHistoryMutation();
+
     // Escape clears an active paste selection first, then closes on the next press.
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         if (HasMultipleSelectedItems()) {
@@ -877,6 +880,40 @@ void PopupWindow::ActivateKeyboardCapture() {
 void PopupWindow::ClearSelectedItems() {
     ClearItemSelection();
     ActivateKeyboardCapture();
+}
+
+void PopupWindow::CaptureHistoryUndo(const char* label) {
+    Application* app = Application::Get();
+    ClipboardHistory* history = app ? app->GetHistory() : nullptr;
+    const ClipboardProfileConfig* profile = app
+        ? app->GetActiveClipboardProfile() : nullptr;
+    if (!history || !profile) return;
+    m_historyUndo.profileId = profile->id;
+    m_historyUndo.label = label ? label : "change";
+    m_historyUndo.before = history->Snapshot();
+    m_historyUndo.nextId = history->NextId();
+    m_historyUndo.valid = true;
+}
+
+bool PopupWindow::CanUndoHistoryMutation() const {
+    Application* app = Application::Get();
+    const ClipboardProfileConfig* profile = app
+        ? app->GetActiveClipboardProfile() : nullptr;
+    return m_historyUndo.valid && profile &&
+           profile->id == m_historyUndo.profileId;
+}
+
+bool PopupWindow::UndoHistoryMutation() {
+    if (!CanUndoHistoryMutation()) return false;
+    ClipboardHistory* history = Application::Get()->GetHistory();
+    if (!history) return false;
+    const bool restored = history->RestoreSnapshotByStableId(
+        m_historyUndo.before, m_historyUndo.nextId);
+    m_historyUndo = {};
+    ClearItemSelection();
+    InvalidateVisibleHistoryCache();
+    ActivateKeyboardCapture();
+    return restored;
 }
 
 void PopupWindow::LaunchWebSearch() {

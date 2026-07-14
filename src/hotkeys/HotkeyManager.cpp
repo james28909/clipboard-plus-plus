@@ -638,65 +638,29 @@ bool HotkeyManager::HandleKeyDown(UINT vk, const ModifierState& modifiers) {
         DispatchPendingSingleTap();
     }
 
-    const KeyBinding* explicitBinding = nullptr;
-    for (int specificity = 6; specificity >= 0 && !explicitBinding; --specificity) {
-      for (const auto& b : m_bindings) {
-        int bindingSpecificity = 0;
-        if (b.exactModifiers) {
-            uint8_t mask = b.physicalModifiers;
-            while (mask) {
-                bindingSpecificity += mask & 1u;
-                mask >>= 1;
-            }
-        } else {
-            bindingSpecificity =
-                (b.ctrl && b.ctrlSide != ModifierSide::Any ? 1 : 0) +
-                (b.shift && b.shiftSide != ModifierSide::Any ? 1 : 0) +
-                (b.alt && b.altSide != ModifierSide::Any ? 1 : 0);
-        }
-        if (bindingSpecificity == specificity && b.Matches(modifiers, vk)) {
-            explicitBinding = &b;
-            break;
-        }
-      }
-    }
+    const ConfiguredHotkeyRoute route = ResolveConfiguredRoute(
+        m_settings, m_bindings, modifiers, vk,
+        popupOpen && !popup->IsTextEntryActive());
 
-    int bankSlot = -1;
-    const HotkeyAction bankAction = ResolveSlotBank(
-        m_settings, modifiers, vk,
-        popupOpen && !popup->IsTextEntryActive(), bankSlot);
-
-    if (explicitBinding) {
-        if (m_settings.hotkeyDoubleTaps &&
-            explicitBinding->action == HotkeyAction::PasteNamedSlot &&
-            bankAction != HotkeyAction::None && modifiers.Mask() != 0) {
+    if (route.waitsForDoubleTap) {
             if (!ConsumeActionPress(vk))
                 return true;
             m_pendingDoubleTap = true;
             m_pendingTriggerReleased = false;
             m_pendingTrigger = vk;
             m_pendingModifierMask = modifiers.Mask();
-            m_pendingSingleAction = bankAction;
-            m_pendingSingleData = bankSlot;
-            m_pendingDoubleAction = explicitBinding->action;
-            m_pendingDoubleData = explicitBinding->data;
+            m_pendingSingleAction = route.action;
+            m_pendingSingleData = route.data;
+            m_pendingDoubleAction = route.doubleTapAction;
+            m_pendingDoubleData = route.doubleTapData;
             return true;
-        }
-        if (!ConsumeActionPress(vk))
-            return true;
-        PostMessageW(m_msgTarget, WM_HOTKEYACTION,
-                     static_cast<WPARAM>(explicitBinding->action),
-                     static_cast<LPARAM>(explicitBinding->data));
-        return true;
     }
-
-    // Explicit bindings above commandeer matching generated bank routes.
-    if (bankAction != HotkeyAction::None) {
+    if (route.action != HotkeyAction::None) {
         if (!ConsumeActionPress(vk))
             return true;
         PostMessageW(m_msgTarget, WM_HOTKEYACTION,
-                     static_cast<WPARAM>(bankAction),
-                     static_cast<LPARAM>(bankSlot));
+                     static_cast<WPARAM>(route.action),
+                     static_cast<LPARAM>(route.data));
         return true;
     }
 

@@ -35,6 +35,38 @@ void MainWindow::DrawHistory() {
     Application* app = Application::Get();
     if (!app) return;
 
+    static std::string recoveryStatus;
+    static bool recoveryError = false;
+    if (app->IsSafeMode()) {
+        if (BeginSettingsCard("##history_safe_mode", "Storage safe mode",
+                              "Clipboard capture and storage writes are disabled to protect unavailable or damaged data.")) {
+            StatusMessage(SettingsStatus::Warning,
+                "Clipboard++ is running without opening history or image storage. Existing files have not been deleted or replaced.");
+            ImGui::TextWrapped("Restore a known-good encrypted backup from Privacy, inspect the storage folder, retry a normal restart, or retain the unavailable database in a recovery folder and start fresh.");
+            if (PaddedButton("Open storage folder", 175.0f))
+                ShellExecuteW(nullptr, L"open", ConfigStore::Directory().c_str(),
+                              nullptr, nullptr, SW_SHOWNORMAL);
+            ImGui::SameLine();
+            if (PaddedButton("Retry normal restart", 175.0f)) {
+                recoveryError = !app->RestartForEncryptedRestore();
+                if (recoveryError) recoveryStatus = "Could not restart Clipboard++.";
+            }
+            if (DangerButton("Quarantine storage and start fresh", 285.0f)) {
+                const int answer = MessageBoxW(app->GetHwnd(),
+                    L"Move the clipboard and image databases, keys, and sidecars into a timestamped recovery folder, then start with new empty encrypted storage?\n\nThe old files will be retained and can be inspected or recovered later.",
+                    L"Start with fresh encrypted storage",
+                    MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+                if (answer == IDYES)
+                    recoveryError = !app->QuarantineStorageAndRestart(recoveryStatus);
+            }
+            if (!recoveryStatus.empty())
+                StatusMessage(recoveryError ? SettingsStatus::Error
+                                             : SettingsStatus::Success,
+                              recoveryStatus.c_str());
+        }
+        EndSettingsCard();
+    }
+
     if (app) {
         for (const std::string& error : app->GetHistoryPersistenceErrors()) {
             StatusMessage(SettingsStatus::Error, error.c_str());
@@ -42,6 +74,9 @@ void MainWindow::DrawHistory() {
         if (!app->GetHistoryPersistenceErrors().empty())
             ImGui::Spacing();
     }
+
+    const bool storageDisabled = app->IsSafeMode();
+    if (storageDisabled) ImGui::BeginDisabled();
 
     int activeLimit = app->GetActiveHistoryLimit();
 
@@ -210,4 +245,5 @@ void MainWindow::DrawHistory() {
     ImGui::PopStyleVar();
     }
     EndSettingsCard();
+    if (storageDisabled) ImGui::EndDisabled();
 }

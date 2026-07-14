@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 #include <unordered_set>
+#include <atomic>
 
 class ClipboardDatabase;
 struct ClipboardVaultEntry;
@@ -53,13 +54,14 @@ public:
                             EventCallback addEvent,
                             ForegroundProcessCallback foregroundProcess,
                             ActiveHistoryCallback activeHistoryChanged,
-                            TimingCallback startupTiming = {});
+                            TimingCallback startupTiming = {},
+                            bool safeMode = false);
     ~ClipboardProfileManager();
 
     void Rebuild();
     bool InitializeProfileMetadata();
     bool CanInitializeMetadataAsync() const {
-        return m_config.profilesStoredInDatabase;
+        return !m_safeMode && m_config.profilesStoredInDatabase;
     }
     static ClipboardProfileMetadataLoadResult LoadProfileMetadataDetached(
         const std::filesystem::path& databasePath);
@@ -103,11 +105,18 @@ public:
     const std::vector<std::string>& PersistenceErrors() const {
         return m_persistenceErrors;
     }
+    bool IsSafeMode() const { return m_safeMode; }
+    void EnterSafeMode(const std::string& reason);
+    bool ConsumeBackgroundPersistenceFailure(std::string& message);
+    double LastDatabaseQueryMs() const { return m_lastDatabaseQueryMs.load(); }
 
     void SetActiveProfile(const std::string& id);
     void SelectProfileSlot(int slot);
     void CreateProfile(const std::string& name,
                        const std::string& processName = {});
+    bool UpdateProfileDefinition(const std::string& id,
+                                 const std::string& name,
+                                 const std::string& processName);
     void RenameActiveProfile(const std::string& name);
     bool DeleteActiveProfile();
 
@@ -155,4 +164,8 @@ private:
     uint64_t m_saveGeneration{0};
     bool m_saveInFlight{false};
     bool m_stopSaveWorker{false};
+    bool m_safeMode{false};
+    std::mutex m_failureMutex;
+    std::string m_backgroundPersistenceFailure;
+    mutable std::atomic<double> m_lastDatabaseQueryMs{0.0};
 };

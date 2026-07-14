@@ -9,6 +9,7 @@
 #include "../src/clipboard/ClipboardWriteSuppression.h"
 #include "../src/app/StartupProfiler.h"
 #include "../src/actions/CustomAction.h"
+#include "../src/hotkeys/HotkeyManager.h"
 
 #include <filesystem>
 #include <fstream>
@@ -38,6 +39,53 @@ int main() {
     const ClipboardItem item = TextItem("Error: apple pie failed\npath=C:/tmp/report.json");
     bool ok = true;
 
+    {
+        const ModifierState leftCtrlRightAlt = ModifierState::FromMask(
+            ModifierState::LeftCtrlBit | ModifierState::RightAltBit);
+        KeyBinding exact;
+        exact.vkey = 'P';
+        exact.action = HotkeyAction::TogglePopup;
+        exact.exactModifiers = true;
+        exact.physicalModifiers = leftCtrlRightAlt.Mask();
+        ok &= Expect(exact.Matches(leftCtrlRightAlt, 'P') &&
+                     !exact.Matches(ModifierState::FromMask(
+                         ModifierState::RightCtrlBit | ModifierState::RightAltBit), 'P'),
+                     "physical hotkeys distinguish left and right modifiers");
+
+        HotkeySettings routes;
+        routes.globalHistoryBank = {};
+        routes.globalHistoryBank.chord.exactModifiers = true;
+        routes.globalHistoryBank.chord.physicalModifiers = leftCtrlRightAlt.Mask();
+        routes.pinnedHistoryBank.enabled = false;
+        routes.profileBank.enabled = false;
+        routes.popupHistoryBank.enabled = false;
+        routes.hotkeyDoubleTaps = true;
+        KeyBinding named = exact;
+        named.vkey = '1';
+        named.action = HotkeyAction::PasteNamedSlot;
+        named.data = 27;
+        const ConfiguredHotkeyRoute overlap = HotkeyManager::ResolveConfiguredRoute(
+            routes, {named}, leftCtrlRightAlt, '1', false);
+        ok &= Expect(overlap.waitsForDoubleTap &&
+                     overlap.action == HotkeyAction::PasteHistorySlot && overlap.data == 0 &&
+                     overlap.doubleTapAction == HotkeyAction::PasteNamedSlot &&
+                     overlap.doubleTapData == 27,
+                     "double-tap overlap delays bank route and resolves named slot");
+        routes.hotkeyDoubleTaps = false;
+        const ConfiguredHotkeyRoute commandeered = HotkeyManager::ResolveConfiguredRoute(
+            routes, {named}, leftCtrlRightAlt, '1', false);
+        ok &= Expect(!commandeered.waitsForDoubleTap &&
+                     commandeered.action == HotkeyAction::PasteNamedSlot,
+                     "explicit named slot commandeers bank when double tap is disabled");
+    }
+
+    ok &= Expect(
+        ChoosePasteTarget(true, true, true) == PasteTargetChoice::Active &&
+        ChoosePasteTarget(false, true, true) == PasteTargetChoice::Foreground &&
+        ChoosePasteTarget(false, false, true) == PasteTargetChoice::PreviousForeground &&
+        ChoosePasteTarget(false, false, false) == PasteTargetChoice::None,
+        "popup paste target policy preserves the captured calling window priority");
+
     CustomFilter contains;
     contains.name = "Contains";
     contains.pattern = "APPLE PIE";
@@ -63,6 +111,48 @@ int main() {
     regex.mode = CustomFilterMode::Regex;
     ok &= Expect(ValidateCustomFilter(regex).ok, "regex validation");
     ok &= Expect(CustomFilterMatches(regex, item), "regex match");
+
+    {
+        ClipboardHistory filteredHistory(10);
+        filteredHistory.Push(TextItem("first ordinary row"));
+        filteredHistory.Push(TextItem("match alpha"));
+        filteredHistory.Push(TextItem("second ordinary row"));
+        filteredHistory.Push(TextItem("match beta"));
+        CustomFilter onlyMatches;
+        onlyMatches.name = "Match rows";
+        onlyMatches.pattern = "match";
+        onlyMatches.mode = CustomFilterMode::Contains;
+        std::vector<uint64_t> visibleIds;
+        std::vector<std::string> visibleTexts;
+        for (const ClipboardItem& row : filteredHistory.Snapshot()) {
+            if (CustomFilterMatches(onlyMatches, row)) {
+                visibleIds.push_back(row.id);
+                visibleTexts.push_back(row.text);
+            }
+        }
+        ClipboardItem secondVisible;
+        ok &= Expect(visibleIds.size() == 2 &&
+                     filteredHistory.GetByIdCopy(visibleIds[1], secondVisible) &&
+                     secondVisible.text == visibleTexts[1],
+                     "filtered slot position resolves through stable visible item IDs");
+    }
+
+    {
+        ClipboardFormatRecord preserved;
+        preserved.name = "HTML Format";
+        preserved.status = ClipboardFormatStatus::Preserved;
+        preserved.replaySafe = true;
+        preserved.data = {0x01, 0x02, 0x7f, 0xff};
+        ClipboardFormatRecord metadataOnly = preserved;
+        metadataOnly.status = ClipboardFormatStatus::MetadataOnly;
+        ClipboardFormatRecord unsafe = preserved;
+        unsafe.replaySafe = false;
+        ClipboardFormatRecord empty = preserved;
+        empty.data.clear();
+        ok &= Expect(preserved.IsReplayable() && !metadataOnly.IsReplayable() &&
+                     !unsafe.IsReplayable() && !empty.IsReplayable(),
+                     "format replay admits only audited byte-preserved payloads");
+    }
 
     CustomFilter badRegex;
     badRegex.name = "Bad";

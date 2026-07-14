@@ -32,6 +32,11 @@ struct ClipboardFormatRecord {
     ClipboardFormatStatus status{ClipboardFormatStatus::MetadataOnly};
     bool replaySafe{false};
     std::vector<uint8_t> data;    // Exact bytes only for audited HGLOBAL formats.
+
+    bool IsReplayable() const {
+        return replaySafe && status == ClipboardFormatStatus::Preserved &&
+               !data.empty();
+    }
 };
 
 // Bitmask - multiple tags can be set on one item

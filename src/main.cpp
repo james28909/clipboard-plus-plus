@@ -25,6 +25,23 @@ int wmain(int argc, wchar_t** argv) {
     ConfigureDpiAwareness();
     HINSTANCE hInstance = GetModuleHandleW(nullptr);
 
+    // Internal: wait for the current GUI to finish shutdown before taking the
+    // single-instance mutex and applying a staged encrypted restore.
+    const bool restoreRestart = argc >= 3 &&
+        win32util::EqW(argv[1], L"--clipboardpp-restart");
+    const bool safeModeRequested = argc >= 2 &&
+        win32util::EqW(argv[1], L"--clipboardpp-safe-mode");
+    if (restoreRestart) {
+        const DWORD parentPid = static_cast<DWORD>(_wtoi(argv[2]));
+        HANDLE parent = parentPid ? OpenProcess(SYNCHRONIZE, FALSE, parentPid) : nullptr;
+        if (parent) {
+            WaitForSingleObject(parent, 30000);
+            CloseHandle(parent);
+        } else {
+            Sleep(1000);
+        }
+    }
+
     // Internal: spawned by Shutdown() to patch the exe after parent exits.
     // Usage: clipboardpp --patch-icon <exePath> <icoPath> <parentPid>
     if (argc >= 5 && win32util::EqW(argv[1], L"--patch-icon")) {
@@ -55,7 +72,8 @@ int wmain(int argc, wchar_t** argv) {
         return ok ? 0 : 1;
     }
 
-    if (argc > 1 && !win32util::EqW(argv[1], L"--clipboardpp-run-gui"))
+    if (argc > 1 && !win32util::EqW(argv[1], L"--clipboardpp-run-gui") &&
+        !restoreRestart && !safeModeRequested)
         return RunCLI(argc, argv);
 
     if (argc <= 1) {
@@ -106,7 +124,7 @@ int wmain(int argc, wchar_t** argv) {
         return 0;
     }
 
-    Application app(hInstance);
+    Application app(hInstance, safeModeRequested);
     int result = app.Run();
 
     CloseHandle(hMutex);

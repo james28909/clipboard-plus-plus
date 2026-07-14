@@ -316,6 +316,12 @@ void PopupWindow::DrawFilterStrip() {
         ActivateKeyboardCapture();
         app->SetPasteMoveTarget(NextMoveTarget(m_pasteMoveTarget));
     });
+    if (CanUndoHistoryMutation()) {
+        const std::string undoLabel = "Undo " + m_historyUndo.label;
+        drawAction("action_undo_history", undoLabel.c_str(), false,
+                   "Undo the last delete or reorder in this clipboard profile (Ctrl+Z)",
+                   -1, [&]() { UndoHistoryMutation(); });
+    }
 
     const int selectedCount = static_cast<int>(m_itemSelection.Ids().size());
     if (selectedCount > 1) {

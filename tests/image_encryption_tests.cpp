@@ -180,6 +180,19 @@ int main() {
         ok &= Expect(store.GetPng(newId).empty(), "corrupt encrypted image is rejected");
     }
 
+    const auto largeDb = testDirectory / "large-images.db";
+    {
+        std::vector<uint8_t> largeImage(8 * 1024 * 1024);
+        for (size_t i = 0; i < largeImage.size(); ++i)
+            largeImage[i] = static_cast<uint8_t>((i * 131u) & 0xffu);
+        ImageStore store;
+        ok &= Expect(store.Open(largeDb), "large-image stress database opens");
+        const std::string largeId = store.StoreImage(
+            largeImage, true, "stress-profile", 4096, 2160, "stress.exe", 9999);
+        ok &= Expect(!largeId.empty() && store.GetPng(largeId) == largeImage,
+                     "multi-megabyte encrypted image round-trips byte for byte");
+    }
+
     const auto rollbackDb = testDirectory / "rollback.db";
     ok &= Expect(CreateLegacyDatabase(rollbackDb, secret, true),
                  "rollback test database is created");

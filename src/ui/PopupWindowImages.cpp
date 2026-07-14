@@ -25,6 +25,16 @@ void PopupWindow::ClearThumbCache() {
     m_thumbCache.clear();
 }
 
+uint64_t PopupWindow::ThumbnailMemoryBytes() const {
+    uint64_t bytes = 0;
+    for (const auto& [id, thumbnail] : m_thumbCache) {
+        (void)id;
+        bytes += static_cast<uint64_t>(std::max(0, thumbnail.w)) *
+                 static_cast<uint64_t>(std::max(0, thumbnail.h)) * 4;
+    }
+    return bytes;
+}
+
 void PopupWindow::DrawImageBrowser() {
     Application* app = Application::Get();
     ImageStore* store = app ? app->GetImageStore() : nullptr;

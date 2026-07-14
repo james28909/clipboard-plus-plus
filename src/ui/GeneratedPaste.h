@@ -9,8 +9,17 @@ struct GeneratedPasteProvenance {
     std::string destinationProcess;
 };
 
+enum class PasteTargetChoice {
+    None,
+    Active,
+    Foreground,
+    PreviousForeground,
+};
+
 ClipboardItem MakeGeneratedTextPaste(std::string text);
 bool IsClipboardPlusPlusGeneratedPaste(const ClipboardItem& item);
 GeneratedPasteProvenance DescribeGeneratedPaste(
     const ClipboardItem& item,
     std::string destinationProcess);
+PasteTargetChoice ChoosePasteTarget(bool activeValid, bool foregroundValid,
+                                    bool previousForegroundValid);

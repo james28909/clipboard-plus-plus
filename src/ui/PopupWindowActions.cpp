@@ -207,8 +207,10 @@ bool PopupWindow::ExecutePreparedCustomAction(
         return true;
     }
     case CustomActionOutput::MoveTop:
+        CaptureHistoryUndo("workflow move");
         return history && history->MoveItemsByIdToTop(itemIds);
     case CustomActionOutput::MoveBottom:
+        CaptureHistoryUndo("workflow move");
         return history && history->MoveItemsByIdToBottom(itemIds);
     case CustomActionOutput::AddTag: {
         const uint32_t tags = ParseTagMask(action.outputValue);
@@ -260,4 +262,3 @@ bool PopupWindow::ExecutePreparedCustomAction(
     }
     return false;
 }
-
