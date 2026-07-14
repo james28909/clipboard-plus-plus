@@ -71,6 +71,7 @@ History features include:
 - Process bindings and optional automatic profile switching.
 - Search, content filters, custom filters, drag-and-drop ordering, and bulk actions.
 - Ordered multi-selection for pasting several items in a chosen order.
+- Encrypted workflow buttons that can transform selected data and route it to paste, copy, files, URLs, Android, history operations, or an explicitly chosen executable.
 - Configurable active-history limits with encrypted persistence.
 - Source-process tracking and timestamps.
 
@@ -87,6 +88,10 @@ Clipboard → Paste Tools contains the user-facing operations that deliberately 
 - PCRE2 regex transforms apply named pattern/replacement rules immediately before paste, with a settings preview.
 - Templates interpolate named slots with `{{slot:name}}` and popup selections with `{{1}}`, `{{2}}`, and later ordered placeholders.
 - Structured formatting offers normalized JSON, XML, and SQL paste choices.
+
+Popup → Workflow buttons provides a composable action editor. An action chooses its input, ordered processing steps, output, visibility conditions, popup group, optional exact hotkey, confirmation policy, and timeout. The editor includes a live sample preview and a safe test that never pastes, writes, opens, or launches anything. External programs are opt-in and run directly without a command shell; executable and argument fields remain separate and inserted values are Windows-escaped.
+
+Workflow definitions are stored inside the encrypted SQLite VFS, including action bodies, templates, arguments, paths, and sensitive values. JSON import/export is intentionally plaintext and carries an on-screen secret warning; review exported JSON before sharing it.
 
 Developer mode remains focused on diagnostics and clipboard inspection:
 
@@ -111,7 +116,7 @@ Settings uses a plain, flat sidebar: **General**, **Clipboard**, **Popup**, **Ho
 
 ### Support and diagnostics
 
-**Settings → Support & diagnostics** is available in Release and Debug builds. It creates a reviewable ZIP containing selected environment, sanitized feature, database-health, startup-performance, and safe diagnostic information. The bundle manifest lists every included file and the data that is always excluded. Clipboard contents, images, database pages, encryption keys, DPAPI blobs, raw configuration, named-slot/template/transform values, endpoints, external-editor/program-launcher paths, credentials, raw crash dumps, and `paste_debug.log` are never bundled.
+**Settings → Support & diagnostics** is available in Release and Debug builds. It creates a reviewable ZIP containing selected environment, sanitized feature, database-health, startup-performance, and safe diagnostic information. The bundle manifest lists every included file and the data that is always excluded. Clipboard contents, images, database pages, encryption keys, DPAPI blobs, raw configuration, named-slot/template/transform values, custom-action bodies/arguments/templates/paths, endpoints, external-editor/program-launcher paths, credentials, raw crash dumps, and `paste_debug.log` are never bundled.
 
 The ZIP can be copied as a Windows file-drop object for pasting into an upload control. The same page can prepare Markdown for a GitHub issue or open the public issue form with safe text fields; it never uploads the ZIP or stores GitHub credentials. Security-sensitive details should be reported through the repository's private security-advisory form.
 
@@ -151,7 +156,7 @@ Clipboard++ stores its user data under `%APPDATA%\Clipboard++`:
 | Path | Contents | Protection |
 |---|---|---|
 | `config.json` | Non-sensitive app settings, hotkeys, and themes | Plaintext; profile definitions are not stored here after migration |
-| `clipboard.db` + `.key` | Profiles, active-profile state, active history, and the searchable overflow vault | AES-256-XTS SQLite VFS; key sidecar protected by current-user Windows DPAPI |
+| `clipboard.db` + `.key` | Profiles, active-profile state, active history, searchable overflow vault, and custom workflow actions | AES-256-XTS SQLite VFS; key sidecar protected by current-user Windows DPAPI |
 | `images.db` + `.key` | Image metadata and image BLOBs | AES-256-XTS SQLite VFS; key sidecar and image BLOBs also use current-user Windows DPAPI |
 | `history\<profile>.enc` | Pre-database history retained as a migration rollback source | Current-user Windows DPAPI |
 | `fonts\` | Imported fonts | Plain files |

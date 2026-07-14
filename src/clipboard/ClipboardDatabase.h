@@ -4,6 +4,7 @@
 #include "../app/ConfigStore.h"
 #include "../transforms/RegexTransform.h"
 #include "../templates/PasteTemplate.h"
+#include "../actions/CustomAction.h"
 
 #include <filesystem>
 #include <string>
@@ -72,6 +73,9 @@ public:
     bool LoadPasteTemplates(std::vector<PasteTemplateDefinition>& templates) const;
     bool SavePasteTemplate(PasteTemplateDefinition& value);
     bool DeletePasteTemplate(int64_t templateId);
+    bool LoadCustomActions(std::vector<CustomActionDefinition>& actions) const;
+    bool SaveCustomAction(CustomActionDefinition& action);
+    bool DeleteCustomAction(int64_t actionId);
 
     bool GetActiveProfileId(std::string& profileId) const;
     bool SetActiveProfileId(const std::string& profileId);

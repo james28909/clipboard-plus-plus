@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstddef>
+#include <climits>
 #include <ctime>
 #include <cstring>
 #include <fstream>
@@ -559,8 +560,7 @@ void Application::SetPopupOutlineStrength(float strength) {
 void Application::RequestHotkeySettings(const HotkeySettings& settings) {
     m_hotkeySettings = settings;
     m_config.hotkeys = settings;
-    if (m_hotkeys)
-        m_hotkeys->ApplySettings(m_hotkeySettings);
+    SyncCustomActionHotkeys();
     SaveConfig();
 }
 
@@ -774,6 +774,72 @@ bool Application::DeletePasteTemplate(int64_t templateId) {
         m_clipboardProfiles->DeletePasteTemplate(templateId);
     if (deleted) m_pasteTemplatesCached = false;
     return deleted;
+}
+
+std::vector<CustomActionDefinition> Application::GetCustomActions() const {
+    if (!m_customActionsCached) {
+        m_customActionsCache.clear();
+        if (m_clipboardProfiles &&
+            m_clipboardProfiles->LoadCustomActions(m_customActionsCache))
+            m_customActionsCached = true;
+    }
+    return m_customActionsCache;
+}
+
+bool Application::SaveCustomAction(CustomActionDefinition& action) {
+    const bool saved = m_clipboardProfiles &&
+                       m_clipboardProfiles->SaveCustomAction(action);
+    if (saved) {
+        m_customActionsCached = false;
+        SyncCustomActionHotkeys();
+    }
+    return saved;
+}
+
+bool Application::DeleteCustomAction(int64_t actionId) {
+    const bool deleted = m_clipboardProfiles &&
+                         m_clipboardProfiles->DeleteCustomAction(actionId);
+    if (deleted) {
+        m_customActionsCached = false;
+        SyncCustomActionHotkeys();
+    }
+    return deleted;
+}
+
+bool Application::ImportCustomAction(const std::string& payload,
+                                     std::string* error) {
+    CustomActionDefinition action;
+    if (!DeserializeCustomAction(payload, action, error))
+        return false;
+    action.actionId = 0;
+    action.createdAtMs = 0;
+    action.updatedAtMs = 0;
+    if (!SaveCustomAction(action)) {
+        if (error) *error = "Could not import the action. Its label may already exist.";
+        return false;
+    }
+    return true;
+}
+
+void Application::SyncCustomActionHotkeys() {
+    if (!m_hotkeys)
+        return;
+    HotkeySettings runtime = m_hotkeySettings;
+    runtime.bindings.erase(std::remove_if(
+        runtime.bindings.begin(), runtime.bindings.end(),
+        [](const KeyBinding& binding) {
+            return binding.action == HotkeyAction::RunCustomAction;
+        }), runtime.bindings.end());
+    for (const CustomActionDefinition& action : GetCustomActions()) {
+        if (!action.enabled || !action.hotkeyEnabled || action.hotkey.vkey == 0 ||
+            action.actionId <= 0 || action.actionId > INT_MAX)
+            continue;
+        KeyBinding binding = action.hotkey;
+        binding.action = HotkeyAction::RunCustomAction;
+        binding.data = static_cast<int>(action.actionId);
+        runtime.bindings.push_back(binding);
+    }
+    m_hotkeys->ApplySettings(runtime);
 }
 
 bool Application::CopyTextToClipboard(const std::string& text) {
@@ -1034,8 +1100,7 @@ void Application::ApplyLoadedConfig(const AppConfig& config, bool rebuildHistori
     }
     if (m_editor)
         m_editor->ApplySettings(m_config.editor);
-    if (m_hotkeys)
-        m_hotkeys->ApplySettings(m_hotkeySettings);
+    SyncCustomActionHotkeys();
 }
 
 std::string Application::ForegroundProcessName() const {
@@ -1147,9 +1212,11 @@ void Application::InvalidateDatabaseCaches() {
     m_namedSlotsCached = false;
     m_regexTransformsCached = false;
     m_pasteTemplatesCached = false;
+    m_customActionsCached = false;
     m_namedSlotsCache.clear();
     m_regexTransformsCache.clear();
     m_pasteTemplatesCache.clear();
+    m_customActionsCache.clear();
 }
 
 ClipboardHistory* Application::HistoryForProfile(const std::string& profileId) {
@@ -1376,7 +1443,7 @@ bool Application::Init() {
     stageStarted = m_startupProfiler.BeginStage();
     m_hotkeys = std::make_unique<HotkeyManager>();
     m_hotkeys->Install(m_hwnd);
-    m_hotkeys->ApplySettings(m_hotkeySettings);
+    SyncCustomActionHotkeys();
     m_startupProfiler.FinishStage("global hotkey installation", stageStarted);
 
     // TODO (Milestone 5): only show on first launch
@@ -1408,6 +1475,7 @@ void Application::AdvanceDeferredStartup() {
         if (!m_clipboardProfiles->CanInitializeMetadataAsync()) {
             m_clipboardProfiles->InitializeProfileMetadata();
             InvalidateDatabaseCaches();
+            SyncCustomActionHotkeys();
             m_startupProfiler.FinishStage("deferred profile metadata", started);
             m_deferredStartupPhase = DeferredStartupPhase::ActiveHistory;
             break;
@@ -1436,6 +1504,7 @@ void Application::AdvanceDeferredStartup() {
                 std::move(result));
         }
         InvalidateDatabaseCaches();
+        SyncCustomActionHotkeys();
         m_startupProfiler.FinishStage(
             "deferred profile metadata", m_profileMetadataLoadStarted);
         m_deferredStartupPhase = DeferredStartupPhase::ActiveHistory;
@@ -2093,6 +2162,13 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             HWND target = GetForegroundWindow();
             if (app->m_popup)
                 app->m_popup->PasteNamedSlot(data, target);
+            break;
+        }
+        case HotkeyAction::RunCustomAction: {
+            HWND target = GetForegroundWindow();
+            app->SyncClipboardForWindow(target);
+            if (app->m_popup)
+                app->m_popup->RunCustomAction(data, target);
             break;
         }
         default: break;

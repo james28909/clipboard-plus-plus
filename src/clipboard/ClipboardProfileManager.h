@@ -19,6 +19,7 @@ struct ClipboardVaultEntry;
 struct NamedClipboardSlot;
 struct RegexTransformDefinition;
 struct PasteTemplateDefinition;
+struct CustomActionDefinition;
 
 struct ClipboardHistoryLoadResult {
     std::string profileId;
@@ -90,6 +91,9 @@ public:
     bool LoadPasteTemplates(std::vector<PasteTemplateDefinition>& templates) const;
     bool SavePasteTemplate(PasteTemplateDefinition& value);
     bool DeletePasteTemplate(int64_t templateId);
+    bool LoadCustomActions(std::vector<CustomActionDefinition>& actions) const;
+    bool SaveCustomAction(CustomActionDefinition& action);
+    bool DeleteCustomAction(int64_t actionId);
 
     ClipboardHistory* ActiveHistory() const;
     ClipboardHistory* HistoryForProfile(const std::string& profileId);

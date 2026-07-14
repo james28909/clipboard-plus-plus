@@ -104,6 +104,8 @@ int main() {
     Require(zip.find("manifest.json") != std::string::npos, "ZIP must contain a manifest");
     Require(zip.find("paste_debug.log") != std::string::npos,
             "manifest must disclose paste-debug exclusion");
+    Require(zip.find("custom-action bodies") != std::string::npos,
+            "manifest must disclose custom-action secret-field exclusion");
     Require(zip.find("TOP SECRET CLIPBOARD CONTENT") == std::string::npos,
             "paste-debug contents must never enter the ZIP");
     Require(zip.find("RAW DATABASE SECRET") == std::string::npos,

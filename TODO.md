@@ -97,15 +97,15 @@
 - [x] Validate the completed command bar at minimum popup width and high DPI
 
 ## Configurable actions and workflow buttons (P2)
-- [ ] Define an encrypted custom-action model with user label, optional icon, toolbar order, enabled state, visibility conditions, optional hotkey, and confirmation policy
-- [ ] Support safe composable inputs: current history item, ordered multi-selection, named slot, active profile, search text, or current Windows clipboard
-- [ ] Support built-in processing steps before any external execution: regex transform, template interpolation, format conversion, join/separator, trim, case conversion, and URL encoding
-- [ ] Support explicit outputs: paste into the calling app, copy without pasting, open a URL, send to Android, save to a chosen file, move/tag/pin history, or launch an executable directly
-- [ ] Add an action editor with step ordering, live preview against sample data, validation, duplicate/edit/delete controls, and a test action that never pastes without confirmation
-- [ ] Add per-action placement in the popup Actions or Destinations group and let conditional actions appear only for compatible content, selections, or applications
-- [ ] Keep external execution opt-in and hardened: no implicit shell, separate executable/arguments fields, escaped placeholders, visible data preview, optional confirmation, timeout, and redacted diagnostics
-- [ ] Store action bodies, arguments, templates, and sensitive values inside the encrypted SQLite VFS; exclude them from logs and support bundles by default
-- [ ] Add import/export with secret-field warnings plus automated tests for interpolation, escaping, conditions, timeouts, failures, and correct paste targets
+- [x] Define an encrypted custom-action model with user label, optional icon, toolbar order, enabled state, visibility conditions, optional hotkey, and confirmation policy
+- [x] Support safe composable inputs: current history item, ordered multi-selection, named slot, active profile, search text, or current Windows clipboard
+- [x] Support built-in processing steps before any external execution: regex transform, template interpolation, format conversion, join/separator, trim, case conversion, and URL encoding
+- [x] Support explicit outputs: paste into the calling app, copy without pasting, open a URL, send to Android, save to a chosen file, move/tag/pin history, or launch an executable directly
+- [x] Add an action editor with step ordering, live preview against sample data, validation, duplicate/edit/delete controls, and a test action that never pastes without confirmation
+- [x] Add per-action placement in the popup Actions or Destinations group and let conditional actions appear only for compatible content, selections, or applications
+- [x] Keep external execution opt-in and hardened: no implicit shell, separate executable/arguments fields, escaped placeholders, visible data preview, optional confirmation, timeout, and redacted diagnostics
+- [x] Store action bodies, arguments, templates, and sensitive values inside the encrypted SQLite VFS; exclude them from logs and support bundles by default
+- [x] Add import/export with secret-field warnings plus automated tests for interpolation, escaping, conditions, timeouts, failures, and correct paste targets
 
 ## Reliability, performance, and release hardening (P2)
 - [ ] Add an in-app backup/restore workflow using SQLite online backup, including encrypted backup by default and explicit warnings for decrypted exports

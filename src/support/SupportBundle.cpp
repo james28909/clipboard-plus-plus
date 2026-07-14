@@ -321,6 +321,7 @@ BundleResult CreateBundle(const Snapshot& snapshot, const BundleOptions& options
             "clipboard and vault contents", "images and thumbnails", "database pages",
             "database key sidecars and DPAPI blobs", "raw config.json", "paste_debug.log",
             "named-slot values", "template bodies", "transform patterns/replacements",
+            "custom-action bodies, arguments, templates, paths, and sensitive values",
             "Android endpoints", "external-editor and program-launcher paths",
             "tokens and credentials",
             "raw crash dumps", "usernames and unnecessary file paths"})}

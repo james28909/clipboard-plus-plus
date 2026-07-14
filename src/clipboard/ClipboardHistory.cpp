@@ -452,6 +452,28 @@ bool ClipboardHistory::SetPinnedByIdMany(const std::vector<uint64_t>& ids, bool 
     return true;
 }
 
+bool ClipboardHistory::AddTagsByIdMany(const std::vector<uint64_t>& ids,
+                                       uint32_t tags) {
+    if (ids.empty() || tags == TAG_NONE)
+        return false;
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    bool changed = false;
+    const auto now = std::chrono::system_clock::now();
+    for (ClipboardItem& item : m_items) {
+        if (std::find(ids.begin(), ids.end(), item.id) == ids.end())
+            continue;
+        const uint32_t updated = item.tags | tags;
+        if (updated == item.tags)
+            continue;
+        item.tags = updated;
+        item.updatedAt = now;
+        changed = true;
+    }
+    if (changed)
+        MarkChangedLocked();
+    return changed;
+}
+
 bool ClipboardHistory::SetImageSourceFileByHash(uint64_t contentHash,
                                                 const std::string& sourceFilePath,
                                                 const std::string& description) {

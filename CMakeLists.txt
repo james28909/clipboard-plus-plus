@@ -31,6 +31,7 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp
     ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
     ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
 )
@@ -54,6 +55,7 @@ set(APP_SOURCES
     src/app/StartupProfiler.cpp
     src/app/TrayIcon.cpp
     src/filters/CustomFilter.cpp
+    src/actions/CustomAction.cpp
     src/transforms/RegexTransform.cpp
     src/templates/PasteTemplate.cpp
     src/formatting/StructuredFormatter.cpp
@@ -64,6 +66,7 @@ set(APP_SOURCES
     src/ui/Appearance.cpp
     src/ui/MainWindow.cpp
     src/ui/MainWindowGeneral.cpp
+    src/ui/MainWindowActions.cpp
     src/ui/MainWindowHotkeys.cpp
     src/ui/MainWindowAppearance.cpp
     src/ui/MainWindowHistory.cpp
@@ -77,6 +80,7 @@ set(APP_SOURCES
     src/ui/MainWindowSupport.cpp
     src/ui/PopupWindow.cpp
     src/ui/PopupWindowToolbar.cpp
+    src/ui/PopupWindowActions.cpp
     src/ui/PopupWindowAndroid.cpp
     src/ui/PopupWindowHistory.cpp
     src/ui/PopupWindowImages.cpp
@@ -226,6 +230,7 @@ endif()
 
 add_executable(filter_matcher_tests
     tests/filter_matcher_tests.cpp
+    src/actions/CustomAction.cpp
     src/util/Win32Util.cpp
     src/filters/CustomFilter.cpp
     src/transforms/RegexTransform.cpp
@@ -351,6 +356,10 @@ if(WIN32)
 
     add_executable(clipboard_database_tests
         tests/clipboard_database_tests.cpp
+        src/actions/CustomAction.cpp
+        src/transforms/RegexTransform.cpp
+        src/templates/PasteTemplate.cpp
+        src/formatting/StructuredFormatter.cpp
         src/security/DpapiProtection.cpp
         src/security/EncryptedSqliteVfs.cpp
         src/util/Win32Util.cpp
@@ -365,10 +374,12 @@ if(WIN32)
         ${IMGUI_DIR}
         ${NLOHMANN_DIR}
         ${SQLITE_DIR}
+        ${PCRE2_DIR}/src
     )
     target_link_libraries(clipboard_database_tests PRIVATE
         crypt32.lib
         bcrypt.lib
+        pcre2-8-static
     )
     target_compile_definitions(clipboard_database_tests PRIVATE
         CLIPBOARDPP_TESTING

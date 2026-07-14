@@ -92,6 +92,7 @@ int main(int argc, char** argv) {
     const std::string slotSecret = "named-slot-secret-20260713";
     const std::string transformSecret = "regex-transform-secret-20260713";
     const std::string templateSecret = "paste-template-secret-20260713";
+    const std::string actionSecret = "custom-action-secret-20260714";
     bool ok = true;
 
     {
@@ -251,6 +252,27 @@ int main(int argc, char** argv) {
         ok &= Expect(database.SavePasteTemplate(pasteTemplate) &&
                      pasteTemplate.templateId > 0,
                      "paste template is stored");
+        CustomActionDefinition customAction;
+        customAction.label = "Encrypted workflow";
+        customAction.icon = ">";
+        customAction.toolbarOrder = 4;
+        customAction.placement = CustomActionPlacement::Destinations;
+        customAction.input = CustomActionInput::OrderedSelection;
+        customAction.output = CustomActionOutput::LaunchExecutable;
+        customAction.outputValue = R"(C:\Tools\workflow.exe)";
+        customAction.executableArguments = "--secret " + actionSecret + " --text {{text}}";
+        customAction.confirmation = CustomActionConfirmation::Always;
+        customAction.hotkeyEnabled = true;
+        customAction.hotkey.exactModifiers = true;
+        customAction.hotkey.physicalModifiers = ModifierState::LeftCtrlBit;
+        customAction.hotkey.vkey = 'G';
+        CustomActionStep customTemplate;
+        customTemplate.type = CustomActionStepType::Template;
+        customTemplate.value = actionSecret + ": {{1}}";
+        customAction.steps.push_back(customTemplate);
+        ok &= Expect(database.SaveCustomAction(customAction) &&
+                     customAction.actionId > 0,
+                     "custom action is stored");
         ok &= Expect(database.SetActiveProfileId(second.id), "active profile is stored");
         ok &= Expect(database.IntegrityCheck(), "database passes integrity check");
         ok &= Expect(database.Commit(), "migration transaction commits");
@@ -265,6 +287,8 @@ int main(int argc, char** argv) {
                  "main database hides regex transform definitions");
     ok &= Expect(!Contains(path, templateSecret),
                  "main database hides paste template definitions");
+    ok &= Expect(!Contains(path, actionSecret),
+                 "main database hides custom action bodies and arguments");
     ok &= Expect(!Contains(path, "Confidential Work"), "main database hides profile names");
     const std::filesystem::path wal = path.u8string() + "-wal";
     if (std::filesystem::exists(wal)) {
@@ -361,6 +385,29 @@ int main(int argc, char** argv) {
             ok &= Expect(!database.SavePasteTemplate(duplicateTemplate),
                          "paste template names are unique without case sensitivity");
         }
+        std::vector<CustomActionDefinition> customActions;
+        ok &= Expect(database.LoadCustomActions(customActions) &&
+                     customActions.size() == 1 &&
+                     customActions[0].label == "Encrypted workflow" &&
+                     customActions[0].steps.size() == 1 &&
+                     customActions[0].steps[0].value == actionSecret + ": {{1}}" &&
+                     customActions[0].executableArguments.find(actionSecret) !=
+                         std::string::npos &&
+                     customActions[0].hotkeyEnabled &&
+                     customActions[0].hotkey.vkey == 'G',
+                     "custom action payload and hotkey round-trip");
+        if (!customActions.empty()) {
+            customActions[0].label = "Updated workflow";
+            customActions[0].toolbarOrder = 2;
+            customActions[0].enabled = false;
+            ok &= Expect(database.SaveCustomAction(customActions[0]),
+                         "custom action updates");
+            CustomActionDefinition duplicateAction = customActions[0];
+            duplicateAction.actionId = 0;
+            duplicateAction.label = "UPDATED WORKFLOW";
+            ok &= Expect(!database.SaveCustomAction(duplicateAction),
+                         "custom action labels are unique without case sensitivity");
+        }
         size_t vaultCount = 0;
         ok &= Expect(database.VaultCount(first.id, vaultCount) && vaultCount == 1,
                      "vault deduplicates by content hash");
@@ -439,6 +486,19 @@ int main(int argc, char** argv) {
         pasteTemplates.clear();
         ok &= Expect(database.LoadPasteTemplates(pasteTemplates) && pasteTemplates.empty(),
                      "paste template deletion persists");
+        customActions.clear();
+        ok &= Expect(database.LoadCustomActions(customActions) &&
+                     customActions.size() == 1 &&
+                     customActions[0].label == "Updated workflow" &&
+                     !customActions[0].enabled &&
+                     customActions[0].toolbarOrder == 2,
+                     "custom actions are independent of clipboard profiles");
+        if (!customActions.empty())
+            ok &= Expect(database.DeleteCustomAction(customActions[0].actionId),
+                         "custom action deletes");
+        customActions.clear();
+        ok &= Expect(database.LoadCustomActions(customActions) && customActions.empty(),
+                     "custom action deletion persists");
     }
 
     sqlite3* ordinary = nullptr;

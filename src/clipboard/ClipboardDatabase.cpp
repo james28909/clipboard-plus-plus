@@ -147,7 +147,18 @@ bool ClipboardDatabase::CreateSchema() {
         "updated_at INTEGER NOT NULL);"
         "CREATE INDEX IF NOT EXISTS idx_paste_templates_name "
         "ON paste_templates(name COLLATE NOCASE);"
-        "PRAGMA user_version=5;");
+        "CREATE TABLE IF NOT EXISTS custom_actions("
+        "action_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "label TEXT NOT NULL COLLATE NOCASE UNIQUE,"
+        "toolbar_order INTEGER NOT NULL DEFAULT 0,"
+        "enabled INTEGER NOT NULL DEFAULT 1,"
+        "placement INTEGER NOT NULL DEFAULT 0,"
+        "payload TEXT NOT NULL,"
+        "created_at INTEGER NOT NULL,"
+        "updated_at INTEGER NOT NULL);"
+        "CREATE INDEX IF NOT EXISTS idx_custom_actions_order "
+        "ON custom_actions(placement,toolbar_order,action_id);"
+        "PRAGMA user_version=6;");
 }
 
 bool ClipboardDatabase::Begin() { return Exec("BEGIN IMMEDIATE;"); }
@@ -658,6 +669,99 @@ bool ClipboardDatabase::DeletePasteTemplate(int64_t templateId) {
             -1, &statement, nullptr) != SQLITE_OK)
         return false;
     sqlite3_bind_int64(statement, 1, templateId);
+    const bool ok = sqlite3_step(statement) == SQLITE_DONE &&
+                    sqlite3_changes(m_db) == 1;
+    sqlite3_finalize(statement);
+    return ok;
+}
+
+bool ClipboardDatabase::LoadCustomActions(
+    std::vector<CustomActionDefinition>& actions) const {
+    actions.clear();
+    sqlite3_stmt* statement = nullptr;
+    if (!m_db || sqlite3_prepare_v2(m_db,
+            "SELECT action_id,label,toolbar_order,enabled,placement,payload,"
+            "created_at,updated_at FROM custom_actions "
+            "ORDER BY placement,toolbar_order,action_id;",
+            -1, &statement, nullptr) != SQLITE_OK)
+        return false;
+    bool ok = true;
+    int step = SQLITE_ROW;
+    while ((step = sqlite3_step(statement)) == SQLITE_ROW) {
+        CustomActionDefinition action;
+        std::string error;
+        if (!DeserializeCustomAction(ColumnText(statement, 5), action, &error)) {
+            ok = false;
+            break;
+        }
+        action.actionId = sqlite3_column_int64(statement, 0);
+        action.label = ColumnText(statement, 1);
+        action.toolbarOrder = sqlite3_column_int(statement, 2);
+        action.enabled = sqlite3_column_int(statement, 3) != 0;
+        action.placement = static_cast<CustomActionPlacement>(
+            std::clamp(sqlite3_column_int(statement, 4), 0, 1));
+        action.createdAtMs = sqlite3_column_int64(statement, 6);
+        action.updatedAtMs = sqlite3_column_int64(statement, 7);
+        actions.push_back(std::move(action));
+    }
+    if (step != SQLITE_DONE) ok = false;
+    sqlite3_finalize(statement);
+    if (!ok) actions.clear();
+    return ok;
+}
+
+bool ClipboardDatabase::SaveCustomAction(CustomActionDefinition& action) {
+    if (!m_db || !ValidateCustomAction(action).empty()) return false;
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string payload = SerializeCustomAction(action);
+    sqlite3_stmt* statement = nullptr;
+    if (action.actionId == 0) {
+        if (sqlite3_prepare_v2(m_db,
+                "INSERT INTO custom_actions(label,toolbar_order,enabled,placement,"
+                "payload,created_at,updated_at) VALUES(?,?,?,?,?,?,?);",
+                -1, &statement, nullptr) != SQLITE_OK)
+            return false;
+        BindText(statement, 1, action.label);
+        sqlite3_bind_int(statement, 2, action.toolbarOrder);
+        sqlite3_bind_int(statement, 3, action.enabled ? 1 : 0);
+        sqlite3_bind_int(statement, 4, static_cast<int>(action.placement));
+        BindText(statement, 5, payload);
+        sqlite3_bind_int64(statement, 6, now);
+        sqlite3_bind_int64(statement, 7, now);
+    } else {
+        if (sqlite3_prepare_v2(m_db,
+                "UPDATE custom_actions SET label=?,toolbar_order=?,enabled=?,"
+                "placement=?,payload=?,updated_at=? WHERE action_id=?;",
+                -1, &statement, nullptr) != SQLITE_OK)
+            return false;
+        BindText(statement, 1, action.label);
+        sqlite3_bind_int(statement, 2, action.toolbarOrder);
+        sqlite3_bind_int(statement, 3, action.enabled ? 1 : 0);
+        sqlite3_bind_int(statement, 4, static_cast<int>(action.placement));
+        BindText(statement, 5, payload);
+        sqlite3_bind_int64(statement, 6, now);
+        sqlite3_bind_int64(statement, 7, action.actionId);
+    }
+    const bool ok = sqlite3_step(statement) == SQLITE_DONE &&
+                    (action.actionId == 0 || sqlite3_changes(m_db) == 1);
+    sqlite3_finalize(statement);
+    if (!ok) return false;
+    if (action.actionId == 0) {
+        action.actionId = sqlite3_last_insert_rowid(m_db);
+        action.createdAtMs = now;
+    }
+    action.updatedAtMs = now;
+    return true;
+}
+
+bool ClipboardDatabase::DeleteCustomAction(int64_t actionId) {
+    sqlite3_stmt* statement = nullptr;
+    if (!m_db || actionId <= 0 || sqlite3_prepare_v2(m_db,
+            "DELETE FROM custom_actions WHERE action_id=?;",
+            -1, &statement, nullptr) != SQLITE_OK)
+        return false;
+    sqlite3_bind_int64(statement, 1, actionId);
     const bool ok = sqlite3_step(statement) == SQLITE_DONE &&
                     sqlite3_changes(m_db) == 1;
     sqlite3_finalize(statement);

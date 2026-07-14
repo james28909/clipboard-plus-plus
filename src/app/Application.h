@@ -118,6 +118,10 @@ public:
     std::vector<PasteTemplateDefinition> GetPasteTemplates() const;
     bool SavePasteTemplate(PasteTemplateDefinition& value);
     bool DeletePasteTemplate(int64_t templateId);
+    std::vector<CustomActionDefinition> GetCustomActions() const;
+    bool SaveCustomAction(CustomActionDefinition& action);
+    bool DeleteCustomAction(int64_t actionId);
+    bool ImportCustomAction(const std::string& payload, std::string* error = nullptr);
     bool CopyTextToClipboard(const std::string& text);
     bool IsStartWithWindowsEnabled() const;
     bool SetStartWithWindowsEnabled(bool enabled);
@@ -186,6 +190,7 @@ private:
     void AdvanceDeferredStartup();
     void InitializeImageStoreAndMonitor();
     void InvalidateDatabaseCaches();
+    void SyncCustomActionHotkeys();
     void SaveClipboardHistory(const std::string& profileId);
     void SaveActiveClipboardHistory();
     void AddScreenshotPair(ClipboardHistory* history,
@@ -242,9 +247,11 @@ private:
     mutable bool m_namedSlotsCached{false};
     mutable bool m_regexTransformsCached{false};
     mutable bool m_pasteTemplatesCached{false};
+    mutable bool m_customActionsCached{false};
     mutable std::vector<NamedClipboardSlot> m_namedSlotsCache;
     mutable std::vector<RegexTransformDefinition> m_regexTransformsCache;
     mutable std::vector<PasteTemplateDefinition> m_pasteTemplatesCache;
+    mutable std::vector<CustomActionDefinition> m_customActionsCache;
     enum class DeferredStartupPhase {
         AwaitFirstFrame,
         ProfileMetadata,

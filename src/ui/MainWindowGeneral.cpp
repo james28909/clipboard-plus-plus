@@ -267,6 +267,8 @@ void MainWindow::DrawPopupSettings() {
     }
     EndSettingsCard();
 
+    DrawCustomActions();
+
     if (BeginSettingsCard("##popup_related", "Related settings",
                           "Visual effects and keyboard routes stay with their dedicated owners.")) {
         SettingsLinkButton("Popup appearance", SettingsDestination::Appearance);

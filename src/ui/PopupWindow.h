@@ -4,6 +4,7 @@
 #include "../clipboard/ImageStore.h"
 #include "Appearance.h"
 #include "PopupSelectionModel.h"
+#include "../actions/CustomAction.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <string>
@@ -56,6 +57,7 @@ public:
     ClipboardHistory::MoveTarget GetPasteMoveTarget() const { return m_pasteMoveTarget; }
     void SetPasteMoveTarget(ClipboardHistory::MoveTarget target) { m_pasteMoveTarget = target; }
     void SetTheme(ThemeId theme) { m_appearance.theme = theme; }
+    bool RunCustomAction(int64_t actionId, HWND targetWindow = nullptr);
 
     // Configurable
     float m_opacity{0.95f};
@@ -112,6 +114,14 @@ private:
     bool DrawItemContextMenu(const ClipboardItem& item);
     void DrawTitleBar();
     void ClearThumbCache();
+    std::vector<uint64_t> ResolveCustomActionItemIds() const;
+    CustomActionContext BuildCustomActionContext(HWND targetWindow,
+                                                 bool readClipboard) const;
+    bool ExecutePreparedCustomAction(const CustomActionDefinition& action,
+                                     const CustomActionContext& context,
+                                     const CustomActionPreparation& prepared,
+                                     HWND targetWindow,
+                                     const std::vector<uint64_t>& itemIds);
 
     // -- Paste -----------------------------------------------------------------
     void PasteItemKeepOpen(const ClipboardItem& item);

@@ -49,6 +49,7 @@ public:
     bool MoveItemsByIdBefore(const std::vector<uint64_t>& ids, uint64_t beforeId);
     bool SetPinnedById(uint64_t id, bool pinned);
     bool SetPinnedByIdMany(const std::vector<uint64_t>& ids, bool pinned);
+    bool AddTagsByIdMany(const std::vector<uint64_t>& ids, uint32_t tags);
     bool SetImageSourceFileByHash(uint64_t contentHash,
                                   const std::string& sourceFilePath,
                                   const std::string& description);

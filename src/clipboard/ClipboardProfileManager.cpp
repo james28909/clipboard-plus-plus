@@ -321,6 +321,19 @@ bool ClipboardProfileManager::DeletePasteTemplate(int64_t templateId) {
     return m_database && m_database->DeletePasteTemplate(templateId);
 }
 
+bool ClipboardProfileManager::LoadCustomActions(
+    std::vector<CustomActionDefinition>& actions) const {
+    return m_database && m_database->LoadCustomActions(actions);
+}
+
+bool ClipboardProfileManager::SaveCustomAction(CustomActionDefinition& action) {
+    return m_database && m_database->SaveCustomAction(action);
+}
+
+bool ClipboardProfileManager::DeleteCustomAction(int64_t actionId) {
+    return m_database && m_database->DeleteCustomAction(actionId);
+}
+
 ClipboardHistory* ClipboardProfileManager::ActiveHistory() const {
     for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
         if (m_config.clipboards[i].id == m_config.activeClipboardId)

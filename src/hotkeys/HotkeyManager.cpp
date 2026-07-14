@@ -372,6 +372,7 @@ const char* HotkeyManager::ActionName(HotkeyAction action) {
     case HotkeyAction::PasteSelectedItems: return "Paste selected items";
     case HotkeyAction::ClearSelectedItems: return "Clear selected items";
     case HotkeyAction::PasteNamedSlot: return "Paste named slot";
+    case HotkeyAction::RunCustomAction: return "Run custom action";
     default:                            return "Unassigned";
     }
 }

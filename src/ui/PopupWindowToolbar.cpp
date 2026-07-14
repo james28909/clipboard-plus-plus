@@ -205,6 +205,9 @@ void PopupWindow::DrawFilterStrip() {
     const ImVec4 destinationLine = customLines ? m_appearance.popupDestinationBorder
                                                : effective.popupDestinationBorder;
     const PopupSettings popupSettings = app->GetPopupSettings();
+    const std::vector<CustomActionDefinition> customActions = app->GetCustomActions();
+    const CustomActionContext customActionContext =
+        BuildCustomActionContext(nullptr, false);
 
     std::vector<FilterEntry> filters;
     filters.reserve(std::size(kBuiltInFilters) + app->GetCustomFilters().size());
@@ -343,6 +346,20 @@ void PopupWindow::DrawFilterStrip() {
             }
         });
     }
+    for (const CustomActionDefinition& action : customActions) {
+        if (action.placement != CustomActionPlacement::Actions ||
+            !CustomActionMatches(action, customActionContext))
+            continue;
+        const std::string id = "custom_action_" + std::to_string(action.actionId);
+        const std::string label = action.icon.empty()
+            ? action.label : action.icon + " " + action.label;
+        const std::string tooltip = std::string(CustomActionInputName(action.input)) +
+            " -> " + CustomActionOutputName(action.output);
+        drawAction(id.c_str(), label.c_str(), false, tooltip.c_str(), -1,
+                   [&, actionId = action.actionId]() {
+                       RunCustomAction(actionId);
+                   });
+    }
     actionSection.End();
 
     auto toggleAndroid = [&]() {
@@ -390,6 +407,22 @@ void PopupWindow::DrawFilterStrip() {
         toggleSlots();
     }
     destinationRow.Added();
+    for (const CustomActionDefinition& action : customActions) {
+        if (action.placement != CustomActionPlacement::Destinations ||
+            !CustomActionMatches(action, customActionContext))
+            continue;
+        const std::string id = "custom_destination_" +
+            std::to_string(action.actionId);
+        const std::string label = action.icon.empty()
+            ? action.label : action.icon + " " + action.label;
+        const std::string tooltip = std::string(CustomActionInputName(action.input)) +
+            " -> " + CustomActionOutputName(action.output);
+        destinationRow.PlaceNext(ToolbarButtonWidth(label.c_str()));
+        if (ToolbarButton(id.c_str(), label.c_str(), false, colors,
+                          tooltip.c_str()))
+            RunCustomAction(action.actionId);
+        destinationRow.Added();
+    }
     destinationSection.End();
     ImGui::Spacing();
 }

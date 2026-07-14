@@ -384,19 +384,32 @@ void HelpTooltip(const char* text) {
         return;
 
     const UiSettings& ui = app->GetUiSettings();
-    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    static std::string activeHelp;
+    static ImVec2 activePosition{-1.0f, -1.0f};
+    static double hoveredAt = 0.0;
+    const ImVec2 position = ImGui::GetItemRectMin();
+    const bool sameItem = activeHelp == text &&
+        activePosition.x == position.x && activePosition.y == position.y;
+    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
+        if (sameItem) {
+            activeHelp.clear();
+            activePosition = {-1.0f, -1.0f};
+            hoveredAt = 0.0;
+        }
         return;
-
-    static ImGuiID activeItem = 0;
-    static double shownAt = 0.0;
-    const ImGuiID item = ImGui::GetItemID();
-    const double now = ImGui::GetTime();
-    if (item != activeItem) {
-        activeItem = item;
-        shownAt = now;
     }
+
+    const double now = ImGui::GetTime();
+    if (!sameItem) {
+        activeHelp = text;
+        activePosition = position;
+        hoveredAt = now;
+    }
+    const double delaySeconds = std::max(
+        0.0, static_cast<double>(ui.helperDelayMs) / 1000.0);
     const double maxSeconds = std::max(0.5, static_cast<double>(ui.helperDurationMs) / 1000.0);
-    if (now - shownAt <= maxSeconds)
+    const double elapsed = now - hoveredAt;
+    if (elapsed >= delaySeconds && elapsed <= delaySeconds + maxSeconds)
         ImGui::SetTooltip("%s", text);
 }
 

@@ -67,6 +67,7 @@ enum class HotkeyAction : WPARAM {
     PasteSelectedItems = 14,
     ClearSelectedItems = 15,
     PasteNamedSlot = 16,
+    RunCustomAction = 17,
 };
 
 enum class ModifierSide : uint8_t {

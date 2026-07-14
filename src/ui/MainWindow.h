@@ -19,6 +19,7 @@ private:
     static void DrawGeneral();
     static void DrawClipboard();
     static void DrawPopupSettings();
+    static void DrawCustomActions();
     static void DrawHotkeys();
     static void DrawAppearance();
     static void DrawHistory();

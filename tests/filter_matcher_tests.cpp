@@ -8,6 +8,7 @@
 #include "../src/clipboard/ClipboardHistory.h"
 #include "../src/clipboard/ClipboardWriteSuppression.h"
 #include "../src/app/StartupProfiler.h"
+#include "../src/actions/CustomAction.h"
 
 #include <filesystem>
 #include <fstream>
@@ -178,6 +179,99 @@ int main() {
             IsSelfGeneratedClipboardUpdate(false, true, 44, 42) &&
             !IsSelfGeneratedClipboardUpdate(false, false, 45, 42),
             "self-write suppression covers final, coalesced, and delayed token updates only");
+    }
+
+    {
+        CustomActionContext context;
+        context.selectedTexts = {" Doe, Jane ", " Smith, John "};
+        context.combinedTags = TAG_EMAIL | TAG_CODE;
+        context.allSelectedItemsAreText = true;
+        context.namedSlots = {{"email", "jane@example.com"}};
+        context.activeProfile = "Work";
+        context.searchText = "open tasks";
+        context.windowsClipboard = "clipboard value";
+        context.callingApplication = "chatgpt.exe";
+
+        CustomActionDefinition action;
+        action.label = "Build overview";
+        action.input = CustomActionInput::OrderedSelection;
+        action.visibility.applicationPattern = "chat*.exe";
+        action.output = CustomActionOutput::Copy;
+        CustomActionStep trim;
+        trim.type = CustomActionStepType::Trim;
+        action.steps.push_back(trim);
+        CustomActionStep regex;
+        regex.type = CustomActionStepType::Regex;
+        regex.value = R"(^([^,]+),\s*(.+)$)";
+        regex.replacement = "$2 $1";
+        action.steps.push_back(regex);
+        CustomActionStep join;
+        join.type = CustomActionStepType::Join;
+        join.value = " | ";
+        action.steps.push_back(join);
+        CustomActionStep pasteTemplateStep;
+        pasteTemplateStep.type = CustomActionStepType::Template;
+        pasteTemplateStep.value = "People: {{1}} / {{slot:email}}";
+        action.steps.push_back(pasteTemplateStep);
+
+        const CustomActionPreparation prepared = PrepareCustomAction(action, context);
+        ok &= Expect(CustomActionMatches(action, context) && prepared.ok &&
+                     prepared.output ==
+                         "People: Jane Doe | John Smith / jane@example.com",
+                     "custom action composes selection, regex, join, and template steps");
+
+        const std::string payload = SerializeCustomAction(action, true);
+        CustomActionDefinition restored;
+        std::string restoreError;
+        ok &= Expect(DeserializeCustomAction(payload, restored, &restoreError) &&
+                     restored.steps.size() == 4 &&
+                     restored.visibility.applicationPattern == "chat*.exe",
+                     "custom action JSON round-trip preserves encrypted payload fields");
+
+        action.output = CustomActionOutput::LaunchExecutable;
+        action.outputValue = R"(C:\Program Files\Tool\tool.exe)";
+        action.executableArguments = "--text {{text}} --profile {{profile}}";
+        const std::string expanded = ExpandCustomActionPlaceholders(
+            action.executableArguments, context, prepared.output, true);
+        ok &= Expect(expanded.find("\"People: Jane Doe") != std::string::npos &&
+                     expanded.find("--profile Work") != std::string::npos &&
+                     QuoteWindowsArgument(R"(a b\"c)") == R"("a b\\\"c")",
+                     "external action placeholders use Windows argument quoting");
+        ok &= Expect(ExpandCustomActionPlaceholders(
+                         "{{clipboard}}", context, prepared.output, false) ==
+                         "clipboard value",
+                     "external action clipboard placeholder expands explicitly");
+
+        action.timeoutMs = 50;
+        ok &= Expect(!ValidateCustomAction(action).empty(),
+                     "custom action rejects unsafe timeout bounds");
+        action.timeoutMs = 5000;
+        action.visibility.applicationPattern = "other*.exe";
+        ok &= Expect(!CustomActionMatches(action, context),
+                     "custom action application visibility is conditional");
+
+        action.visibility.applicationPattern.clear();
+        action.output = CustomActionOutput::Paste;
+        ok &= Expect(CustomActionUsesCallingApp(action.output) &&
+                     !CustomActionUsesCallingApp(CustomActionOutput::Copy) &&
+                     !CustomActionUsesCallingApp(CustomActionOutput::LaunchExecutable),
+                     "only paste output targets the captured calling application");
+
+        action.steps.clear();
+        CustomActionStep invalidRegex;
+        invalidRegex.type = CustomActionStepType::Regex;
+        invalidRegex.value = "(";
+        action.steps.push_back(invalidRegex);
+        const CustomActionPreparation failed = PrepareCustomAction(action, context);
+        ok &= Expect(!failed.ok && !failed.error.empty(),
+                     "invalid processing steps fail without producing an output");
+
+        CustomActionDefinition invalidImport;
+        std::string invalidImportError;
+        ok &= Expect(!DeserializeCustomAction("{not-json}", invalidImport,
+                                              &invalidImportError) &&
+                     !invalidImportError.empty(),
+                     "malformed plaintext action imports fail safely");
     }
 
     const StructuredFormatResult prettyJson = FormatStructuredText(
