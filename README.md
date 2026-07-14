@@ -54,7 +54,8 @@ Use the tray menu or `Ctrl+Shift+,` to open Settings. The General page includes 
 
 | Systray |  |
 |---|---|
-| [<img src="docs/images/Systray-Popup.png" alt="Systray" width="420">](docs/images/Systray-Popup.png) | |
+| [<img src="docs/images/Systray-Popup.png" alt="Systray" width="420">](docs/images/Systray-Popup.png) |  
+|
 
 </details>
 
