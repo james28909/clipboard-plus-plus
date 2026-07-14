@@ -45,7 +45,7 @@ void MainWindow::DrawAbout() {
     }
     ImGui::BeginGroup();
     ImGui::Text("Clipboard++");
-    ImGui::TextDisabled("Version 0.1.0  (Beta 6)");
+    ImGui::TextDisabled("Version 0.1.0  (Beta 7)");
     ImGui::Spacing();
     ImGui::TextWrapped(
         "A lean, modern Windows clipboard manager built with\n"
