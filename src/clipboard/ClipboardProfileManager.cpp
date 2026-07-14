@@ -5,6 +5,7 @@
 
 #include <windows.h>
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
@@ -35,17 +36,30 @@ ClipboardProfileManager::ClipboardProfileManager(
     SaveConfigCallback saveConfig,
     EventCallback addEvent,
     ForegroundProcessCallback foregroundProcess,
-    ActiveHistoryCallback activeHistoryChanged)
+    ActiveHistoryCallback activeHistoryChanged,
+    TimingCallback startupTiming)
     : m_config(config),
       m_saveConfig(std::move(saveConfig)),
       m_addEvent(std::move(addEvent)),
       m_foregroundProcess(std::move(foregroundProcess)),
-      m_activeHistoryChanged(std::move(activeHistoryChanged))
+      m_activeHistoryChanged(std::move(activeHistoryChanged)),
+      m_startupTiming(std::move(startupTiming))
 {}
 
 ClipboardProfileManager::~ClipboardProfileManager() = default;
 
 void ClipboardProfileManager::Rebuild() {
+    const auto rebuildStarted = std::chrono::steady_clock::now();
+    InitializeProfileMetadata();
+    LoadActiveHistory();
+    if (m_startupTiming) {
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - rebuildStarted).count();
+        m_startupTiming("profile manager rebuild total", ms);
+    }
+}
+
+bool ClipboardProfileManager::InitializeProfileMetadata() {
     m_persistenceErrors.clear();
     if (m_config.clipboards.empty()) {
         const std::string now = NowIsoLocal();
@@ -53,19 +67,33 @@ void ClipboardProfileManager::Rebuild() {
         m_config.activeClipboardId = "default";
     }
 
-    InitializeDatabase();
-
-    m_histories.clear();
-    m_histories.reserve(m_config.clipboards.size());
-    for (const ClipboardProfileConfig& profile : m_config.clipboards) {
-        auto history = std::make_unique<ClipboardHistory>(m_config.activeHistoryLimit);
-        history->SetNewItemsAtTop(m_config.newItemsAtTop);
-        history->SetDeduplicationEnabled(m_config.deduplicateHistory);
-        LoadAndConfigureHistory(profile.id, *history);
-        m_histories.push_back(std::move(history));
+    const auto databaseStarted = std::chrono::steady_clock::now();
+    const bool databaseReady = InitializeDatabase();
+    if (m_startupTiming) {
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - databaseStarted).count();
+        m_startupTiming("encrypted clipboard DB + profile metadata", ms);
     }
 
+    m_histories.clear();
+    m_histories.resize(m_config.clipboards.size());
+    return databaseReady;
+}
+
+bool ClipboardProfileManager::LoadActiveHistory() {
+    const auto started = std::chrono::steady_clock::now();
+    ClipboardHistory* history = EnsureHistoryLoaded(m_config.activeClipboardId);
+    if (m_startupTiming) {
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        m_startupTiming("active history deserialization", ms);
+    }
     NotifyActiveHistory();
+    return history != nullptr;
+}
+
+bool ClipboardProfileManager::IsHistoryLoaded(const std::string& profileId) const {
+    return LoadedHistoryForProfile(profileId) != nullptr;
 }
 
 void ClipboardProfileManager::SetNewItemsAtTop(bool value) {
@@ -107,18 +135,27 @@ bool ClipboardProfileManager::PromoteVaultItem(int64_t archiveId) {
     ClipboardHistory* history = ActiveHistory();
     if (!history) return false;
     history->Push(std::move(entry.item));
-    return m_database->DeleteVaultItem(m_config.activeClipboardId, archiveId);
+    const bool deleted = m_database->DeleteVaultItem(m_config.activeClipboardId, archiveId);
+    if (deleted) m_vaultCountCached = false;
+    return deleted;
 }
 
 bool ClipboardProfileManager::DeleteVaultItem(int64_t archiveId) {
-    return m_database &&
+    const bool deleted = m_database &&
         m_database->DeleteVaultItem(m_config.activeClipboardId, archiveId);
+    if (deleted) m_vaultCountCached = false;
+    return deleted;
 }
 
 size_t ClipboardProfileManager::VaultCount() const {
+    if (m_vaultCountCached && m_vaultCountProfileId == m_config.activeClipboardId)
+        return m_vaultCountCache;
     size_t count = 0;
-    if (m_database)
-        m_database->VaultCount(m_config.activeClipboardId, count);
+    if (m_database && m_database->VaultCount(m_config.activeClipboardId, count)) {
+        m_vaultCountProfileId = m_config.activeClipboardId;
+        m_vaultCountCache = count;
+        m_vaultCountCached = true;
+    }
     return count;
 }
 
@@ -127,6 +164,7 @@ void ClipboardProfileManager::ApplyVaultLimit() {
     const int64_t bytes = static_cast<int64_t>(m_config.vaultLimitMB) * 1024 * 1024;
     for (const auto& profile : m_config.clipboards)
         m_database->PruneVault(profile.id, bytes);
+    m_vaultCountCached = false;
 }
 
 std::unordered_set<std::string> ClipboardProfileManager::ReferencedImageIds() const {
@@ -185,6 +223,11 @@ ClipboardHistory* ClipboardProfileManager::ActiveHistory() const {
 }
 
 ClipboardHistory* ClipboardProfileManager::HistoryForProfile(
+    const std::string& profileId) {
+    return EnsureHistoryLoaded(profileId);
+}
+
+ClipboardHistory* ClipboardProfileManager::LoadedHistoryForProfile(
     const std::string& profileId) const {
     for (size_t i = 0; i < m_config.clipboards.size() && i < m_histories.size(); ++i) {
         if (m_config.clipboards[i].id == profileId)
@@ -215,6 +258,8 @@ void ClipboardProfileManager::SetActiveProfile(const std::string& id) {
     if (it == m_config.clipboards.end())
         return;
 
+    if (!EnsureHistoryLoaded(id))
+        return;
     m_config.activeClipboardId = id;
     if (m_database)
         m_database->SetActiveProfileId(id);
@@ -314,6 +359,7 @@ bool ClipboardProfileManager::DeleteActiveProfile() {
 
     const size_t nextIndex = std::min(index, m_config.clipboards.size() - 1);
     m_config.activeClipboardId = m_config.clipboards[nextIndex].id;
+    EnsureHistoryLoaded(m_config.activeClipboardId);
     if (m_database)
         m_database->SetActiveProfileId(m_config.activeClipboardId);
     NotifyActiveHistory();
@@ -369,6 +415,8 @@ void ClipboardProfileManager::SwitchForProcess(const std::string& processName) {
     if (!profile || profile->id == m_config.activeClipboardId)
         return;
 
+    if (!EnsureHistoryLoaded(profile->id))
+        return;
     m_config.activeClipboardId = profile->id;
     if (m_database)
         m_database->SetActiveProfileId(profile->id);
@@ -378,7 +426,7 @@ void ClipboardProfileManager::SwitchForProcess(const std::string& processName) {
 }
 
 void ClipboardProfileManager::SaveHistory(const std::string& profileId) const {
-    if (ClipboardHistory* history = HistoryForProfile(profileId)) {
+    if (ClipboardHistory* history = LoadedHistoryForProfile(profileId)) {
         if (m_database)
             m_database->SaveHistory(profileId, *history);
         else
@@ -414,7 +462,6 @@ void ClipboardProfileManager::LoadAndConfigureHistory(
             if (m_addEvent) m_addEvent(message);
             return;
         }
-        m_database->SaveHistory(profileId, history);
         history.SetChangedCallback([this, profileId]() { SaveHistory(profileId); });
         return;
     }
@@ -438,6 +485,23 @@ void ClipboardProfileManager::LoadAndConfigureHistory(
         m_addEvent("history loaded but encryption migration is still pending: " + profileId);
 }
 
+ClipboardHistory* ClipboardProfileManager::EnsureHistoryLoaded(
+    const std::string& profileId) {
+    for (size_t i = 0; i < m_config.clipboards.size(); ++i) {
+        if (m_config.clipboards[i].id != profileId)
+            continue;
+        if (!m_histories[i]) {
+            auto history = std::make_unique<ClipboardHistory>(m_config.activeHistoryLimit);
+            history->SetNewItemsAtTop(m_config.newItemsAtTop);
+            history->SetDeduplicationEnabled(m_config.deduplicateHistory);
+            LoadAndConfigureHistory(profileId, *history);
+            m_histories[i] = std::move(history);
+        }
+        return m_histories[i].get();
+    }
+    return nullptr;
+}
+
 void ClipboardProfileManager::ConfigureOverflow(
     const std::string& profileId, ClipboardHistory& history) {
     if (!m_database) return;
@@ -448,6 +512,7 @@ void ClipboardProfileManager::ConfigureOverflow(
             if (m_addEvent) m_addEvent(message);
             return;
         }
+        m_vaultCountCached = false;
         if (!m_config.vaultUnlimited) {
             const int64_t bytes = static_cast<int64_t>(m_config.vaultLimitMB) *
                                   1024 * 1024;
@@ -457,6 +522,7 @@ void ClipboardProfileManager::ConfigureOverflow(
 }
 
 bool ClipboardProfileManager::InitializeDatabase() {
+    m_database.reset();
     auto database = std::make_unique<ClipboardDatabase>();
     std::string error;
     if (!database->Open(ConfigStore::Directory() / "clipboard.db", &error)) {
@@ -471,6 +537,7 @@ bool ClipboardProfileManager::InitializeDatabase() {
         return false;
     }
 
+    bool migratedLegacyProfiles = false;
     if (storedProfiles.empty()) {
         if (m_config.profilesStoredInDatabase) {
             if (m_addEvent)
@@ -499,21 +566,23 @@ bool ClipboardProfileManager::InitializeDatabase() {
         }
         if (!database->LoadProfiles(storedProfiles) || storedProfiles.empty())
             return false;
+        migratedLegacyProfiles = true;
         if (m_addEvent)
             m_addEvent("migrated clipboard profiles and history to encrypted clipboard.db");
     }
 
-    // Do not make the database authoritative until every stored history payload
-    // can be parsed back into the in-memory model. The legacy files remain
-    // untouched, so a failed verification can still fall back safely.
-    for (const ClipboardProfileConfig& profile : storedProfiles) {
-        ClipboardHistory verified(kMaxClipboardHistoryItems);
-        bool found = false;
-        if (!database->LoadHistory(profile.id, verified, found) || !found) {
-            if (m_addEvent)
-                m_addEvent("clipboard database verification failed for profile: " +
-                           profile.id);
-            return false;
+    // Only a legacy migration needs an immediate full parse-back verification.
+    // Existing encrypted databases are loaded profile-by-profile on demand.
+    if (migratedLegacyProfiles) {
+        for (const ClipboardProfileConfig& profile : storedProfiles) {
+            ClipboardHistory verified(kMaxClipboardHistoryItems);
+            bool found = false;
+            if (!database->LoadHistory(profile.id, verified, found) || !found) {
+                if (m_addEvent)
+                    m_addEvent("clipboard database migration verification failed for profile: " +
+                               profile.id);
+                return false;
+            }
         }
     }
 

@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "ConfigStore.h"
+#include "StartupProfiler.h"
 #include "../android/AndroidIntegration.h"
 #include "../clipboard/ClipboardHistory.h"
 #include "../clipboard/ClipboardDatabase.h"
@@ -45,6 +46,13 @@ public:
     void ShowEditorPopup();
     void ToggleDebugWindow();
     void LogDebug(const std::string& event);
+    const std::vector<StartupTiming>& GetStartupTimings() const {
+        return m_startupProfiler.Timings();
+    }
+    const std::vector<StartupMetric>& GetStartupMetrics() const {
+        return m_startupProfiler.Metrics();
+    }
+    double GetStartupElapsedMs() const { return m_startupProfiler.ElapsedMs(); }
 
     static Application* Get()  { return s_instance; }
     HWND GetHwnd()             const { return m_hwnd; }
@@ -119,6 +127,7 @@ public:
     void SetPasteMoveTarget(ClipboardHistory::MoveTarget target);
     const std::vector<ClipboardProfileConfig>& GetClipboardProfiles() const;
     const ClipboardProfileConfig* GetActiveClipboardProfile() const;
+    bool IsClipboardProfileLoaded(const std::string& id) const;
     void SetActiveClipboardProfile(const std::string& id);
     void SelectClipboardProfileSlot(int slot);
     void CreateClipboardProfile(const std::string& name, const std::string& processName = {});
@@ -166,11 +175,14 @@ private:
     void ApplyAppearanceNow();
     void CommitAppearanceChange();
     bool HasRenderableUi() const;
-    void ApplyLoadedConfig(const AppConfig& config);
+    void ApplyLoadedConfig(const AppConfig& config, bool rebuildHistories = true);
     bool HandleClipboardTextCommand(const COPYDATASTRUCT& cds);
     bool HandleHistoryMutationCommand(const COPYDATASTRUCT& cds);
     bool LaunchExternalEditor();
     void RebuildClipboardHistories();
+    void AdvanceDeferredStartup();
+    void InitializeImageStoreAndMonitor();
+    void InvalidateDatabaseCaches();
     void SaveClipboardHistory(const std::string& profileId);
     void SaveActiveClipboardHistory();
     void AddScreenshotPair(ClipboardHistory* history,
@@ -181,7 +193,7 @@ private:
                                    ClipboardItem imageItem,
                                    bool newAtTop);
     void SwitchClipboardForProcess(const std::string& processName);
-    ClipboardHistory* HistoryForProfile(const std::string& profileId) const;
+    ClipboardHistory* HistoryForProfile(const std::string& profileId);
 
     bool CreateD3D();
     void DestroyD3D();
@@ -222,6 +234,24 @@ private:
     std::vector<std::string> m_developerEvents;
     std::string m_lastGeneratedPasteSource;
     std::string m_lastGeneratedPasteDestination;
+    StartupProfiler m_startupProfiler;
+    bool m_startupProfileComplete{false};
+    mutable bool m_namedSlotsCached{false};
+    mutable bool m_regexTransformsCached{false};
+    mutable bool m_pasteTemplatesCached{false};
+    mutable std::vector<NamedClipboardSlot> m_namedSlotsCache;
+    mutable std::vector<RegexTransformDefinition> m_regexTransformsCache;
+    mutable std::vector<PasteTemplateDefinition> m_pasteTemplatesCache;
+    enum class DeferredStartupPhase {
+        AwaitFirstFrame,
+        ProfileMetadata,
+        ActiveHistory,
+        ImageStoreAndMonitor,
+        AndroidIntegration,
+        Maintenance,
+        Complete
+    };
+    DeferredStartupPhase m_deferredStartupPhase{DeferredStartupPhase::AwaitFirstFrame};
 
     static Application* s_instance;
 };

@@ -51,6 +51,7 @@ set(APP_SOURCES
     src/app/ConfigStore.cpp
     src/app/IconPatcher.cpp
     src/app/StartupRegistration.cpp
+    src/app/StartupProfiler.cpp
     src/app/TrayIcon.cpp
     src/filters/CustomFilter.cpp
     src/transforms/RegexTransform.cpp
@@ -229,6 +230,7 @@ add_executable(filter_matcher_tests
     src/formatting/StructuredFormatter.cpp
     src/diff/TextDiff.cpp
     src/ui/GeneratedPaste.cpp
+    src/app/StartupProfiler.cpp
     src/clipboard/ClipboardItem.cpp
     src/clipboard/ClipboardHistory.cpp
     src/clipboard/ContentDetector.cpp

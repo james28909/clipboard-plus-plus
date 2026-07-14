@@ -7,8 +7,12 @@
 #include "../src/ui/GeneratedPaste.h"
 #include "../src/clipboard/ClipboardHistory.h"
 #include "../src/clipboard/ClipboardWriteSuppression.h"
+#include "../src/app/StartupProfiler.h"
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 
 namespace {
 
@@ -199,6 +203,27 @@ int main() {
                  diff[1].kind == DiffRowKind::Changed &&
                  diff[3].kind == DiffRowKind::RightOnly,
                  "line diff aligns equal, changed, and added rows");
+
+    {
+        StartupProfiler profiler;
+        profiler.RecordDuration("config load", 1.25);
+        profiler.RecordDuration("history deserialization", 7.5);
+        profiler.RecordMetric("profile count", "5");
+        const std::filesystem::path report =
+            std::filesystem::temp_directory_path() /
+            "clipboardpp-startup-profiler-test.log";
+        const bool written = profiler.WriteReport(report);
+        std::ifstream input(report, std::ios::binary);
+        std::ostringstream contents;
+        contents << input.rdbuf();
+        std::error_code removeError;
+        std::filesystem::remove(report, removeError);
+        ok &= Expect(written &&
+                     contents.str().find("config load\t1.250") != std::string::npos &&
+                     contents.str().find("history deserialization\t7.500") != std::string::npos &&
+                     contents.str().find("profile count\t5") != std::string::npos,
+                     "startup profiler writes deterministic stages and metrics");
+    }
 
     if (!ok)
         return 1;

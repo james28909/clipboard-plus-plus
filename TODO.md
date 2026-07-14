@@ -47,17 +47,17 @@
 - [x] Clarify template paste selection behavior: single-item paste keeps the concise label; multi-selection shows the selected count and explains that `{{1}}`, `{{2}}`, and later placeholders follow displayed selection order
 
 ## Startup and responsiveness (P0/P1)
-- [ ] Add timestamped startup profiling around config load, encrypted VFS/DPAPI key open, schema setup, profile metadata, history deserialization, image DB initialization, hotkeys, tray creation, and first rendered frame
-- [ ] Establish performance targets: tray/main shell visible in under 500 ms, popup usable with active history in under 1 second, remaining profiles hydrated without blocking UI
-- [ ] Split startup into a minimal foreground path and deferred work queue; create the window/tray/message loop before nonessential initialization
-- [ ] Load active profile history first; lazy-load inactive clipboard profiles when selected or hydrate them in a bounded background worker
-- [ ] Keep profile metadata available immediately so the profile selector can render while histories are still loading; show a small per-profile loading state
-- [ ] Lazy-initialize the image database/browser, thumbnail cache, Android integration, Developer tooling, and cleanup/pruning jobs only when needed
-- [ ] Cache named slots, regex transforms, templates, vault counts, and other encrypted DB lookups in memory with explicit version invalidation instead of querying during rendering
-- [ ] Measure history JSON serialization/deserialization cost; consider normalized SQLite rows or chunked/lazy payload decoding if it dominates startup
-- [ ] Move integrity checks, orphan-image cleanup, vault pruning, and noncritical migrations off the first-frame path where safe
-- [ ] Add a repeatable cold/warm startup benchmark and record profile count, item count, image count, DB size, and time-to-first-frame
-- [ ] Audit all background initialization for SQLite connection ownership, shutdown cancellation, and ImGui/main-thread boundaries
+- [x] Add timestamped startup profiling around config load, encrypted VFS/DPAPI/schema/profile/history work, image DB initialization, UI/services, hotkeys, tray creation, and first rendered frame; persist `startup_profile.log` and show it in Developer diagnostics
+- [x] Establish and document performance targets: tray/main shell under 500 ms, popup with active history under 1 second, inactive profiles off the first-frame path, and repeatable cold/warm evidence in `docs/STARTUP_PERFORMANCE.md`
+  - [x] Split startup into a minimal foreground path and deferred work queue; create the window/tray/message loop before nonessential initialization
+  - [x] Load active profile history first; lazy-load inactive clipboard profiles when selected or hydrate them in a bounded background worker
+  - [x] Keep profile metadata available immediately so the profile selector can render while histories are still loading; show a small per-profile loading state
+  - [x] Lazy-initialize the image database/browser, thumbnail cache, Android integration, Developer tooling, and cleanup/pruning jobs only when needed
+  - [x] Cache named slots, regex transforms, templates, vault counts, and other encrypted DB lookups in memory with explicit version invalidation instead of querying during rendering
+  - [x] Measure history JSON serialization/deserialization cost; consider normalized SQLite rows or chunked/lazy payload decoding if it dominates startup
+  - [x] Move integrity checks, orphan-image cleanup, vault pruning, and noncritical migrations off the first-frame path where safe
+  - [x] Add a repeatable cold/warm startup benchmark and record profile count, item count, image count, DB size, and time-to-first-frame
+  - [x] Audit all background initialization for SQLite connection ownership, shutdown cancellation, and ImGui/main-thread boundaries
 
 ## Settings information architecture (P1)
 - [ ] Inventory every setting and assign one clear owner; identify duplicates, misplaced controls, vague labels, and settings that belong beside the feature they affect
@@ -72,6 +72,18 @@
 - [ ] Add empty, loading, error, and disabled states with consistent wording and colors
 - [ ] Walk every settings page manually and capture before/after screenshots at 100%, 125%, 150%, and the minimum supported window size
 - [ ] Remove obsolete helper text and replace dense explanations with concise labels plus optional tooltips/details
+
+## Support and diagnostics (P1 / stable-release)
+- [ ] Add a user-facing **Support & diagnostics** Settings page or About sub-page; keep it available in Release builds and separate it from advanced Developer tooling
+- [ ] Add **Create support bundle**: collect app/build version, Windows version, relevant feature flags, sanitized configuration, database/VFS health and schema versions, recent app/debug logs, crash details, and non-sensitive performance counters into a ZIP
+- [ ] Make support bundles private by default: exclude clipboard contents, images, named-slot/template/transform values, encryption keys, DPAPI blobs, vault exports, tokens, usernames, and unnecessary file paths; redact remaining user/profile/process identifiers and include a manifest of every bundled file
+- [ ] Show a review-and-consent screen before bundle creation, with per-category inclusion toggles and warnings whenever a selected file could contain user data
+- [ ] Add **Copy bundle** using Windows file-drop clipboard data so the ZIP can be pasted into an upload control; also provide **Open containing folder** and automatic age-based cleanup of old bundles
+- [ ] Add an in-app issue composer for category, title, actual behavior, expected behavior, reproduction steps, optional GitHub username, and selectable public labels; generate consistent Markdown containing version/environment details and a reminder to attach the support ZIP
+- [ ] Add **Copy issue text** and **Open GitHub issue** actions that launch the repository's browser issue form with safe prefilled fields; never place the support ZIP contents, secrets, or authentication credentials in a URL
+- [ ] Add repository GitHub Issue Forms for bug reports, feature requests, and security-sensitive reports, with matching categories, required reproduction fields, supported labels, and private security-reporting guidance
+- [ ] Defer one-click direct submission until a proper GitHub App/OAuth device-flow design exists; never ask users to paste or store a personal access token in Clipboard++
+- [ ] Add tests for redaction, bundle manifests, clipboard file-drop copying, deterministic issue Markdown, URL length/encoding limits, cleanup, offline behavior, and failures while logs or databases are in use
 
 ## Popup toolbar and filter redesign (P1)
 - [ ] Redesign the top strip into visually distinct compact groups: content filters, actions/modes, destinations/integrations, and profile/search controls
@@ -92,3 +104,78 @@
 - [ ] Audit secrets: source-process display, incognito transitions, vault exports, logs, crash dumps, clipboard restoration, and temporary decrypted files
 - [ ] Add automated tests for physical-modifier hotkeys, double-tap routing, filtered slot positions, popup focus restoration, template/transform formatting, and format replay
 - [ ] Add a release-readiness checklist covering upgrade/migration, clean install, uninstall leftovers, shell integration, startup registration, signatures, version metadata, and all Debug/Release executables
+
+## Stable public release gate (1.0)
+
+This is a pass/fail acceptance checklist, not a feature wishlist. Remaining roadmap work may satisfy these requirements, but Clipboard++ must not be labeled stable until every release-blocking item is verified against the packaged release candidate.
+
+### Data safety and migration
+- [ ] Verify a clean installation creates usable encrypted clipboard and image databases with DPAPI-protected keys
+- [ ] Verify upgrade from every supported public beta preserves profiles, active history, pinned items, images, vault entries, named slots, templates, transforms, hotkeys, themes, and settings
+- [ ] Verify migration from legacy plaintext JSON/SQLite and DPAPI history formats; retain a recoverable original until the encrypted replacement is validated
+- [ ] Make migration, database, and key failures visible and actionable; never silently replace unreadable user data with an empty database
+- [ ] Complete and test encrypted backup and restore for both databases and their matching key sidecars
+- [ ] Verify interrupted capture, save, migration, backup, restore, and shutdown operations leave recoverable databases
+- [ ] Confirm temporary, rollback, migration, log, and crash files do not retain unintended plaintext clipboard content
+
+### Clipboard and paste correctness
+- [ ] Verify ordinary Windows copy/paste and clipboard history continue working normally while Clipboard++ is running, paused, incognito, excluded, or shutting down
+- [ ] Round-trip text, Unicode, HTML, RTF, files, folders, images, and every audited native-format replay path through representative destination applications
+- [ ] Verify popup, hidden, numbered, pinned, profile, named-slot, template, transform, formatted, multi-item, and paste-as routes target the correct foreground window
+- [ ] Verify generated pastes create one output, zero duplicate history entries, correct source/destination diagnostics, and no transient list disappearance
+- [ ] Verify focus restoration, outside-click hiding, search/filter slot positions, deduplication, secret handling, and process-based profile switching
+- [ ] Verify rapid clipboard bursts, delayed formats, clipboard contention, and applications that rewrite the clipboard do not lose or duplicate unrelated captures
+
+### Hotkeys and lifecycle
+- [ ] Test left/right Ctrl, Alt, and Shift individually and in mixed chords with `1-9`, `A-Z`, and `F1-F12`
+- [ ] Test popup, hidden-history, pinned, profile, named-slot, double-tap overlap, pass-through, and conflicting-binding behavior
+- [ ] Detect and clearly explain duplicate, impossible, reserved, or unavailable bindings
+- [ ] Verify hooks, listeners, tray state, hotkeys, and foreground tracking recover after restart, sleep/wake, lock/unlock, Explorer restart, and display changes
+- [ ] Verify clean shutdown cancels workers and closes hooks, listeners, Android services, SQLite connections, windows, and graphics resources
+
+### Reliability, recovery, and support
+- [ ] Add database/key corruption detection, safe recovery guidance, and a startup path that does not overwrite damaged data
+- [ ] Add actionable persistence and startup errors plus a safe diagnostic mode for failures before the Settings window is usable
+- [ ] Complete the privacy-reviewed Support & diagnostics workflow: redacted bundle, manifest/review, copy-as-file, issue text, and GitHub Issue Forms
+- [ ] Ensure logs and support bundles exclude clipboard payloads, secrets, encryption keys, DPAPI blobs, tokens, and identifying paths by default
+- [ ] Stress-test maximum active histories, many profiles, thousands of vault rows, large images, large HTML/RTF/native payloads, rapid capture, and repeated backup/restore
+- [ ] Resolve every crash, corruption, data-loss, security, startup-blocking, paste-targeting, and global-hotkey release blocker; explicitly classify all remaining issues as post-1.0
+
+### Performance acceptance
+- [ ] Instrument and record cold/warm startup stages, time to tray/shell, time to first popup, active-history hydration, memory, render time, and paste latency
+- [ ] On the agreed reference SSD, show the tray/application shell within 500 ms and make the popup usable with active history within 1 second
+- [ ] Load inactive profiles and optional subsystems without blocking the first usable frame
+- [ ] Keep popup opening, scrolling, filtering, searching, and slot pasting responsive at configured limits without unbounded memory growth
+- [ ] Record the reference hardware, Windows build, profile/item/image/vault counts, database sizes, and repeatable benchmark procedure
+
+### UI, accessibility, and compatibility
+- [ ] Complete the Settings information architecture and compact visual-consistency audit; no clipped, overlapping, mislabeled, or inaccessible controls remain
+- [ ] Test Settings, popup, inspectors, image browser, dialogs, scrolling, keyboard focus, empty/loading/error states, and custom fonts at minimum size and 100%, 125%, 150%, and 200% DPI
+- [ ] Test multiple monitors, mixed DPI, taskbar positions, fullscreen applications, display reconnects, and Windows theme changes
+- [ ] Verify supported Windows 10 and Windows 11 versions with common targets including Notepad, Explorer, browsers, Office, terminals, editors, and ChatGPT
+- [ ] Verify SQLite Editor, JSON Viewer, IDE, Android integration, shell registration, startup registration, tray icon, taskbar icon, and Alt+Tab behavior independently
+- [ ] Ensure optional Android/network failures never delay or disable the core Windows clipboard workflow
+
+### Security and privacy review
+- [ ] Verify clipboard DB, image DB, WAL, rollback journal, backups, and key sidecars have the documented encryption behavior and no known plaintext-page leakage
+- [ ] Confirm copied database/key pairs cannot be opened under an unrelated Windows user or computer and that modified key blobs fail safely
+- [ ] Audit incognito transitions, exclusions, source-process display, vault exports, logs, support bundles, crash dumps, clipboard restoration, and temporary decrypted files
+- [ ] Clearly distinguish encrypted backups from decrypted exports and require explicit warnings/confirmation for plaintext output
+- [ ] Document the threat model: at-rest encryption does not protect against software already running with the signed-in user's access
+- [ ] Decide whether 1.0 executables will be code-signed; document the decision and any expected SmartScreen/antivirus behavior
+
+### Build, package, and release verification
+- [ ] Build every target from a clean checkout in Release and Debug and run every automated test suite
+- [ ] Test the actual downloaded/staged archives on a clean environment rather than relying only on build-directory executables
+- [ ] Verify `VERSION`, About, executable resources, README, Git tag, release title, and release notes all report the same version
+- [ ] Verify release/debug archives contain the intended executables, runtime files, PDBs, fonts, Android APK, licenses, and no private development artifacts
+- [ ] Generate and publish SHA-256 checksums for every release asset
+- [ ] Scan packaged artifacts for malware/false positives and document any known antivirus findings
+- [ ] Publish complete release notes covering changes, migration, backup guidance, security model, known limitations, and rollback/recovery information
+
+### Documentation and release-candidate approval
+- [ ] Document installation, first use, hotkeys, profiles, storage, encryption, backup/restore, diagnostics, troubleshooting, update, portable use, and complete data removal
+- [ ] Publish a known-issues list and support/reporting instructions appropriate for nontechnical users
+- [ ] Complete a written manual smoke-test checklist using the exact packaged candidate artifacts
+- [ ] Publish `1.0.0-rc.1` (and later RCs if needed), use the packaged build under normal workloads, and allow an agreed soak period with no unresolved release blockers
+- [ ] Obtain final owner approval that the release candidate satisfies every gate above before tagging and publishing `1.0.0`

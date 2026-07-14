@@ -724,6 +724,8 @@ void PopupWindow::DrawTitleBar() {
             std::string displayLabel = profile.name;
             if (!profile.processName.empty())
                 displayLabel += " (" + profile.processName + ")";
+            if (!app->IsClipboardProfileLoaded(profile.id))
+                displayLabel += "  [loads on selection]";
             const std::string selectableId = displayLabel + "##prof_" + profile.id;
 
             if (ImGui::Selectable(selectableId.c_str(), selected)) {

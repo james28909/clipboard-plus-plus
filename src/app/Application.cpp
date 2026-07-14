@@ -8,6 +8,7 @@
 #include "../ui/TextEditorWindow.h"
 #include "../ui/DebugWindow.h"
 #include "../clipboard/ClipboardHistory.h"
+#include "../clipboard/ClipboardHistoryStore.h"
 #include "../clipboard/ClipboardMonitor.h"
 #include "../clipboard/ContentDetector.h"
 #include "../clipboard/ImageStore.h"
@@ -339,8 +340,15 @@ void Application::ShowPopup() {
 }
 
 void Application::ShowTrayPopup() {
-    if (m_trayPopup)
-        m_trayPopup->ShowAtCursor();
+    if (!m_trayPopup) {
+        m_trayPopup = std::make_unique<TrayPopupWindow>();
+        if (!m_trayPopup->Create(m_hInstance, m_d3dDevice, m_d3dContext)) {
+            m_trayPopup.reset();
+            return;
+        }
+        m_trayPopup->ApplyAppearance(m_appearance);
+    }
+    m_trayPopup->ShowAtCursor();
 }
 
 void Application::ShowEditorPopup() {
@@ -351,8 +359,16 @@ void Application::ShowEditorPopup() {
             return;
         LogDebug("ShowEditorPopup: external editor launch failed; falling back to built-in editor");
     }
-    if (m_editor)
-        m_editor->Show();
+    if (!m_editor) {
+        m_editor = std::make_unique<TextEditorWindow>();
+        if (!m_editor->Create(m_hInstance, m_d3dDevice, m_d3dContext)) {
+            m_editor.reset();
+            return;
+        }
+        m_editor->ApplyAppearance(m_appearance);
+        m_editor->ApplySettings(m_config.editor);
+    }
+    m_editor->Show();
 }
 
 bool Application::LaunchExternalEditor() {
@@ -439,8 +455,15 @@ bool Application::LaunchExternalEditor() {
 }
 
 void Application::ToggleDebugWindow() {
-    if (!m_debugWindow)
-        return;
+    if (!m_debugWindow) {
+        m_debugWindow = std::make_unique<DebugWindow>();
+        if (!m_debugWindow->Create(m_hInstance, m_d3dDevice, m_d3dContext)) {
+            m_debugWindow.reset();
+            return;
+        }
+        m_debugWindow->ApplyAppearance(m_appearance);
+        LogDebug("debug window initialized on demand");
+    }
 
     m_debugWindow->Toggle();
     LogDebug(std::string("debug window ") +
@@ -653,19 +676,25 @@ bool Application::DeleteVaultItem(int64_t archiveId) {
 }
 
 std::vector<NamedClipboardSlot> Application::GetNamedSlots() const {
-    std::vector<NamedClipboardSlot> slots;
-    if (m_clipboardProfiles)
-        m_clipboardProfiles->LoadNamedSlots(slots);
-    return slots;
+    if (!m_namedSlotsCached) {
+        m_namedSlotsCache.clear();
+        if (m_clipboardProfiles &&
+            m_clipboardProfiles->LoadNamedSlots(m_namedSlotsCache))
+            m_namedSlotsCached = true;
+    }
+    return m_namedSlotsCache;
 }
 
 bool Application::SaveNamedSlot(NamedClipboardSlot& slot) {
-    return m_clipboardProfiles && m_clipboardProfiles->SaveNamedSlot(slot);
+    const bool saved = m_clipboardProfiles && m_clipboardProfiles->SaveNamedSlot(slot);
+    if (saved) m_namedSlotsCached = false;
+    return saved;
 }
 
 bool Application::DeleteNamedSlot(int64_t slotId) {
     if (!m_clipboardProfiles || !m_clipboardProfiles->DeleteNamedSlot(slotId))
         return false;
+    m_namedSlotsCached = false;
     m_config.hotkeys.bindings.erase(std::remove_if(
         m_config.hotkeys.bindings.begin(), m_config.hotkeys.bindings.end(),
         [&](const KeyBinding& binding) {
@@ -677,34 +706,51 @@ bool Application::DeleteNamedSlot(int64_t slotId) {
 }
 
 std::vector<RegexTransformDefinition> Application::GetRegexTransforms() const {
-    std::vector<RegexTransformDefinition> transforms;
-    if (m_clipboardProfiles)
-        m_clipboardProfiles->LoadRegexTransforms(transforms);
-    return transforms;
+    if (!m_regexTransformsCached) {
+        m_regexTransformsCache.clear();
+        if (m_clipboardProfiles &&
+            m_clipboardProfiles->LoadRegexTransforms(m_regexTransformsCache))
+            m_regexTransformsCached = true;
+    }
+    return m_regexTransformsCache;
 }
 
 bool Application::SaveRegexTransform(RegexTransformDefinition& transform) {
-    return m_clipboardProfiles && m_clipboardProfiles->SaveRegexTransform(transform);
+    const bool saved = m_clipboardProfiles &&
+        m_clipboardProfiles->SaveRegexTransform(transform);
+    if (saved) m_regexTransformsCached = false;
+    return saved;
 }
 
 bool Application::DeleteRegexTransform(int64_t transformId) {
-    return m_clipboardProfiles &&
-           m_clipboardProfiles->DeleteRegexTransform(transformId);
+    const bool deleted = m_clipboardProfiles &&
+        m_clipboardProfiles->DeleteRegexTransform(transformId);
+    if (deleted) m_regexTransformsCached = false;
+    return deleted;
 }
 
 std::vector<PasteTemplateDefinition> Application::GetPasteTemplates() const {
-    std::vector<PasteTemplateDefinition> templates;
-    if (m_clipboardProfiles)
-        m_clipboardProfiles->LoadPasteTemplates(templates);
-    return templates;
+    if (!m_pasteTemplatesCached) {
+        m_pasteTemplatesCache.clear();
+        if (m_clipboardProfiles &&
+            m_clipboardProfiles->LoadPasteTemplates(m_pasteTemplatesCache))
+            m_pasteTemplatesCached = true;
+    }
+    return m_pasteTemplatesCache;
 }
 
 bool Application::SavePasteTemplate(PasteTemplateDefinition& value) {
-    return m_clipboardProfiles && m_clipboardProfiles->SavePasteTemplate(value);
+    const bool saved = m_clipboardProfiles &&
+        m_clipboardProfiles->SavePasteTemplate(value);
+    if (saved) m_pasteTemplatesCached = false;
+    return saved;
 }
 
 bool Application::DeletePasteTemplate(int64_t templateId) {
-    return m_clipboardProfiles && m_clipboardProfiles->DeletePasteTemplate(templateId);
+    const bool deleted = m_clipboardProfiles &&
+        m_clipboardProfiles->DeletePasteTemplate(templateId);
+    if (deleted) m_pasteTemplatesCached = false;
+    return deleted;
 }
 
 bool Application::CopyTextToClipboard(const std::string& text) {
@@ -761,6 +807,10 @@ void Application::SetPasteMoveTarget(ClipboardHistory::MoveTarget target) {
 
 const ClipboardProfileConfig* Application::GetActiveClipboardProfile() const {
     return m_clipboardProfiles ? m_clipboardProfiles->ActiveProfile() : nullptr;
+}
+
+bool Application::IsClipboardProfileLoaded(const std::string& id) const {
+    return m_clipboardProfiles && m_clipboardProfiles->IsHistoryLoaded(id);
 }
 
 const std::vector<ClipboardProfileConfig>& Application::GetClipboardProfiles() const {
@@ -930,7 +980,7 @@ void Application::ScheduleScreenshotPairAdd(ClipboardHistory* history,
     }).detach();
 }
 
-void Application::ApplyLoadedConfig(const AppConfig& config) {
+void Application::ApplyLoadedConfig(const AppConfig& config, bool rebuildHistories) {
     m_config = config;
     if (!m_clipboardProfiles) {
         m_clipboardProfiles = std::make_unique<ClipboardProfileManager>(
@@ -938,7 +988,10 @@ void Application::ApplyLoadedConfig(const AppConfig& config) {
             [this]() { SaveConfig(); },
             [this](const std::string& event) { AddDeveloperEvent(event); },
             [this]() { return ForegroundProcessName(); },
-            [this](ClipboardHistory* history) { m_history = history; });
+            [this](ClipboardHistory* history) { m_history = history; },
+            [this](const std::string& name, double durationMs) {
+                m_startupProfiler.RecordDuration(name, durationMs);
+            });
     }
     if (m_androidIntegration)
         m_androidIntegration->SetDeviceEndpoint(m_config.android.deviceEndpoint);
@@ -947,7 +1000,8 @@ void Application::ApplyLoadedConfig(const AppConfig& config) {
     m_appearance.dpiScale = win32util::DpiScaleForWindow(m_hwnd);
     m_hotkeySettings = m_config.hotkeys;
     m_appearanceDirty = true;
-    RebuildClipboardHistories();
+    if (rebuildHistories)
+        RebuildClipboardHistories();
 
     if (m_history)
         m_history->SetNewItemsAtTop(m_config.newItemsAtTop);
@@ -1060,11 +1114,22 @@ void Application::SyncClipboardForWindow(HWND hwnd) {
 }
 
 void Application::RebuildClipboardHistories() {
-    if (m_clipboardProfiles)
+    if (m_clipboardProfiles) {
         m_clipboardProfiles->Rebuild();
+        InvalidateDatabaseCaches();
+    }
 }
 
-ClipboardHistory* Application::HistoryForProfile(const std::string& profileId) const {
+void Application::InvalidateDatabaseCaches() {
+    m_namedSlotsCached = false;
+    m_regexTransformsCached = false;
+    m_pasteTemplatesCached = false;
+    m_namedSlotsCache.clear();
+    m_regexTransformsCache.clear();
+    m_pasteTemplatesCache.clear();
+}
+
+ClipboardHistory* Application::HistoryForProfile(const std::string& profileId) {
     return m_clipboardProfiles
         ? m_clipboardProfiles->HistoryForProfile(profileId)
         : nullptr;
@@ -1189,9 +1254,15 @@ bool Application::HandleHistoryMutationCommand(const COPYDATASTRUCT& cds) {
 // -- Private: initialisation ---------------------------------------------------
 
 bool Application::Init() {
-    ApplyLoadedConfig(ConfigStore::Load());
+    auto stageStarted = m_startupProfiler.BeginStage();
+    AppConfig loadedConfig = ConfigStore::Load();
+    m_startupProfiler.FinishStage("config load", stageStarted);
 
+    stageStarted = m_startupProfiler.BeginStage();
+    ApplyLoadedConfig(loadedConfig, false);
+    m_startupProfiler.FinishStage("config apply (storage deferred)", stageStarted);
 
+    stageStarted = m_startupProfiler.BeginStage();
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(WNDCLASSEXW);
     wc.style         = CS_CLASSDC;
@@ -1238,14 +1309,18 @@ bool Application::Init() {
     const COLORREF noBorder = DWMWA_COLOR_NONE;
     DwmSetWindowAttribute(m_hwnd, DWMWA_BORDER_COLOR,
                           &noBorder, sizeof(noBorder));
+    m_startupProfiler.FinishStage("main window class + HWND", stageStarted);
 
+    stageStarted = m_startupProfiler.BeginStage();
     if (!CreateD3D()) {
         DestroyD3D();
         UnregisterClassW(L"ClipboardPlusPlus_Main", m_hInstance);
         return false;
     }
+    m_startupProfiler.FinishStage("Direct3D device + swap chain", stageStarted);
 
     // ImGui context
+    stageStarted = m_startupProfiler.BeginStage();
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -1259,22 +1334,139 @@ bool Application::Init() {
     ImGui_ImplDX11_Init(m_d3dDevice, m_d3dContext);
 
     RebuildFontAtlas(io, m_appearance);
+    m_startupProfiler.FinishStage("ImGui context + font atlas", stageStarted);
 
+    stageStarted = m_startupProfiler.BeginStage();
     m_tray = std::make_unique<TrayIcon>(m_hwnd, m_hInstance);
     if (!m_tray->Create()) return false;
+    m_startupProfiler.FinishStage("tray icon creation", stageStarted);
 
-    // Image store
-    m_imageStore = std::make_unique<ImageStore>();
-    m_imageStore->Open(ConfigStore::Directory() / "images.db");
-    m_imageStore->SetSettings(m_config.images);
+    stageStarted = m_startupProfiler.BeginStage();
+    m_popup = std::make_unique<PopupWindow>();
+    if (!m_popup->Create(m_hInstance, m_d3dDevice, m_d3dContext))
+        return false;
+    m_popup->ApplyAppearance(m_appearance);
+    m_popup->SetAppendNewlineAfterPaste(m_config.appendNewlineAfterPaste);
+    m_popup->SetPasteMoveTarget(GetPasteMoveTarget());
+    m_startupProfiler.FinishStage("quick-paste popup creation", stageStarted);
 
-    // Clipboard histories + monitor
-    RebuildClipboardHistories();
-    m_imageStore->SetProtectedImageIdsProvider([this]() {
-        return m_clipboardProfiles
-            ? m_clipboardProfiles->ReferencedImageIds()
-            : std::unordered_set<std::string>{};
-    });
+    stageStarted = m_startupProfiler.BeginStage();
+    m_hotkeys = std::make_unique<HotkeyManager>();
+    m_hotkeys->Install(m_hwnd);
+    m_hotkeys->ApplySettings(m_hotkeySettings);
+    m_startupProfiler.FinishStage("global hotkey installation", stageStarted);
+
+    // TODO (Milestone 5): only show on first launch
+    stageStarted = m_startupProfiler.BeginStage();
+    ShowMainWindow();
+    m_startupProfiler.FinishStage("show main window", stageStarted);
+
+    // The initial atlas already reflects the loaded appearance. Avoid rebuilding
+    // it again in the first frame; only later user changes mark appearance dirty.
+    ImGui::GetStyle().HoverDelayShort =
+        static_cast<float>(std::clamp(m_config.ui.helperDelayMs, 0, 5000)) / 1000.0f;
+    ImGui::GetStyle().HoverDelayNormal = ImGui::GetStyle().HoverDelayShort;
+    if (m_tray)
+        m_tray->ApplyTheme(m_appearance);
+    m_appearanceDirty = false;
+
+    m_running = true;
+    return true;
+}
+
+void Application::AdvanceDeferredStartup() {
+    const auto started = m_startupProfiler.BeginStage();
+    switch (m_deferredStartupPhase) {
+    case DeferredStartupPhase::ProfileMetadata:
+        if (m_clipboardProfiles)
+            m_clipboardProfiles->InitializeProfileMetadata();
+        InvalidateDatabaseCaches();
+        m_startupProfiler.FinishStage("deferred profile metadata", started);
+        m_deferredStartupPhase = DeferredStartupPhase::ActiveHistory;
+        break;
+    case DeferredStartupPhase::ActiveHistory:
+        if (m_clipboardProfiles)
+            m_clipboardProfiles->LoadActiveHistory();
+        m_startupProfiler.FinishStage("deferred active profile hydration", started);
+        m_deferredStartupPhase = DeferredStartupPhase::ImageStoreAndMonitor;
+        break;
+    case DeferredStartupPhase::ImageStoreAndMonitor:
+        InitializeImageStoreAndMonitor();
+        m_startupProfiler.FinishStage("deferred images + clipboard listener", started);
+        m_deferredStartupPhase = DeferredStartupPhase::AndroidIntegration;
+        break;
+    case DeferredStartupPhase::AndroidIntegration:
+        if (m_androidIntegration && m_androidIntegration->StartServer())
+            LogDebug("Android sync server listening on port 8766");
+        else
+            LogDebug("Android sync server failed to start on port 8766");
+        m_startupProfiler.FinishStage("deferred Android integration", started);
+        m_deferredStartupPhase = DeferredStartupPhase::Maintenance;
+        break;
+    case DeferredStartupPhase::Maintenance:
+        if (m_clipboardProfiles)
+            m_clipboardProfiles->ApplyVaultLimit();
+        m_startupProfiler.RecordMetric(
+            "profile count", std::to_string(m_config.clipboards.size()));
+        m_startupProfiler.RecordMetric(
+            "active history item count",
+            std::to_string(m_history ? m_history->Size() : 0));
+        if (m_history) {
+            const auto serializeStarted = m_startupProfiler.BeginStage();
+            const std::string payload = ClipboardHistoryStore::Serialize(
+                m_config.activeClipboardId, *m_history);
+            m_startupProfiler.FinishStage(
+                "active history JSON serialization benchmark", serializeStarted);
+            m_startupProfiler.RecordMetric(
+                "active history JSON bytes", std::to_string(payload.size()));
+        }
+        {
+            std::error_code error;
+            const auto clipboardDb = ConfigStore::Directory() / "clipboard.db";
+            const auto imageDb = ConfigStore::Directory() / "images.db";
+            const uintmax_t clipboardDbBytes =
+                std::filesystem::file_size(clipboardDb, error);
+            m_startupProfiler.RecordMetric(
+                "clipboard.db bytes",
+                error ? "unavailable" : std::to_string(clipboardDbBytes));
+            error.clear();
+            const uintmax_t imageDbBytes =
+                std::filesystem::file_size(imageDb, error);
+            m_startupProfiler.RecordMetric(
+                "images.db bytes",
+                error ? "unavailable" : std::to_string(imageDbBytes));
+        }
+        if (m_imageStore)
+            m_startupProfiler.RecordMetric(
+                "image count", std::to_string(m_imageStore->ListAll().size()));
+        m_startupProfiler.RecordMetric(
+            "active vault item count", std::to_string(GetVaultCount()));
+        m_startupProfiler.FinishStage("deferred vault pruning", started);
+        m_deferredStartupPhase = DeferredStartupPhase::Complete;
+        m_startupProfiler.WriteReport(
+            ConfigStore::Directory() / "startup_profile.log");
+        LogDebug("Deferred startup complete");
+        break;
+    case DeferredStartupPhase::AwaitFirstFrame:
+    case DeferredStartupPhase::Complete:
+        break;
+    }
+}
+
+void Application::InitializeImageStoreAndMonitor() {
+    if (!m_imageStore) {
+        m_imageStore = std::make_unique<ImageStore>();
+        m_imageStore->Open(ConfigStore::Directory() / "images.db");
+        m_imageStore->SetSettings(m_config.images);
+        m_imageStore->SetProtectedImageIdsProvider([this]() {
+            return m_clipboardProfiles
+                ? m_clipboardProfiles->ReferencedImageIds()
+                : std::unordered_set<std::string>{};
+        });
+    }
+    if (m_monitor)
+        return;
+
     m_monitor = std::make_unique<ClipboardMonitor>();
     m_monitor->SetImageStore(m_imageStore.get());
     m_monitor->SetProfileIdGetter([this]() -> std::string {
@@ -1286,96 +1478,58 @@ bool Application::Init() {
         if (!item.sourceProcess.empty())
             m_lastForegroundProcess = item.sourceProcess;
         SwitchClipboardForProcess(item.sourceProcess);
-        if (m_history) {
-            const std::string source = item.sourceProcess.empty() ? "unknown" : item.sourceProcess;
-            const std::string preview = item.Preview(80);
-            AddDeveloperEvent("captured " + std::string(ContentTypeName(item.type)) +
-                              " from " + source +
-                              " tags=" + Hex32(item.tags) +
-                              " preview=\"" + preview + "\"");
+        if (!m_history)
+            return;
 
-            ClipboardHistory* routeHistory = nullptr;
-            std::string routeProfileId;
-            std::string routeName;
-            bool routeMove = false;
-            for (const CustomFilter& filter : m_config.customFilters) {
-                if (!filter.enabled || !filter.routeToProfile || filter.routeProfileId.empty())
-                    continue;
-                if (!CustomFilterMatches(filter, item))
-                    continue;
-                routeHistory = HistoryForProfile(filter.routeProfileId);
-                if (!routeHistory)
-                    continue;
-                routeProfileId = filter.routeProfileId;
-                routeName = filter.name;
-                routeMove = filter.routeMove;
-                break;
-            }
+        const std::string source = item.sourceProcess.empty() ? "unknown" : item.sourceProcess;
+        const std::string preview = item.Preview(80);
+        AddDeveloperEvent("captured " + std::string(ContentTypeName(item.type)) +
+                          " from " + source +
+                          " tags=" + Hex32(item.tags) +
+                          " preview=\"" + preview + "\"");
 
-            const bool screenshotNeedsPair =
-                item.type == ContentType::Image &&
-                item.sourceKind == "screenshot" &&
-                item.sourcePixelHash != 0;
-            if (screenshotNeedsPair) {
-                if (routeHistory) {
-                    ScheduleScreenshotPairAdd(routeHistory, item, m_config.newItemsAtTop);
-                    AddDeveloperEvent("routed screenshot by filter \"" + routeName +
-                                      "\" to profile " + routeProfileId +
-                                      (routeMove ? " (move)" : " (copy)"));
-                }
-                if (!routeHistory || (!routeMove && routeHistory != m_history))
-                    ScheduleScreenshotPairAdd(m_history, std::move(item), m_config.newItemsAtTop);
-            } else {
-                if (routeHistory) {
-                    routeHistory->Push(item);
-                    AddDeveloperEvent("routed item by filter \"" + routeName +
-                                      "\" to profile " + routeProfileId +
-                                      (routeMove ? " (move)" : " (copy)"));
-                }
-                if (!routeHistory || (!routeMove && routeHistory != m_history))
-                    m_history->Push(std::move(item));
+        ClipboardHistory* routeHistory = nullptr;
+        std::string routeProfileId;
+        std::string routeName;
+        bool routeMove = false;
+        for (const CustomFilter& filter : m_config.customFilters) {
+            if (!filter.enabled || !filter.routeToProfile || filter.routeProfileId.empty())
+                continue;
+            if (!CustomFilterMatches(filter, item))
+                continue;
+            routeHistory = HistoryForProfile(filter.routeProfileId);
+            if (!routeHistory)
+                continue;
+            routeProfileId = filter.routeProfileId;
+            routeName = filter.name;
+            routeMove = filter.routeMove;
+            break;
+        }
+
+        const bool screenshotNeedsPair =
+            item.type == ContentType::Image &&
+            item.sourceKind == "screenshot" &&
+            item.sourcePixelHash != 0;
+        if (screenshotNeedsPair) {
+            if (routeHistory) {
+                ScheduleScreenshotPairAdd(routeHistory, item, m_config.newItemsAtTop);
+                AddDeveloperEvent("routed screenshot by filter \"" + routeName +
+                                  "\" to profile " + routeProfileId +
+                                  (routeMove ? " (move)" : " (copy)"));
             }
+            if (!routeHistory || (!routeMove && routeHistory != m_history))
+                ScheduleScreenshotPairAdd(m_history, std::move(item), m_config.newItemsAtTop);
+        } else {
+            if (routeHistory) {
+                routeHistory->Push(item);
+                AddDeveloperEvent("routed item by filter \"" + routeName +
+                                  "\" to profile " + routeProfileId +
+                                  (routeMove ? " (move)" : " (copy)"));
+            }
+            if (!routeHistory || (!routeMove && routeHistory != m_history))
+                m_history->Push(std::move(item));
         }
     });
-
-    m_popup = std::make_unique<PopupWindow>();
-    if (!m_popup->Create(m_hInstance, m_d3dDevice, m_d3dContext))
-        return false;
-    m_popup->ApplyAppearance(m_appearance);
-    m_popup->SetAppendNewlineAfterPaste(m_config.appendNewlineAfterPaste);
-    m_popup->SetPasteMoveTarget(GetPasteMoveTarget());
-
-    m_trayPopup = std::make_unique<TrayPopupWindow>();
-    if (!m_trayPopup->Create(m_hInstance, m_d3dDevice, m_d3dContext))
-        return false;
-    m_trayPopup->ApplyAppearance(m_appearance);
-
-    m_editor = std::make_unique<TextEditorWindow>();
-    if (!m_editor->Create(m_hInstance, m_d3dDevice, m_d3dContext))
-        return false;
-    m_editor->ApplyAppearance(m_appearance);
-    m_editor->ApplySettings(m_config.editor);
-
-    m_debugWindow = std::make_unique<DebugWindow>();
-    if (!m_debugWindow->Create(m_hInstance, m_d3dDevice, m_d3dContext))
-        return false;
-    m_debugWindow->ApplyAppearance(m_appearance);
-    LogDebug("debug window initialized; toggle with Alt+Shift+D");
-
-    m_hotkeys = std::make_unique<HotkeyManager>();
-    m_hotkeys->Install(m_hwnd);
-    m_hotkeys->ApplySettings(m_hotkeySettings);
-
-    if (m_androidIntegration && m_androidIntegration->StartServer())
-        LogDebug("Android sync server listening on port 8766");
-    else
-        LogDebug("Android sync server failed to start on port 8766");
-
-    // TODO (Milestone 5): only show on first launch
-    ShowMainWindow();
-
-    m_running = true;
-    return true;
 }
 
 void Application::Shutdown() {
@@ -1457,6 +1611,7 @@ void Application::Shutdown() {
 // -- Private: render -----------------------------------------------------------
 
 void Application::RenderFrame() {
+    const auto firstFrameStarted = m_startupProfiler.BeginStage();
     if (m_appearanceDirty)
         ApplyAppearanceNow();
 
@@ -1475,6 +1630,26 @@ void Application::RenderFrame() {
         m_d3dContext->ClearRenderTargetView(m_renderTarget, bg);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         m_swapChain->Present(1, 0);
+
+        if (!m_startupProfileComplete) {
+            m_startupProfiler.FinishStage("first frame render", firstFrameStarted);
+            const double totalMs = m_startupProfiler.ElapsedMs();
+            m_startupProfiler.RecordDuration("total to first rendered frame", totalMs);
+            m_startupProfileComplete = true;
+            const std::filesystem::path reportPath =
+                ConfigStore::Directory() / "startup_profile.log";
+            m_startupProfiler.WriteReport(reportPath);
+            for (const StartupTiming& timing : m_startupProfiler.Timings()) {
+                std::ostringstream line;
+                line << "Startup: " << timing.name
+                     << " duration=" << std::fixed << std::setprecision(3)
+                     << timing.durationMs << "ms"
+                     << " completed=" << timing.completedAtMs << "ms";
+                LogDebug(line.str());
+            }
+            LogDebug("Startup profile written to " + reportPath.u8string());
+            m_deferredStartupPhase = DeferredStartupPhase::ProfileMetadata;
+        }
     }
 
     // Popup has its own context + swap chain - rendered separately
@@ -1482,6 +1657,10 @@ void Application::RenderFrame() {
     if (m_trayPopup) m_trayPopup->Render();
     if (m_editor) m_editor->Render();
     if (m_debugWindow) m_debugWindow->Render();
+
+    if (m_startupProfileComplete &&
+        m_deferredStartupPhase != DeferredStartupPhase::Complete)
+        AdvanceDeferredStartup();
 }
 
 bool Application::HasRenderableUi() const {

@@ -139,6 +139,65 @@ void MainWindow::DrawDeveloper() {
             }
             EndSettingsCard();
 
+            if (BeginSettingsCard("##developer_startup_profile", "Startup profile",
+                                  "Timestamped initialization stages through the first rendered frame.")) {
+                const auto& timings = app->GetStartupTimings();
+                const auto& metrics = app->GetStartupMetrics();
+                const std::filesystem::path profilePath =
+                    ConfigStore::Directory() / "startup_profile.log";
+                ImGui::TextWrapped("Report: %s", profilePath.string().c_str());
+                if (ImGui::SmallButton("Copy startup timings")) {
+                    std::ostringstream text;
+                    text << "Stage\tDuration (ms)\tCompleted at (ms)\n";
+                    text << std::fixed << std::setprecision(3);
+                    for (const StartupTiming& timing : timings)
+                        text << timing.name << '\t' << timing.durationMs << '\t'
+                             << timing.completedAtMs << '\n';
+                    text << "\nMetric\tValue\n";
+                    for (const StartupMetric& metric : metrics)
+                        text << metric.name << '\t' << metric.value << '\n';
+                    ImGui::SetClipboardText(text.str().c_str());
+                }
+                if (timings.empty()) {
+                    ImGui::TextDisabled("Startup timing data is not available yet.");
+                } else if (ImGui::BeginTable("##startup_timing_table", 3,
+                                             ImGuiTableFlags_Borders |
+                                             ImGuiTableFlags_RowBg |
+                                             ImGuiTableFlags_SizingStretchProp)) {
+                    ImGui::TableSetupColumn("Stage", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+                    ImGui::TableSetupColumn("Duration", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+                    ImGui::TableSetupColumn("Completed", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+                    ImGui::TableHeadersRow();
+                    for (const StartupTiming& timing : timings) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(timing.name.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.3f ms", timing.durationMs);
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%.3f ms", timing.completedAtMs);
+                    }
+                    ImGui::EndTable();
+                }
+                if (!metrics.empty() && ImGui::BeginTable(
+                        "##startup_metric_table", 2,
+                        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                        ImGuiTableFlags_SizingStretchProp)) {
+                    ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+                    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                    ImGui::TableHeadersRow();
+                    for (const StartupMetric& metric : metrics) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(metric.name.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextUnformatted(metric.value.c_str());
+                    }
+                    ImGui::EndTable();
+                }
+            }
+            EndSettingsCard();
+
             if (BeginSettingsCard("##developer_events", "Developer event log",
                                   "Recent internal events collected by the Debug build.")) {
                 if (ImGui::SmallButton("Copy log")) {

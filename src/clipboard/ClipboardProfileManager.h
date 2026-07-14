@@ -21,15 +21,20 @@ public:
     using EventCallback = std::function<void(const std::string&)>;
     using ForegroundProcessCallback = std::function<std::string()>;
     using ActiveHistoryCallback = std::function<void(ClipboardHistory*)>;
+    using TimingCallback = std::function<void(const std::string&, double)>;
 
     ClipboardProfileManager(AppConfig& config,
                             SaveConfigCallback saveConfig,
                             EventCallback addEvent,
                             ForegroundProcessCallback foregroundProcess,
-                            ActiveHistoryCallback activeHistoryChanged);
+                            ActiveHistoryCallback activeHistoryChanged,
+                            TimingCallback startupTiming = {});
     ~ClipboardProfileManager();
 
     void Rebuild();
+    bool InitializeProfileMetadata();
+    bool LoadActiveHistory();
+    bool IsHistoryLoaded(const std::string& profileId) const;
     void SetNewItemsAtTop(bool value);
     void SetDeduplicationEnabled(bool enabled);
     void SetHistoryLimit(int value);
@@ -51,7 +56,7 @@ public:
     bool DeletePasteTemplate(int64_t templateId);
 
     ClipboardHistory* ActiveHistory() const;
-    ClipboardHistory* HistoryForProfile(const std::string& profileId) const;
+    ClipboardHistory* HistoryForProfile(const std::string& profileId);
     const ClipboardProfileConfig* ActiveProfile() const;
     const std::vector<ClipboardProfileConfig>& Profiles() const;
     bool CanDeleteActiveProfile() const;
@@ -77,6 +82,8 @@ private:
     ClipboardProfileConfig* FindForProcess(const std::string& processName);
     void LoadAndConfigureHistory(const std::string& profileId,
                                  ClipboardHistory& history);
+    ClipboardHistory* EnsureHistoryLoaded(const std::string& profileId);
+    ClipboardHistory* LoadedHistoryForProfile(const std::string& profileId) const;
     void NotifyActiveHistory();
     bool InitializeDatabase();
     bool SaveProfile(const ClipboardProfileConfig& profile);
@@ -88,8 +95,12 @@ private:
     EventCallback m_addEvent;
     ForegroundProcessCallback m_foregroundProcess;
     ActiveHistoryCallback m_activeHistoryChanged;
+    TimingCallback m_startupTiming;
     std::vector<std::unique_ptr<ClipboardHistory>> m_histories;
     std::unique_ptr<ClipboardDatabase> m_database;
     std::vector<std::string> m_persistenceErrors;
     std::string m_manualProcessOverride;
+    mutable bool m_vaultCountCached{false};
+    mutable std::string m_vaultCountProfileId;
+    mutable size_t m_vaultCountCache{0};
 };
