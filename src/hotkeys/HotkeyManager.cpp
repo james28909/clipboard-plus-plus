@@ -828,6 +828,9 @@ void HotkeyManager::ForwardKeyToPopup(UINT vk, bool shift) const {
     HWND hw = popup->GetHwnd();
 
     switch (vk) {
+    case VK_TAB:
+    case VK_RETURN:
+    case VK_SPACE:
     case VK_BACK:
     case VK_DELETE:
     case VK_LEFT:

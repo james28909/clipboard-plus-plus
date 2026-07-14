@@ -200,7 +200,12 @@ void MainWindow::DrawAppearance() {
         next.popupRounding = current.popupRounding;
         next.popupButtonRowPadding = current.popupButtonRowPadding;
         next.popupButtonColumnPadding = current.popupButtonColumnPadding;
+        next.popupCommandBarRounding = current.popupCommandBarRounding;
         next.controlRounding = current.controlRounding;
+        next.customCommandBarColors = current.customCommandBarColors;
+        next.popupFilterBorder = current.popupFilterBorder;
+        next.popupActionBorder = current.popupActionBorder;
+        next.popupDestinationBorder = current.popupDestinationBorder;
         next.savedThemes  = current.savedThemes;
         next.exeIconPath  = current.exeIconPath;
         next.customColors = false;
@@ -277,7 +282,12 @@ void MainWindow::DrawAppearance() {
             fallback.popupRounding = next.popupRounding;
             fallback.popupButtonRowPadding = next.popupButtonRowPadding;
             fallback.popupButtonColumnPadding = next.popupButtonColumnPadding;
+            fallback.popupCommandBarRounding = next.popupCommandBarRounding;
             fallback.controlRounding = next.controlRounding;
+            fallback.customCommandBarColors = next.customCommandBarColors;
+            fallback.popupFilterBorder = next.popupFilterBorder;
+            fallback.popupActionBorder = next.popupActionBorder;
+            fallback.popupDestinationBorder = next.popupDestinationBorder;
             fallback.savedThemes = next.savedThemes;
             next = fallback;
         }
@@ -465,6 +475,10 @@ void MainWindow::DrawAppearance() {
 
     if (customizeTab == TAB_POPUP) {
     SectionHeader("Popup");
+    if (PaddedButton("Open popup", 120.0f))
+        app->ShowPopup();
+    ImGui::TextDisabled("Open the popup without closing Settings.");
+    ImGui::Spacing();
     ImGui::Text("Popup opacity");
     ImGui::SetNextItemWidth(240.0f);
     SliderFloatWheel("##opacity", &draft.popupOpacity, 0.1f, 1.0f, "%.2f", 0.05f);
@@ -530,6 +544,78 @@ void MainWindow::DrawAppearance() {
         }
     }
 
+    SectionHeader("Command bar");
+    bool commandColorsChanged = ImGui::Checkbox(
+        "Customize command bar line colors", &draft.customCommandBarColors);
+    if (draft.customCommandBarColors) {
+        commandColorsChanged |= ColorControl("Filter box", draft.popupFilterBorder);
+        commandColorsChanged |= ColorControl("Action box", draft.popupActionBorder);
+        commandColorsChanged |= ColorControl("Destination box", draft.popupDestinationBorder);
+    } else {
+        ImGui::TextDisabled("Filter, action, and destination lines follow the active theme.");
+    }
+    if (commandColorsChanged) {
+        AppearanceSettings next = app->GetAppearance();
+        next.customCommandBarColors = draft.customCommandBarColors;
+        next.popupFilterBorder = draft.popupFilterBorder;
+        next.popupActionBorder = draft.popupActionBorder;
+        next.popupDestinationBorder = draft.popupDestinationBorder;
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    }
+
+    PopupSettings popupSettings = app->GetPopupSettings();
+    if (ImGui::Checkbox("Show Android and named-slot counts",
+                        &popupSettings.showDestinationCounts)) {
+        app->SetPopupSettings(popupSettings);
+    }
+
+    static char launcherLabel[96]{};
+    static char launcherPath[512]{};
+    static std::string loadedLauncherSignature;
+    const std::string launcherSignature =
+        std::string(popupSettings.programLauncherEnabled ? "1|" : "0|") +
+        popupSettings.programLauncherLabel + "|" + popupSettings.programLauncherPath;
+    if (loadedLauncherSignature != launcherSignature) {
+        std::snprintf(launcherLabel, sizeof(launcherLabel), "%s",
+                      popupSettings.programLauncherLabel.c_str());
+        std::snprintf(launcherPath, sizeof(launcherPath), "%s",
+                      popupSettings.programLauncherPath.c_str());
+        loadedLauncherSignature = launcherSignature;
+    }
+
+    bool launcherEnabled = popupSettings.programLauncherEnabled;
+    if (ImGui::Checkbox("Show program launcher action", &launcherEnabled)) {
+        popupSettings.programLauncherEnabled = launcherEnabled;
+        popupSettings.programLauncherLabel = launcherLabel[0] ? launcherLabel : "Launch";
+        popupSettings.programLauncherPath = launcherPath;
+        app->SetPopupSettings(popupSettings);
+        loadedLauncherSignature.clear();
+    }
+    if (launcherEnabled) {
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputText("Button label##program_launcher", launcherLabel,
+                         sizeof(launcherLabel));
+        ImGui::TextUnformatted("Executable");
+        ImGui::SetNextItemWidth(std::max(160.0f, ImGui::GetContentRegionAvail().x - 105.0f));
+        ImGui::InputText("##program_launcher_path", launcherPath, sizeof(launcherPath));
+        ImGui::SameLine();
+        if (PaddedButton("Browse...", 90.0f) &&
+            PickExecutableFile(launcherPath, static_cast<DWORD>(sizeof(launcherPath)))) {
+            // Keep the selected path in the editor until Save is clicked.
+        }
+        if (PaddedButton("Save launcher", 130.0f)) {
+            popupSettings.programLauncherEnabled = true;
+            popupSettings.programLauncherLabel = launcherLabel[0] ? launcherLabel : "Launch";
+            popupSettings.programLauncherPath = launcherPath;
+            app->SetPopupSettings(popupSettings);
+            loadedLauncherSignature.clear();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Launches the executable directly; no command shell or arguments are used.");
+    }
+
     SectionHeader("Default Popup Size");
     bool sizeChanged = false;
     ImGui::SetNextItemWidth(IntInputWidth(9999));
@@ -570,6 +656,21 @@ void MainWindow::DrawAppearance() {
         draft = app->GetAppearance();
         std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
     }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Popup list");
+    ImGui::SetNextItemWidth(240.0f);
+    if (SliderFloatWheel("Command bar corner rounding", &draft.popupCommandBarRounding,
+                         0.0f, 12.0f, "%.1f", 0.5f)) {
+        draft.popupCommandBarRounding =
+            std::clamp(draft.popupCommandBarRounding, 0.0f, 12.0f);
+        AppearanceSettings next = app->GetAppearance();
+        next.popupCommandBarRounding = draft.popupCommandBarRounding;
+        app->RequestAppearance(next);
+        draft = app->GetAppearance();
+        std::snprintf(fontPath, sizeof(fontPath), "%s", draft.fontPath.c_str());
+    }
+    ImGui::TextDisabled("Drag the slider, or scroll it while the pointer is over it.");
 
     }
 

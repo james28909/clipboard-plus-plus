@@ -31,6 +31,10 @@ struct SavedAppearanceTheme {
     ImVec4 selectedTab{0.149f, 0.475f, 1.0f, 1.0f};
     ImVec4 buttonOff{0.184f, 0.196f, 0.220f, 1.0f};
     ImVec4 buttonOn{0.149f, 0.475f, 1.0f, 1.0f};
+    ImVec4 popupFilterBorder{0.149f, 0.475f, 1.0f, 1.0f};
+    ImVec4 popupActionBorder{0.180f, 0.720f, 0.420f, 1.0f};
+    ImVec4 popupDestinationBorder{0.620f, 0.360f, 0.900f, 1.0f};
+    bool customCommandBarColors{false};
     ImVec4 closeButton{0.184f, 0.196f, 0.220f, 1.0f};
     ImVec4 closeButtonHover{0.769f, 0.169f, 0.110f, 1.0f};
     ImVec4 closeButtonText{0.863f, 0.863f, 0.863f, 1.0f};
@@ -67,6 +71,7 @@ struct SavedAppearanceTheme {
     float popupRounding{6.0f};
     float popupButtonRowPadding{0.0f};
     float popupButtonColumnPadding{5.0f};
+    float popupCommandBarRounding{3.0f};
     float controlRounding{3.0f};
 };
 
@@ -103,6 +108,10 @@ struct AppearanceSettings {
     ImVec4 selectedTab{0.149f, 0.475f, 1.0f, 1.0f};
     ImVec4 buttonOff{0.184f, 0.196f, 0.220f, 1.0f};
     ImVec4 buttonOn{0.149f, 0.475f, 1.0f, 1.0f};
+    ImVec4 popupFilterBorder{0.149f, 0.475f, 1.0f, 1.0f};
+    ImVec4 popupActionBorder{0.180f, 0.720f, 0.420f, 1.0f};
+    ImVec4 popupDestinationBorder{0.620f, 0.360f, 0.900f, 1.0f};
+    bool customCommandBarColors{false};
     ImVec4 closeButton{0.184f, 0.196f, 0.220f, 1.0f};
     ImVec4 closeButtonHover{0.769f, 0.169f, 0.110f, 1.0f};
     ImVec4 closeButtonText{0.863f, 0.863f, 0.863f, 1.0f};
@@ -139,6 +148,7 @@ struct AppearanceSettings {
     float popupRounding{6.0f};
     float popupButtonRowPadding{0.0f};
     float popupButtonColumnPadding{5.0f};
+    float popupCommandBarRounding{3.0f};
     float controlRounding{3.0f};
     std::vector<SavedAppearanceTheme> savedThemes;
 };

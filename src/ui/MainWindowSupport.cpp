@@ -88,7 +88,7 @@ void MainWindow::DrawSupport() {
                 "Only startup, icon-patch, and in-memory developer events are eligible. paste_debug.log is always excluded because it can contain clipboard text.");
 
         ImGui::Separator();
-        ImGui::TextWrapped("Always excluded: clipboard contents, images, database pages, key/DPAPI files, raw config, named-slot/template/transform values, endpoints, tokens, usernames, raw crash dumps, and unnecessary paths.");
+        ImGui::TextWrapped("Always excluded: clipboard contents, images, database pages, key/DPAPI files, raw config, named-slot/template/transform values, endpoints, program-launcher paths, tokens, usernames, raw crash dumps, and unnecessary paths.");
         ImGui::Checkbox("I reviewed these categories and consent to creating the ZIP", &consent);
         const bool creationDisabled = !consent;
         if (creationDisabled) ImGui::BeginDisabled();

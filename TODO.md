@@ -86,13 +86,26 @@
 - [x] Add tests for redaction, bundle manifests, clipboard file-drop copying, deterministic issue Markdown, URL length/encoding limits, cleanup, offline behavior, and failures while logs or databases are in use
 
 ## Popup toolbar and filter redesign (P1)
-- [ ] Redesign the top strip into visually distinct compact groups: content filters, actions/modes, destinations/integrations, and profile/search controls
-- [ ] Preserve the popup's small footprint with collapsible/expanding groups, an overflow menu, and remembered expanded state
-- [ ] Give built-in filters, custom filters, Android/destinations, multi-paste actions, and utility buttons separate containers without making the popup feel like a ribbon
-- [ ] Support a growing number of filters with horizontal overflow, a compact filter picker, favorites/pinning, and clear active-filter indication
-- [ ] Standardize icon size, hit target, padding, hover/active state, tooltip, badge/count, and keyboard navigation for every top-strip control
-- [ ] Keep the most common actions one click away; move rare actions into overflow rather than shrinking every control
-- [ ] Prototype two or three layouts with screenshots/wireframes before implementation, then test at minimum popup width and high DPI
+- [x] Redesign the top strip into visually distinct compact groups: content filters, actions/modes, destinations/integrations, and profile/search controls
+- [x] Use thin theme-derived, independently colored boundary lines instead of bulky containers or a ribbon-style toolbar
+- [x] Soft-wrap complete button groups at the available popup width so controls never shrink, clip, or require horizontal scrolling
+- [x] Give built-in filters, custom filters, Android/destinations, multi-paste actions, and utility buttons clear ownership without hiding common controls
+- [x] Support a growing number of filters while preserving the user's existing filter order and clear active-filter indication
+- [x] Standardize icon size, hit target, padding, hover/active state, tooltip, badge/count, and keyboard navigation for every top-strip control
+- [x] Keep actions one click away and expose contextual multi-selection actions only when they apply
+- [x] Prototype two or three layouts with screenshots/wireframes before implementation
+- [x] Validate the completed command bar at minimum popup width and high DPI
+
+## Configurable actions and workflow buttons (P2)
+- [ ] Define an encrypted custom-action model with user label, optional icon, toolbar order, enabled state, visibility conditions, optional hotkey, and confirmation policy
+- [ ] Support safe composable inputs: current history item, ordered multi-selection, named slot, active profile, search text, or current Windows clipboard
+- [ ] Support built-in processing steps before any external execution: regex transform, template interpolation, format conversion, join/separator, trim, case conversion, and URL encoding
+- [ ] Support explicit outputs: paste into the calling app, copy without pasting, open a URL, send to Android, save to a chosen file, move/tag/pin history, or launch an executable directly
+- [ ] Add an action editor with step ordering, live preview against sample data, validation, duplicate/edit/delete controls, and a test action that never pastes without confirmation
+- [ ] Add per-action placement in the popup Actions or Destinations group and let conditional actions appear only for compatible content, selections, or applications
+- [ ] Keep external execution opt-in and hardened: no implicit shell, separate executable/arguments fields, escaped placeholders, visible data preview, optional confirmation, timeout, and redacted diagnostics
+- [ ] Store action bodies, arguments, templates, and sensitive values inside the encrypted SQLite VFS; exclude them from logs and support bundles by default
+- [ ] Add import/export with secret-field warnings plus automated tests for interpolation, escaping, conditions, timeouts, failures, and correct paste targets
 
 ## Reliability, performance, and release hardening (P2)
 - [ ] Add an in-app backup/restore workflow using SQLite online backup, including encrypted backup by default and explicit warnings for decrypted exports

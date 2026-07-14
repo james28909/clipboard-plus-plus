@@ -81,6 +81,8 @@ public:
     void SetUiSettings(const UiSettings& settings);
     const EditorSettings& GetEditorSettings() const { return m_config.editor; }
     void SetEditorSettings(const EditorSettings& settings);
+    const PopupSettings& GetPopupSettings() const { return m_config.popup; }
+    void SetPopupSettings(const PopupSettings& settings);
     const std::vector<CustomFilter>& GetCustomFilters() const { return m_config.customFilters; }
     void SetCustomFilters(const std::vector<CustomFilter>& filters);
     const std::vector<std::string>& GetPopupButtonOrder() const { return m_config.popupButtonOrder; }

@@ -231,12 +231,31 @@ void Application::ShowMainWindow() {
     else
         ShowWindow(m_hwnd, SW_SHOWNORMAL);
 
-    SetWindowPos(m_hwnd, HWND_TOP, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-    BringWindowToTop(m_hwnd);
-    SetForegroundWindow(m_hwnd);
-    SetActiveWindow(m_hwnd);
-    SetFocus(m_hwnd);
+    if (GetForegroundWindow() != m_hwnd) {
+        const DWORD currentThread = GetCurrentThreadId();
+        const HWND foreground = GetForegroundWindow();
+        const DWORD foregroundThread = foreground
+            ? GetWindowThreadProcessId(foreground, nullptr)
+            : 0;
+        const bool attached = foregroundThread != 0 &&
+                              foregroundThread != currentThread &&
+                              AttachThreadInput(currentThread, foregroundThread, TRUE) != FALSE;
+
+        // Briefly raising the window through the topmost band makes it visible even
+        // when Windows declines the first foreground request. It is immediately
+        // returned to the normal z-order and never remains always-on-top.
+        SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        BringWindowToTop(m_hwnd);
+        SetForegroundWindow(m_hwnd);
+        SetActiveWindow(m_hwnd);
+        SetFocus(m_hwnd);
+
+        if (attached)
+            AttachThreadInput(currentThread, foregroundThread, FALSE);
+    }
 }
 
 bool Application::InsertExternalClipboardText(const std::string& text,
@@ -568,6 +587,11 @@ void Application::SetEditorSettings(const EditorSettings& settings) {
     m_config.editor = settings;
     if (m_editor)
         m_editor->ApplySettings(settings);
+    SaveConfig();
+}
+
+void Application::SetPopupSettings(const PopupSettings& settings) {
+    m_config.popup = settings;
     SaveConfig();
 }
 

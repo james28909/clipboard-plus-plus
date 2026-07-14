@@ -55,23 +55,6 @@ static constexpr int kPopupTitleHeight = kPopupTitlePad + kPopupTitleButton + 8;
 #define DWMWA_COLOR_DEFAULT 0xFFFFFFFF
 #endif
 
-static const char* PasteMoveLabel(ClipboardHistory::MoveTarget target) {
-    switch (target) {
-    case ClipboardHistory::MoveTarget::Top:    return "Move: Top";
-    case ClipboardHistory::MoveTarget::Bottom: return "Move: Bottom";
-    default:                                   return "Move: Keep";
-    }
-}
-
-static ClipboardHistory::MoveTarget NextPasteMoveTarget(ClipboardHistory::MoveTarget target) {
-    switch (target) {
-    case ClipboardHistory::MoveTarget::None:   return ClipboardHistory::MoveTarget::Top;
-    case ClipboardHistory::MoveTarget::Top:    return ClipboardHistory::MoveTarget::Bottom;
-    case ClipboardHistory::MoveTarget::Bottom: return ClipboardHistory::MoveTarget::None;
-    default:                                   return ClipboardHistory::MoveTarget::None;
-    }
-}
-
 static std::string TrimAscii(std::string value) {
     auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
     while (!value.empty() && isSpace(static_cast<unsigned char>(value.front())))
@@ -209,9 +192,12 @@ void PopupWindow::ApplyAppearance(const AppearanceSettings& settings) {
     m_width = static_cast<int>(std::lround(settings.popupWidth * dpiScale));
     m_height = static_cast<int>(std::lround(settings.popupHeight * dpiScale));
     ApplyOpacity();
+    // Keep the real HWND synchronized even while hidden. The window is created
+    // at a small fallback size before the saved appearance is applied; deferring
+    // this resize until it is visible made the first popup use that fallback.
+    SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, m_width, m_height,
+                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
     if (m_visible) {
-        SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, m_width, m_height,
-                     SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         ResizeSwapChainToClient();
         ApplyWindowRegion();
     }
@@ -596,8 +582,11 @@ void PopupWindow::DrawSearchBar() {
 }
 
 void PopupWindow::DrawTitleBar() {
-    const float height = static_cast<float>(kPopupTitleButton);
-    const float gap = static_cast<float>(kPopupTitleGap);
+    const float scale = EffectiveUiScale(m_appearance);
+    const float height = std::ceil(std::max(
+        static_cast<float>(kPopupTitleButton) * scale,
+        ImGui::GetFrameHeight()));
+    const float gap = std::ceil(static_cast<float>(kPopupTitleGap) * scale);
     const float knobSize = height;
     const AppearanceSettings effective = m_appearance.customColors ? m_appearance : ThemeDefaults(m_appearance.theme);
 
@@ -647,12 +636,13 @@ void PopupWindow::DrawTitleBar() {
         const ImU32 ringColor = ImGui::GetColorU32(hovered ? brighten(knobRing, 0.12f) : knobRing);
         const ImU32 fillColor = ImGui::GetColorU32(hovered ? brighten(knobFill, 0.08f) : knobFill);
         dl->AddCircleFilled(center, radius, fillColor, 18);
-        dl->AddCircle(center, radius, ringColor, 18, 1.5f);
+        const float stroke = std::max(1.5f, 1.5f * scale);
+        dl->AddCircle(center, radius, ringColor, 18, stroke);
         const float angle = -1.5708f + value * 6.28318f;
         dl->AddLine(center,
                     {center.x + std::cos(angle) * radius * 0.78f,
                      center.y + std::sin(angle) * radius * 0.78f},
-                    ringColor, 1.5f);
+                    ringColor, stroke);
     };
     drawKnob(opacityCenter, m_opacity, opacityHovered, ring, fill);
     drawKnob(outlineCenter, m_outlineStrength, outlineHovered, effective.accent, effective.panelBg);
@@ -660,6 +650,34 @@ void PopupWindow::DrawTitleBar() {
         ImGui::SetTooltip("Window opacity %.0f%%", m_opacity * 100.0f);
     else if (outlineHovered)
         ImGui::SetTooltip("Outline %.0f%%", m_outlineStrength * 100.0f);
+
+    // A narrow native-caption hit target lets the no-activate popup move without
+    // adding another toolbar row or interfering with its interactive controls.
+    ImGui::SameLine(0.0f, gap);
+    const float dragW = std::max(14.0f, height * 0.65f);
+    ImGui::InvisibleButton("##popup_drag_handle", {dragW, height});
+    const ImVec2 dragMin = ImGui::GetItemRectMin();
+    const ImVec2 dragMax = ImGui::GetItemRectMax();
+    m_dragHandleRect = {
+        static_cast<LONG>(std::floor(dragMin.x)),
+        static_cast<LONG>(std::floor(dragMin.y)),
+        static_cast<LONG>(std::ceil(dragMax.x)),
+        static_cast<LONG>(std::ceil(dragMax.y))
+    };
+    ImVec4 gripColor = effective.mutedText;
+    gripColor.w *= 0.65f;
+    const ImU32 gripU32 = ImGui::GetColorU32(gripColor);
+    const float dotRadius = std::max(1.0f, height * 0.055f);
+    const float centerX = (dragMin.x + dragMax.x) * 0.5f;
+    const float centerY = (dragMin.y + dragMax.y) * 0.5f;
+    const float dotGapX = std::max(3.0f, height * 0.16f);
+    const float dotGapY = std::max(3.0f, height * 0.19f);
+    for (int row = -1; row <= 1; ++row) {
+        dl->AddCircleFilled({centerX - dotGapX * 0.5f, centerY + row * dotGapY},
+                            dotRadius, gripU32, 8);
+        dl->AddCircleFilled({centerX + dotGapX * 0.5f, centerY + row * dotGapY},
+                            dotRadius, gripU32, 8);
+    }
 
     Application* app = Application::Get();
     const ClipboardProfileConfig* active = app ? app->GetActiveClipboardProfile() : nullptr;
@@ -839,517 +857,6 @@ void PopupWindow::DrawTitleBar() {
     if (m_dialogTextCapture && !clipboardNameActive && !m_clipboardDropdownOpen)
         m_dialogTextCapture = false;
 
-    ImGui::Spacing();
-}
-
-static bool PopupToggleButton(const char* label, bool active, const PopupToggleColors& colors) {
-    ImGui::PushStyleColor(ImGuiCol_Button, active ? colors.on : colors.off);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? colors.onHovered : colors.offHovered);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, active ? colors.onActive : colors.offActive);
-    const bool clicked = ImGui::SmallButton(label);
-    ImGui::PopStyleColor(3);
-    return clicked;
-}
-
-void PopupWindow::DrawFilterStrip() {
-    const PopupToggleColors toggleColors = GetPopupToggleColors(m_appearance);
-    Application* app = Application::Get();
-
-    struct BuiltInFilter { const char* token; const char* label; int mode; };
-    static constexpr BuiltInFilter kBuiltIns[] = {
-        {"filter:all", "All", 0},       {"filter:text", "Text", 1},
-        {"filter:url", "URL", 3},       {"filter:file", "File", 4},
-        {"filter:code", "Code", 5},     {"filter:secret", "Secret", 6},
-        {"filter:json", "JSON", 7},     {"filter:email", "Email", 8},
-        {"filter:color", "Color", 9},   {"filter:cmd", "CMD", 10},
-        {"filter:image", "Image", 2},
-    };
-    static constexpr const char* kDefaultOrder[] = {
-        "filter:all", "filter:text", "filter:url", "filter:file", "filter:code",
-        "filter:secret", "filter:json", "filter:email", "filter:color", "filter:cmd",
-        "break",
-        "filter:image", "action:android", "action:slots",
-        "action:newline", "action:move", "action:settings",
-    };
-    const float buttonColumnGap = std::clamp(m_appearance.popupButtonColumnPadding, 0.0f, 16.0f);
-    const float buttonRowGap = std::clamp(m_appearance.popupButtonRowPadding, 0.0f, 12.0f);
-
-    auto isBuiltIn = [&](const std::string& token) {
-        return std::find_if(std::begin(kBuiltIns), std::end(kBuiltIns),
-            [&](const BuiltInFilter& item) { return token == item.token; }) != std::end(kBuiltIns);
-    };
-    auto customForToken = [&](const std::string& token) -> const CustomFilter* {
-        if (!app || token.rfind("custom:", 0) != 0)
-            return nullptr;
-        const std::string id = token.substr(7);
-        const auto& filters = app->GetCustomFilters();
-        auto it = std::find_if(filters.begin(), filters.end(),
-            [&](const CustomFilter& filter) {
-                return filter.id == id && filter.enabled && !filter.pattern.empty();
-            });
-        return it == filters.end() ? nullptr : &*it;
-    };
-    auto isAction = [&](const std::string& token) {
-        return token == "action:newline" || token == "action:move" ||
-               token == "action:android" || token == "action:slots" ||
-               token == "action:settings";
-    };
-    auto cleanupBreaks = [](std::vector<std::string>& order) {
-        order.erase(std::remove_if(order.begin(), order.end(), [](const std::string& token) {
-            return token.empty();
-        }), order.end());
-        std::vector<std::string> cleaned;
-        bool lastBreak = true;
-        for (const std::string& token : order) {
-            if (token == "break") {
-                if (!lastBreak)
-                    cleaned.push_back(token);
-                lastBreak = true;
-            } else {
-                cleaned.push_back(token);
-                lastBreak = false;
-            }
-        }
-        while (!cleaned.empty() && cleaned.back() == "break")
-            cleaned.pop_back();
-        order = std::move(cleaned);
-    };
-
-    std::vector<std::string> order = app ? app->GetPopupButtonOrder() : std::vector<std::string>{};
-    if (order.empty())
-        order.assign(std::begin(kDefaultOrder), std::end(kDefaultOrder));
-
-    std::vector<std::string> normalized;
-    auto addUnique = [&](const std::string& token) {
-        if (token == "break") {
-            normalized.push_back(token);
-            return;
-        }
-        if (std::find(normalized.begin(), normalized.end(), token) == normalized.end())
-            normalized.push_back(token);
-    };
-    for (const std::string& token : order) {
-        if (token == "break" || isBuiltIn(token) || isAction(token) || customForToken(token))
-            addUnique(token);
-    }
-    for (const BuiltInFilter& item : kBuiltIns)
-        addUnique(item.token);
-    static constexpr const char* kActionTokens[] = {
-        "action:android", "action:slots", "action:newline", "action:move", "action:settings"
-    };
-    for (const char* token : kActionTokens)
-        addUnique(token);
-    if (app) {
-        for (const CustomFilter& filter : app->GetCustomFilters())
-            if (filter.enabled && !filter.pattern.empty())
-                addUnique("custom:" + filter.id);
-    }
-    cleanupBreaks(normalized);
-    if (app && normalized != app->GetPopupButtonOrder())
-        app->SetPopupButtonOrder(normalized);
-    order = normalized;
-
-    struct PendingPopupButtonMove {
-        std::string dragged;
-        std::string target;
-        bool below{false};
-        bool after{false};
-        bool requested{false};
-    } pendingMove;
-
-    auto moveToken = [&](const std::string& dragged, const std::string& target, bool below, bool after) {
-        if (!app || dragged.empty() || target.empty() || dragged == "break")
-            return;
-
-        std::vector<std::string> next = order;
-        next.erase(std::remove(next.begin(), next.end(), dragged), next.end());
-        cleanupBreaks(next);
-
-        auto targetIt = std::find(next.begin(), next.end(), target);
-        size_t insertAt = targetIt == next.end()
-            ? next.size()
-            : static_cast<size_t>(std::distance(next.begin(), targetIt)) + (after ? 1u : 0u);
-
-        if (below) {
-            if (targetIt != next.end())
-                insertAt = static_cast<size_t>(std::distance(next.begin(), targetIt)) + 1u;
-            if (insertAt > next.size())
-                insertAt = next.size();
-            if (insertAt == next.size() || next[insertAt] != "break")
-                next.insert(next.begin() + static_cast<std::ptrdiff_t>(insertAt), "break");
-            ++insertAt;
-        }
-
-        if (insertAt > next.size())
-            insertAt = next.size();
-        next.insert(next.begin() + static_cast<std::ptrdiff_t>(insertAt), dragged);
-        cleanupBreaks(next);
-        app->SetPopupButtonOrder(next);
-        order = std::move(next);
-    };
-
-    auto requestMove = [&](std::string dragged, std::string target, bool below, bool after) {
-        if (dragged.empty() || target.empty())
-            return;
-        if (dragged == target && !below)
-            return;
-        pendingMove.dragged = std::move(dragged);
-        pendingMove.target = std::move(target);
-        pendingMove.below = below;
-        pendingMove.after = after;
-        pendingMove.requested = true;
-    };
-
-    auto attachDragSource = [&](const std::string& token, const char* label) {
-        if (token == "break")
-            return;
-        if (ImGui::BeginDragDropSource()) {
-            char payload[128]{};
-            strncpy_s(payload, token.c_str(), _TRUNCATE);
-            ImGui::SetDragDropPayload("CPP_POPUP_BUTTON", payload, sizeof(payload));
-            ImGui::TextUnformatted(label);
-            ImGui::EndDragDropSource();
-        }
-    };
-
-    auto acceptPopupButtonPayload = [&](std::string& dragged) -> const ImGuiPayload* {
-        const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
-            "CPP_POPUP_BUTTON",
-            ImGuiDragDropFlags_AcceptBeforeDelivery |
-            ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
-        if (!payload)
-            return nullptr;
-        const char* data = static_cast<const char*>(payload->Data);
-        dragged = data ? data : "";
-        return payload;
-    };
-
-    auto drawBetweenDropZone = [&](const char* id, const std::string& target, bool after) {
-        if (target.empty())
-            return;
-        ImGui::PushID(id);
-        ImGui::SameLine(0.0f, 0.0f);
-        ImGui::InvisibleButton("##popup_between_drop", {buttonColumnGap + 4.0f, ImGui::GetFrameHeight()});
-        if (ImGui::BeginDragDropTarget()) {
-            std::string dragged;
-            if (const ImGuiPayload* payload = acceptPopupButtonPayload(dragged)) {
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                const ImVec2 a = ImGui::GetItemRectMin();
-                const ImVec2 b = ImGui::GetItemRectMax();
-                dl->AddRectFilled({(a.x + b.x) * 0.5f - 1.0f, a.y + 2.0f},
-                                  {(a.x + b.x) * 0.5f + 1.0f, b.y - 2.0f},
-                                  IM_COL32(77, 145, 255, 150), 2.0f);
-                if (payload->IsDelivery())
-                    requestMove(dragged, target, false, after);
-            }
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::SameLine(0.0f, 0.0f);
-        ImGui::PopID();
-    };
-
-    auto drawRowDropZone = [&](const char* id, const std::string& target) {
-        if (target.empty())
-            return;
-        static std::string armedTarget;
-        static double armedAt = 0.0;
-        static constexpr double kRowDropDwellSeconds = 0.25;
-
-        ImGui::PushID(id);
-        const float width = ImGui::GetContentRegionAvail().x;
-        ImGui::InvisibleButton("##popup_row_drop", {std::max(24.0f, width), buttonRowGap + 8.0f});
-        if (ImGui::BeginDragDropTarget()) {
-            std::string dragged;
-            if (const ImGuiPayload* payload = acceptPopupButtonPayload(dragged)) {
-                const std::string armKey = dragged + "->" + target;
-                if (armedTarget != armKey) {
-                    armedTarget = armKey;
-                    armedAt = ImGui::GetTime();
-                }
-
-                const bool armed = (ImGui::GetTime() - armedAt) >= kRowDropDwellSeconds;
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                const ImVec2 a = ImGui::GetItemRectMin();
-                const ImVec2 b = ImGui::GetItemRectMax();
-                const ImU32 color = armed
-                    ? IM_COL32(77, 145, 255, 150)
-                    : IM_COL32(77, 145, 255, 60);
-                dl->AddRectFilled({a.x, (a.y + b.y) * 0.5f - 1.0f},
-                                  {b.x, (a.y + b.y) * 0.5f + 1.0f},
-                                  color, 2.0f);
-
-                if (payload->IsDelivery() && armed)
-                    requestMove(dragged, target, true, true);
-            }
-            ImGui::EndDragDropTarget();
-        } else if (armedTarget.rfind("->" + target) != std::string::npos) {
-            armedTarget.clear();
-            armedAt = 0.0;
-        }
-        ImGui::PopID();
-    };
-
-    struct PopupButtonRect {
-        std::string token;
-        std::string label;
-        ImVec2 min;
-        ImVec2 max;
-        int row{};
-    };
-    std::vector<PopupButtonRect> buttonRects;
-    int drawingRow = 0;
-
-    auto recordButtonRect = [&](const std::string& token, const char* label) {
-        PopupButtonRect rect;
-        rect.token = token;
-        rect.label = label ? label : "";
-        rect.min = ImGui::GetItemRectMin();
-        rect.max = ImGui::GetItemRectMax();
-        rect.row = drawingRow;
-        buttonRects.push_back(std::move(rect));
-    };
-
-    auto drawToken = [&](const std::string& token) -> bool {
-        if (token == "break") {
-            ImGui::NewLine();
-            return true;
-        }
-
-        for (const BuiltInFilter& item : kBuiltIns) {
-            if (token != item.token)
-                continue;
-            const bool active = m_activeCustomFilterId.empty() && m_filterMode == item.mode;
-            ImGui::PushID(token.c_str());
-            if (PopupToggleButton(item.label, active, toggleColors)) {
-                ActivateKeyboardCapture();
-                m_androidPanelOpen = false;
-                m_namedSlotsPanelOpen = false;
-                m_filterMode = item.mode;
-                m_activeCustomFilterId.clear();
-            }
-            recordButtonRect(token, item.label);
-            attachDragSource(token, item.label);
-            ImGui::PopID();
-            return true;
-        }
-
-        if (const CustomFilter* filter = customForToken(token)) {
-            ImGui::PushID(token.c_str());
-            const bool active = m_activeCustomFilterId == filter->id;
-            if (PopupToggleButton(filter->name.c_str(), active, toggleColors)) {
-                ActivateKeyboardCapture();
-                m_androidPanelOpen = false;
-                m_namedSlotsPanelOpen = false;
-                m_filterMode = 0;
-                m_activeCustomFilterId = filter->id;
-            }
-            recordButtonRect(token, filter->name.c_str());
-            attachDragSource(token, filter->name.c_str());
-            ImGui::PopID();
-            return true;
-        }
-
-        ImGui::PushID(token.c_str());
-        if (token == "action:newline") {
-            if (PopupToggleButton("Newline", m_appendNewlineAfterPaste, toggleColors)) {
-                ActivateKeyboardCapture();
-                m_appendNewlineAfterPaste = !m_appendNewlineAfterPaste;
-            }
-            recordButtonRect(token, "Newline");
-            attachDragSource(token, "Newline");
-            ImGui::PopID();
-            return true;
-        }
-        if (token == "action:android") {
-            if (PopupToggleButton("Android", m_androidPanelOpen, toggleColors)) {
-                ActivateKeyboardCapture();
-                m_androidPanelOpen = !m_androidPanelOpen;
-                if (m_androidPanelOpen)
-                    m_namedSlotsPanelOpen = false;
-            }
-            recordButtonRect(token, "Android");
-            attachDragSource(token, "Android");
-            ImGui::PopID();
-            return true;
-        }
-        if (token == "action:slots") {
-            if (PopupToggleButton("Slots", m_namedSlotsPanelOpen, toggleColors)) {
-                ActivateKeyboardCapture();
-                m_namedSlotsPanelOpen = !m_namedSlotsPanelOpen;
-                if (m_namedSlotsPanelOpen)
-                    m_androidPanelOpen = false;
-            }
-            recordButtonRect(token, "Slots");
-            attachDragSource(token, "Slots");
-            ImGui::PopID();
-            return true;
-        }
-        if (token == "action:move") {
-            const bool moveActive = m_pasteMoveTarget != ClipboardHistory::MoveTarget::None;
-            if (PopupToggleButton(PasteMoveLabel(m_pasteMoveTarget), moveActive, toggleColors)) {
-                ActivateKeyboardCapture();
-                m_pasteMoveTarget = NextPasteMoveTarget(m_pasteMoveTarget);
-            }
-            recordButtonRect(token, PasteMoveLabel(m_pasteMoveTarget));
-            attachDragSource(token, PasteMoveLabel(m_pasteMoveTarget));
-            ImGui::PopID();
-            return true;
-        }
-        if (token == "action:settings") {
-            if (ImGui::SmallButton(" @ "))
-                OpenSettingsWindow();
-            recordButtonRect(token, "Settings");
-            attachDragSource(token, "Settings");
-            ImGui::PopID();
-            return true;
-        }
-        ImGui::PopID();
-        return false;
-    };
-
-    bool rowHasVisibleItem = false;
-    std::string lastVisibleToken;
-    std::string firstVisibleToken;
-    int rowIndex = 0;
-    for (const std::string& token : order) {
-        if (token == "break") {
-            if (rowHasVisibleItem) {
-                ImGui::NewLine();
-                ImGui::Dummy({1.0f, buttonRowGap});
-                ++rowIndex;
-                drawingRow = rowIndex;
-            }
-            rowHasVisibleItem = false;
-            lastVisibleToken.clear();
-            firstVisibleToken.clear();
-            continue;
-        }
-        drawingRow = rowIndex;
-        const bool drawn = drawToken(token);
-        if (drawn) {
-            if (!rowHasVisibleItem)
-                firstVisibleToken = token;
-            rowHasVisibleItem = true;
-            lastVisibleToken = token;
-            ImGui::SameLine(0.0f, buttonColumnGap);
-        }
-    }
-    if (rowHasVisibleItem) {
-        ImGui::NewLine();
-        ImGui::Dummy({1.0f, buttonRowGap});
-    }
-    const bool popupButtonDragActive = ImGui::GetDragDropPayload() != nullptr;
-
-    const ImVec2 afterStripCursor = ImGui::GetCursorScreenPos();
-    ImVec2 finalStripCursor = afterStripCursor;
-    if (!buttonRects.empty() && popupButtonDragActive) {
-        ImVec2 stripMin = buttonRects.front().min;
-        ImVec2 stripMax = buttonRects.front().max;
-        for (const PopupButtonRect& rect : buttonRects) {
-            stripMin.x = std::min(stripMin.x, rect.min.x);
-            stripMin.y = std::min(stripMin.y, rect.min.y);
-            stripMax.x = std::max(stripMax.x, rect.max.x);
-            stripMax.y = std::max(stripMax.y, rect.max.y);
-        }
-        const ImVec2 mouse = ImGui::GetIO().MousePos;
-        const bool nearBottomRowDrop = mouse.y >= stripMax.y - 4.0f &&
-                                       mouse.y <= stripMax.y + ImGui::GetFrameHeight() + 18.0f;
-        if (nearBottomRowDrop) {
-            ImGui::SetCursorScreenPos(afterStripCursor);
-            ImGui::Dummy({1.0f, ImGui::GetFrameHeight() + 14.0f});
-            finalStripCursor = ImGui::GetCursorScreenPos();
-        }
-
-        ImGui::SetCursorScreenPos(stripMin);
-        ImGui::InvisibleButton("##popup_button_drag_overlay",
-                               {std::max(24.0f, stripMax.x - stripMin.x),
-                                std::max(24.0f, stripMax.y - stripMin.y + 42.0f)});
-        if (ImGui::BeginDragDropTarget()) {
-            std::string dragged;
-            if (const ImGuiPayload* payload = acceptPopupButtonPayload(dragged)) {
-                static std::string bottomArmKey;
-                static double bottomArmAt = 0.0;
-                static constexpr double kBottomRowDwellSeconds = 0.25;
-
-                const ImVec2 mouse = ImGui::GetIO().MousePos;
-                const float bottomThreshold = stripMax.y - 4.0f;
-                const bool wantsBottomRow = mouse.y >= bottomThreshold;
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-
-                if (wantsBottomRow) {
-                    const std::string armKey = dragged + "->bottom";
-                    if (bottomArmKey != armKey) {
-                        bottomArmKey = armKey;
-                        bottomArmAt = ImGui::GetTime();
-                    }
-                    const bool armed = (ImGui::GetTime() - bottomArmAt) >= kBottomRowDwellSeconds;
-
-                    const auto draggedIt = std::find_if(buttonRects.begin(), buttonRects.end(),
-                        [&](const PopupButtonRect& rect) { return rect.token == dragged; });
-                    const char* ghostLabel = draggedIt != buttonRects.end()
-                        ? draggedIt->label.c_str()
-                        : "Button";
-                    const ImVec2 ghostPos{stripMin.x, stripMax.y + 10.0f};
-                    const ImVec2 ghostText = ImGui::CalcTextSize(ghostLabel);
-                    const ImVec2 ghostSize{
-                        ghostText.x + ImGui::GetStyle().FramePadding.x * 2.0f,
-                        ghostText.y + ImGui::GetStyle().FramePadding.y * 2.0f
-                    };
-                    const ImU32 fill = armed ? IM_COL32(77, 145, 255, 82) : IM_COL32(77, 145, 255, 42);
-                    const ImU32 border = armed ? IM_COL32(77, 145, 255, 190) : IM_COL32(77, 145, 255, 110);
-                    dl->AddRectFilled(ghostPos, {ghostPos.x + ghostSize.x, ghostPos.y + ghostSize.y},
-                                      fill, ImGui::GetStyle().FrameRounding);
-                    dl->AddRect(ghostPos, {ghostPos.x + ghostSize.x, ghostPos.y + ghostSize.y},
-                                border, ImGui::GetStyle().FrameRounding, 0, 1.5f);
-                    dl->AddText({ghostPos.x + ImGui::GetStyle().FramePadding.x,
-                                 ghostPos.y + ImGui::GetStyle().FramePadding.y},
-                                IM_COL32(230, 240, 255, armed ? 220 : 150), ghostLabel);
-
-                    if (payload->IsDelivery() && armed)
-                        requestMove(dragged, lastVisibleToken, true, true);
-                } else {
-                    bottomArmKey.clear();
-                    bottomArmAt = 0.0;
-
-                    struct SlotPreview {
-                        std::string target;
-                        bool after{false};
-                        float x{};
-                        float top{};
-                        float bottom{};
-                        float distance{FLT_MAX};
-                    } best;
-
-                    for (const PopupButtonRect& rect : buttonRects) {
-                        const bool rowHit = mouse.y >= rect.min.y - 8.0f && mouse.y <= rect.max.y + 8.0f;
-                        if (!rowHit)
-                            continue;
-                        const float beforeDistance = std::fabs(mouse.x - rect.min.x);
-                        if (beforeDistance < best.distance) {
-                            best = {rect.token, false, rect.min.x, rect.min.y, rect.max.y, beforeDistance};
-                        }
-                        const float afterDistance = std::fabs(mouse.x - rect.max.x);
-                        if (afterDistance < best.distance) {
-                            best = {rect.token, true, rect.max.x, rect.min.y, rect.max.y, afterDistance};
-                        }
-                    }
-
-                    if (!best.target.empty()) {
-                        dl->AddRectFilled({best.x - 1.5f, best.top - 2.0f},
-                                          {best.x + 1.5f, best.bottom + 2.0f},
-                                          IM_COL32(77, 145, 255, 180), 2.0f);
-                        if (payload->IsDelivery())
-                            requestMove(dragged, best.target, false, best.after);
-                    }
-                }
-            }
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::SetCursorScreenPos(finalStripCursor);
-    }
-
-    if (pendingMove.requested)
-        moveToken(pendingMove.dragged, pendingMove.target, pendingMove.below, pendingMove.after);
     ImGui::Spacing();
 }
 
@@ -1607,6 +1114,28 @@ void PopupWindow::ToggleMaximized() {
     ApplyWindowRegion();
 }
 
+void PopupWindow::ClampToMonitorWorkArea() {
+    RECT window{};
+    if (!m_hwnd || !GetWindowRect(m_hwnd, &window))
+        return;
+
+    HMONITOR monitor = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info{sizeof(MONITORINFO)};
+    if (!GetMonitorInfoW(monitor, &info))
+        return;
+
+    const LONG width = window.right - window.left;
+    const LONG height = window.bottom - window.top;
+    const LONG maxX = std::max(info.rcWork.left, info.rcWork.right - width);
+    const LONG maxY = std::max(info.rcWork.top, info.rcWork.bottom - height);
+    const LONG x = std::clamp(window.left, info.rcWork.left, maxX);
+    const LONG y = std::clamp(window.top, info.rcWork.top, maxY);
+    if (x != window.left || y != window.top) {
+        SetWindowPos(m_hwnd, HWND_TOPMOST, x, y, 0, 0,
+                     SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
+}
+
 LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
                                        WPARAM wParam, LPARAM lParam) {
     if (msg == WM_CREATE) {
@@ -1664,6 +1193,9 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
         if (onT)        return HTTOP;
         if (onB)        return HTBOTTOM;
 
+        if (pw && PtInRect(&pw->m_dragHandleRect, pt))
+            return HTCAPTION;
+
         return HTCLIENT;
     }
 
@@ -1701,8 +1233,15 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     case WM_SIZE:
         if (pw && pw->m_swapChain && wParam != SIZE_MINIMIZED) {
-            pw->m_width = LOWORD(lParam);
-            pw->m_height = HIWORD(lParam);
+            // LOWORD/HIWORD are the client dimensions. The popup's persisted
+            // size and PositionAtCursor() use the outer WS_THICKFRAME window
+            // dimensions, so feeding client size back here progressively
+            // shrank the popup every time it was shown.
+            RECT outer{};
+            if (GetWindowRect(hwnd, &outer)) {
+                pw->m_width = outer.right - outer.left;
+                pw->m_height = outer.bottom - outer.top;
+            }
             pw->ResizeSwapChainToClient();
             pw->ApplyWindowRegion();
         }
@@ -1734,6 +1273,8 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg,
 
     case WM_EXITSIZEMOVE:
         KillTimer(hwnd, kPopupResizeRenderTimerId);
+        if (pw)
+            pw->ClampToMonitorWorkArea();
         return 0;
 
     case WM_TIMER:

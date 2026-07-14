@@ -77,6 +77,7 @@ private:
     void ApplyDwmFrameSettings();
     void ApplyWindowRegion();
     void InvalidateWindowRegion();
+    void ClampToMonitorWorkArea();
     void ToggleMaximized();
     void StartPasteTargetTracking();
     void StopPasteTargetTracking();
@@ -133,6 +134,7 @@ private:
 
     // -- Win32 + D3D11 ---------------------------------------------------------
     HWND                    m_hwnd{};
+    RECT                    m_dragHandleRect{};
     HINSTANCE               m_hInstance{};
     ID3D11Device*           m_device{};       // borrowed - not owned
     ID3D11DeviceContext*    m_context{};      // borrowed - not owned

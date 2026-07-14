@@ -71,6 +71,13 @@ struct AndroidSettings {
     std::string deviceEndpoint;
 };
 
+struct PopupSettings {
+    bool showDestinationCounts{false};
+    bool programLauncherEnabled{false};
+    std::string programLauncherLabel{"Launch"};
+    std::string programLauncherPath;
+};
+
 struct AppConfig {
     AppearanceSettings appearance{};
     HotkeySettings hotkeys{HotkeyManager::DefaultSettings()};
@@ -78,6 +85,7 @@ struct AppConfig {
     UiSettings ui{};
     EditorSettings editor{};
     AndroidSettings android{};
+    PopupSettings popup{};
     ImageSettings images{};
     std::vector<CustomFilter> customFilters;
     std::vector<std::string> popupButtonOrder;

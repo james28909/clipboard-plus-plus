@@ -76,6 +76,7 @@ set(APP_SOURCES
     src/ui/MainWindowAbout.cpp
     src/ui/MainWindowSupport.cpp
     src/ui/PopupWindow.cpp
+    src/ui/PopupWindowToolbar.cpp
     src/ui/PopupWindowAndroid.cpp
     src/ui/PopupWindowHistory.cpp
     src/ui/PopupWindowImages.cpp

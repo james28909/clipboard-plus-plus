@@ -111,7 +111,7 @@ Settings uses a plain, flat sidebar: **General**, **Clipboard**, **Popup**, **Ho
 
 ### Support and diagnostics
 
-**Settings → Support & diagnostics** is available in Release and Debug builds. It creates a reviewable ZIP containing selected environment, sanitized feature, database-health, startup-performance, and safe diagnostic information. The bundle manifest lists every included file and the data that is always excluded. Clipboard contents, images, database pages, encryption keys, DPAPI blobs, raw configuration, named-slot/template/transform values, endpoints, credentials, raw crash dumps, and `paste_debug.log` are never bundled.
+**Settings → Support & diagnostics** is available in Release and Debug builds. It creates a reviewable ZIP containing selected environment, sanitized feature, database-health, startup-performance, and safe diagnostic information. The bundle manifest lists every included file and the data that is always excluded. Clipboard contents, images, database pages, encryption keys, DPAPI blobs, raw configuration, named-slot/template/transform values, endpoints, external-editor/program-launcher paths, credentials, raw crash dumps, and `paste_debug.log` are never bundled.
 
 The ZIP can be copied as a Windows file-drop object for pasting into an upload control. The same page can prepare Markdown for a GitHub issue or open the public issue form with safe text fields; it never uploads the ZIP or stores GitHub credentials. Security-sensitive details should be reported through the repository's private security-advisory form.
 

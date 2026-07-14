@@ -160,6 +160,10 @@ AppearanceSettings ThemeDefaults(ThemeId theme) {
     settings.iconPaper       = Color(255, 255, 255);
     settings.iconMarginLine  = settings.closeButtonHover;
     settings.iconRuledLines  = settings.accent;
+    settings.popupFilterBorder = settings.accent;
+    settings.popupActionBorder = Mix(settings.accent, Color(46, 204, 113), 0.65f);
+    settings.popupDestinationBorder = Mix(settings.accent, Color(180, 100, 235), 0.65f);
+    settings.customCommandBarColors = false;
     return settings;
 }
 
@@ -180,6 +184,12 @@ static AppearanceSettings EffectiveSettings(const AppearanceSettings& settings) 
     effective.selectedTab     = theme.selectedTab;
     effective.buttonOff       = theme.buttonOff;
     effective.buttonOn        = theme.buttonOn;
+    if (!settings.customCommandBarColors) {
+        effective.popupFilterBorder = theme.popupFilterBorder;
+        effective.popupActionBorder = theme.popupActionBorder;
+        effective.popupDestinationBorder = theme.popupDestinationBorder;
+        effective.customCommandBarColors = false;
+    }
     effective.closeButton     = theme.closeButton;
     effective.closeButtonHover = theme.closeButtonHover;
     effective.closeButtonText = theme.closeButtonText;
@@ -227,6 +237,10 @@ SavedAppearanceTheme ToSavedTheme(const AppearanceSettings& settings, const std:
     saved.selectedTab = effective.selectedTab;
     saved.buttonOff = effective.buttonOff;
     saved.buttonOn = effective.buttonOn;
+    saved.popupFilterBorder = effective.popupFilterBorder;
+    saved.popupActionBorder = effective.popupActionBorder;
+    saved.popupDestinationBorder = effective.popupDestinationBorder;
+    saved.customCommandBarColors = settings.customCommandBarColors;
     saved.closeButton = effective.closeButton;
     saved.closeButtonHover = effective.closeButtonHover;
     saved.closeButtonText = effective.closeButtonText;
@@ -263,6 +277,7 @@ SavedAppearanceTheme ToSavedTheme(const AppearanceSettings& settings, const std:
     saved.popupRounding = effective.popupRounding;
     saved.popupButtonRowPadding = effective.popupButtonRowPadding;
     saved.popupButtonColumnPadding = effective.popupButtonColumnPadding;
+    saved.popupCommandBarRounding = effective.popupCommandBarRounding;
     saved.controlRounding = effective.controlRounding;
     return saved;
 }
@@ -279,6 +294,10 @@ void ApplySavedTheme(AppearanceSettings& settings, const SavedAppearanceTheme& s
     settings.selectedTab = saved.selectedTab;
     settings.buttonOff = saved.buttonOff;
     settings.buttonOn = saved.buttonOn;
+    settings.popupFilterBorder = saved.popupFilterBorder;
+    settings.popupActionBorder = saved.popupActionBorder;
+    settings.popupDestinationBorder = saved.popupDestinationBorder;
+    settings.customCommandBarColors = saved.customCommandBarColors;
     settings.closeButton = saved.closeButton;
     settings.closeButtonHover = saved.closeButtonHover;
     settings.closeButtonText = saved.closeButtonText;
@@ -315,6 +334,7 @@ void ApplySavedTheme(AppearanceSettings& settings, const SavedAppearanceTheme& s
     settings.popupRounding = saved.popupRounding;
     settings.popupButtonRowPadding = saved.popupButtonRowPadding;
     settings.popupButtonColumnPadding = saved.popupButtonColumnPadding;
+    settings.popupCommandBarRounding = saved.popupCommandBarRounding;
     settings.controlRounding = saved.controlRounding;
 }
 

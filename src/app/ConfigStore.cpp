@@ -99,6 +99,10 @@ void LoadColorFields(T& s, const json& j) {
     s.selectedTab     = ColorFromJson(j.value("selectedTab",      json::array()), s.selectedTab);
     s.buttonOff       = ColorFromJson(j.value("buttonOff",        json::array()), s.buttonOff);
     s.buttonOn        = ColorFromJson(j.value("buttonOn",         json::array()), s.buttonOn);
+    s.popupFilterBorder = ColorFromJson(j.value("popupFilterBorder", json::array()), s.popupFilterBorder);
+    s.popupActionBorder = ColorFromJson(j.value("popupActionBorder", json::array()), s.popupActionBorder);
+    s.popupDestinationBorder = ColorFromJson(j.value("popupDestinationBorder", json::array()), s.popupDestinationBorder);
+    s.customCommandBarColors = j.value("customCommandBarColors", s.customCommandBarColors);
     s.closeButton     = ColorFromJson(j.value("closeButton",      json::array()), s.closeButton);
     s.closeButtonHover= ColorFromJson(j.value("closeButtonHover", json::array()), s.closeButtonHover);
     s.closeButtonText = ColorFromJson(j.value("closeButtonText",  json::array()), s.closeButtonText);
@@ -135,6 +139,7 @@ void LoadColorFields(T& s, const json& j) {
     s.popupRounding    = std::clamp(j.value("popupRounding",    s.popupRounding),    0.0f, 18.0f);
     s.popupButtonRowPadding = std::clamp(j.value("popupButtonRowPadding", s.popupButtonRowPadding), 0.0f, 12.0f);
     s.popupButtonColumnPadding = std::clamp(j.value("popupButtonColumnPadding", s.popupButtonColumnPadding), 0.0f, 16.0f);
+    s.popupCommandBarRounding = std::clamp(j.value("popupCommandBarRounding", s.popupCommandBarRounding), 0.0f, 12.0f);
     s.controlRounding  = std::clamp(j.value("controlRounding",  s.controlRounding),  0.0f, 12.0f);
 }
 
@@ -150,6 +155,10 @@ json SaveColorFields(const T& s) {
         {"selectedTab",       ColorToJson(s.selectedTab)},
         {"buttonOff",         ColorToJson(s.buttonOff)},
         {"buttonOn",          ColorToJson(s.buttonOn)},
+        {"popupFilterBorder", ColorToJson(s.popupFilterBorder)},
+        {"popupActionBorder", ColorToJson(s.popupActionBorder)},
+        {"popupDestinationBorder", ColorToJson(s.popupDestinationBorder)},
+        {"customCommandBarColors", s.customCommandBarColors},
         {"closeButton",       ColorToJson(s.closeButton)},
         {"closeButtonHover",  ColorToJson(s.closeButtonHover)},
         {"closeButtonText",   ColorToJson(s.closeButtonText)},
@@ -186,6 +195,7 @@ json SaveColorFields(const T& s) {
         {"popupRounding",    s.popupRounding},
         {"popupButtonRowPadding", s.popupButtonRowPadding},
         {"popupButtonColumnPadding", s.popupButtonColumnPadding},
+        {"popupCommandBarRounding", s.popupCommandBarRounding},
         {"controlRounding",  s.controlRounding},
     };
 }
@@ -475,6 +485,17 @@ void LoadAndroid(const json& root, AppConfig& config) {
     config.android.deviceEndpoint = a.value("deviceEndpoint", config.android.deviceEndpoint);
 }
 
+void LoadPopup(const json& root, AppConfig& config) {
+    const json& p = root.value("popup", json::object());
+    PopupSettings& s = config.popup;
+    s.showDestinationCounts = p.value("showDestinationCounts", s.showDestinationCounts);
+    s.programLauncherEnabled = p.value("programLauncherEnabled", s.programLauncherEnabled);
+    s.programLauncherLabel = p.value("programLauncherLabel", s.programLauncherLabel);
+    s.programLauncherPath = p.value("programLauncherPath", s.programLauncherPath);
+    if (s.programLauncherLabel.empty())
+        s.programLauncherLabel = "Launch";
+}
+
 void LoadDeveloper(const json& root, AppConfig& config) {
     const json& d = root.value("developer", json::object());
     config.developer.enabled = d.value("enabled", config.developer.enabled);
@@ -652,6 +673,7 @@ AppConfig Load() {
         LoadUi(root, config);
         LoadEditor(root, config);
         LoadAndroid(root, config);
+        LoadPopup(root, config);
         LoadDeveloper(root, config);
         LoadImages(root, config);
         LoadCustomFilters(root, config);
@@ -790,6 +812,12 @@ bool Save(const AppConfig& config) {
         }},
         {"android", {
             {"deviceEndpoint", config.android.deviceEndpoint},
+        }},
+        {"popup", {
+            {"showDestinationCounts", config.popup.showDestinationCounts},
+            {"programLauncherEnabled", config.popup.programLauncherEnabled},
+            {"programLauncherLabel", config.popup.programLauncherLabel},
+            {"programLauncherPath", config.popup.programLauncherPath},
         }},
         {"developer", {
             {"enabled", config.developer.enabled},
