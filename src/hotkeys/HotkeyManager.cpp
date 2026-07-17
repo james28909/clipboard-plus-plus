@@ -281,60 +281,6 @@ std::string HotkeyManager::CapturePreviewText() const {
     return "Press New to capture a hotkey";
 }
 
-std::vector<KeyBinding> HotkeyManager::DefaultBindings() {
-    return {
-        {true, true, false, 'V',          HotkeyAction::TogglePopup,     0}, // Ctrl+Shift+V
-        {true, true, false, 'S',          HotkeyAction::ShowPopupSearch, 0}, // Ctrl+Shift+S
-        {true, true, false, 'I',          HotkeyAction::Incognito,       0}, // Ctrl+Shift+I
-        {true, true, false, VK_OEM_COMMA, HotkeyAction::OpenSettings,    0}, // Ctrl+Shift+,
-        {true, true, false, 'E',          HotkeyAction::ToggleEditorWindow, 0}, // Ctrl+Shift+E
-        {true, true, false, 'G',          HotkeyAction::LaunchClipboardWebSearch, 0}, // Ctrl+Shift+G
-        {true, true, true,  'Z',          HotkeyAction::SendSelectionToAndroid, 0}, // Ctrl+Alt+Shift+Z
-        {false, true, true, 'D',          HotkeyAction::ToggleDebugWindow, 0}, // Alt+Shift+D
-    };
-}
-
-HotkeySettings HotkeyManager::DefaultSettings() {
-    HotkeySettings settings;
-    settings.bindings = DefaultBindings();
-    settings.hiddenPasteCtrl = true;
-    settings.hiddenPasteShift = false;
-    settings.hiddenPasteAlt = true;
-    settings.hiddenPasteFunctionKeys = true;
-    settings.hiddenPasteCtrlSides = 3;
-    settings.hiddenPasteShiftSides = 0;
-    settings.hiddenPasteAltSides = 3;
-    settings.popupHistoryBank.enabled = true;
-    settings.popupHistoryBank.chord.exactModifiers = true;
-    settings.popupHistoryBank.chord.physicalModifiers = 0;
-    settings.popupHistoryBank.numberKeys = true;
-    settings.popupHistoryBank.letterKeys = true;
-    settings.popupHistoryBank.functionKeys = false;
-
-    settings.globalHistoryBank.enabled = true;
-    settings.globalHistoryBank.chord.ctrl = true;
-    settings.globalHistoryBank.chord.alt = true;
-    settings.globalHistoryBank.numberKeys = true;
-    settings.globalHistoryBank.letterKeys = true;
-    settings.globalHistoryBank.functionKeys = true;
-
-    settings.pinnedHistoryBank.enabled = true;
-    settings.pinnedHistoryBank.chord.ctrl = true;
-    settings.pinnedHistoryBank.chord.shift = true;
-    settings.pinnedHistoryBank.numberKeys = true;
-    settings.pinnedHistoryBank.letterKeys = true;
-    settings.pinnedHistoryBank.functionKeys = true;
-
-    settings.profileBank.enabled = true;
-    settings.profileBank.chord.shift = true;
-    settings.profileBank.chord.alt = true;
-    settings.profileBank.numberKeys = true;
-    settings.profileBank.letterKeys = true;
-    settings.profileBank.functionKeys = true;
-    settings.passthroughHotkeys = {"Alt+Tab", "Alt+F4"};
-    return settings;
-}
-
 int HotkeyManager::SlotFromVKey(UINT vk, bool includeFunctionKeys) {
     if (vk >= '1' && vk <= '9') return static_cast<int>(vk - '1');
     if (vk >= 'A' && vk <= 'Z') return 9 + static_cast<int>(vk - 'A');

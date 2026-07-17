@@ -123,6 +123,7 @@
 This is a pass/fail acceptance checklist, not a feature wishlist. Remaining roadmap work may satisfy these requirements, but Clipboard++ must not be labeled stable until every release-blocking item is verified against the packaged release candidate.
 
 ### Data safety and migration
+- [x] Add an automated data-safety suite and evidence matrix covering encryption, supported-beta configuration compatibility, legacy migration, failure retention, backup/restore rollback, interrupted writes, shutdown flushing, and plaintext-boundary checks
 - [ ] Verify a clean installation creates usable encrypted clipboard and image databases with DPAPI-protected keys
 - [ ] Verify upgrade from every supported public beta preserves profiles, active history, pinned items, images, vault entries, named slots, templates, transforms, hotkeys, themes, and settings
 - [ ] Verify migration from legacy plaintext JSON/SQLite and DPAPI history formats; retain a recoverable original until the encrypted replacement is validated

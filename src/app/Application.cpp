@@ -865,9 +865,11 @@ bool Application::SaveCustomAction(CustomActionDefinition& action) {
     return saved;
 }
 
-bool Application::DeleteCustomAction(int64_t actionId) {
+bool Application::DeleteCustomAction(int64_t actionId, std::string* error) {
     const bool deleted = m_clipboardProfiles &&
-                         m_clipboardProfiles->DeleteCustomAction(actionId);
+                         m_clipboardProfiles->DeleteCustomAction(actionId, error);
+    if (!m_clipboardProfiles && error)
+        *error = "Clipboard storage has not initialized.";
     if (deleted) {
         m_customActionsCached = false;
         SyncCustomActionHotkeys();
@@ -1375,7 +1377,8 @@ void Application::SetAutoCreateClipboardByProcess(bool value) {
 }
 
 void Application::SaveConfig() {
-    ConfigStore::Save(m_config);
+    if (m_configurationWritable)
+        ConfigStore::Save(m_config);
 }
 
 void Application::CommitAppearanceChange() {
@@ -1753,7 +1756,19 @@ bool Application::Init() {
                     MB_OK | MB_ICONERROR | MB_TOPMOST);
     }
     auto stageStarted = m_startupProfiler.BeginStage();
-    AppConfig loadedConfig = ConfigStore::Load();
+    ConfigStore::LoadResult configuration = ConfigStore::LoadWithStatus();
+    if (!configuration.ok) {
+        m_configurationWritable = false;
+        m_safeMode = true;
+        m_safeModeRequested = true;
+        const std::wstring message = win32util::Utf8ToWide(
+            "Clipboard++ could not read config.json and will start in read-only safe mode. "
+            "The original file will not be overwritten. Restore a backup or repair the file, then restart.\n\nError: " +
+            configuration.error);
+        MessageBoxW(nullptr, message.c_str(), L"Clipboard++ configuration recovery",
+                    MB_OK | MB_ICONERROR | MB_TOPMOST);
+    }
+    AppConfig loadedConfig = std::move(configuration.config);
     m_startupProfiler.FinishStage("config load", stageStarted);
 
     stageStarted = m_startupProfiler.BeginStage();
@@ -2521,7 +2536,19 @@ LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
 
     case WM_RELOAD_CONFIG:
-        if (app) app->ApplyLoadedConfig(ConfigStore::Load());
+        if (app) {
+            const ConfigStore::LoadResult loaded = ConfigStore::LoadWithStatus();
+            if (loaded.ok) {
+                app->ApplyLoadedConfig(loaded.config);
+            } else {
+                MessageBoxA(hwnd,
+                    ("Clipboard++ could not reload config.json. The current settings "
+                     "remain active and the unreadable file was not overwritten.\n\n" +
+                     loaded.error).c_str(),
+                    "Clipboard++ - Configuration error",
+                    MB_OK | MB_ICONERROR);
+            }
+        }
         return 0;
 
     case WM_COPYDATA:

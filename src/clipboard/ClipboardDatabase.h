@@ -75,7 +75,7 @@ public:
     bool DeletePasteTemplate(int64_t templateId);
     bool LoadCustomActions(std::vector<CustomActionDefinition>& actions) const;
     bool SaveCustomAction(CustomActionDefinition& action);
-    bool DeleteCustomAction(int64_t actionId);
+    bool DeleteCustomAction(int64_t actionId, std::string* error = nullptr);
 
     bool GetActiveProfileId(std::string& profileId) const;
     bool SetActiveProfileId(const std::string& profileId);

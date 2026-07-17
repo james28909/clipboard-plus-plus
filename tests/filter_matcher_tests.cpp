@@ -52,6 +52,18 @@ int main() {
                          ModifierState::RightCtrlBit | ModifierState::RightAltBit), 'P'),
                      "physical hotkeys distinguish left and right modifiers");
 
+        KeyBinding leftAltTab;
+        leftAltTab.vkey = VK_TAB;
+        leftAltTab.alt = true;
+        leftAltTab.altSide = ModifierSide::Left;
+        leftAltTab.exactModifiers = true;
+        leftAltTab.physicalModifiers = ModifierState::LeftAltBit;
+        ok &= Expect(leftAltTab.Matches(
+                         ModifierState::FromMask(ModifierState::LeftAltBit), VK_TAB) &&
+                     !leftAltTab.Matches(
+                         ModifierState::FromMask(ModifierState::RightAltBit), VK_TAB),
+                     "left Alt+Tab pass-through chord matches its physical side exactly");
+
         HotkeySettings routes;
         routes.globalHistoryBank = {};
         routes.globalHistoryBank.chord.exactModifiers = true;

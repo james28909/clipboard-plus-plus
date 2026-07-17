@@ -95,6 +95,7 @@ set(APP_SOURCES
     src/ui/ToastWindow.cpp
     src/ui/DebugWindow.cpp
     # Milestone 4 - hotkeys
+    src/hotkeys/HotkeySettings.cpp
     src/hotkeys/HotkeyManager.cpp
     # Milestone 2 - clipboard core
     src/clipboard/ClipboardItem.cpp
@@ -113,6 +114,7 @@ set(PORTABLE_CORE_SOURCES
     src/app/ConfigStore.cpp
     src/filters/CustomFilter.cpp
     src/ui/Appearance.cpp
+    src/hotkeys/HotkeySettings.cpp
     src/hotkeys/HotkeyManager.cpp
     src/clipboard/ClipboardItem.cpp
     src/clipboard/ClipboardHistory.cpp
@@ -347,6 +349,7 @@ if(WIN32)
         bcrypt.lib
     )
     target_compile_definitions(encrypted_sqlite_vfs_tests PRIVATE
+        CLIPBOARDPP_TESTING
         UNICODE
         _UNICODE
         WIN32_LEAN_AND_MEAN
@@ -361,6 +364,9 @@ if(WIN32)
     add_executable(clipboard_database_tests
         tests/clipboard_database_tests.cpp
         src/actions/CustomAction.cpp
+        src/app/ConfigStore.cpp
+        src/filters/CustomFilter.cpp
+        src/hotkeys/HotkeySettings.cpp
         src/transforms/RegexTransform.cpp
         src/templates/PasteTemplate.cpp
         src/formatting/StructuredFormatter.cpp
@@ -369,9 +375,11 @@ if(WIN32)
         src/security/StatePackage.cpp
         src/util/Win32Util.cpp
         src/clipboard/ClipboardItem.cpp
+        src/clipboard/ContentDetector.cpp
         src/clipboard/ClipboardHistory.cpp
         src/clipboard/ClipboardHistoryStore.cpp
         src/clipboard/ClipboardDatabase.cpp
+        src/clipboard/ClipboardProfileManager.cpp
         ${SQLITE_DIR}/sqlite3.c
     )
     target_include_directories(clipboard_database_tests PRIVATE

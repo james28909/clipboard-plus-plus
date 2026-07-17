@@ -4,7 +4,7 @@ Clipboard++ is a fast Windows clipboard manager with searchable history, a non-a
 
 It is built in C++17 with Win32, Dear ImGui, DirectX 11, and CMake. The Windows executables use the static MSVC runtime, so no separate runtime installer is required.
 
-**Current release:** `0.1.0-beta.7` · **Supported systems:** Windows 10 and Windows 11<br>
+**Current release:** `0.1.0-beta.8` · **Supported systems:** Windows 10 and Windows 11<br>
 **Author:** james28909, with AI-assisted development from OpenAI Codex and Claude
 
 [Releases](https://github.com/james28909/clipboard-plus-plus/releases) · [Build from source](#building-from-source) · [Keyboard shortcuts](#keyboard-shortcuts) · [Security and storage](#security-and-storage) · [Roadmap](TODO.md) · [Repository map](#repository-map)
@@ -156,7 +156,7 @@ Setup and network details are in the [Android companion README](android/clipboar
 
 ## Security and storage
 
-The [clipboard data boundary audit](docs/SECURITY_AUDIT.md) explains source-process metadata, incognito transitions, plaintext exports, diagnostics, crash files, Windows clipboard retention after paste, and external-editor scratch files. Release candidates are evaluated with the [release-readiness checklist](docs/RELEASE_READINESS.md).
+The [clipboard data boundary audit](docs/SECURITY_AUDIT.md) explains source-process metadata, incognito transitions, plaintext exports, diagnostics, crash files, Windows clipboard retention after paste, and external-editor scratch files. The [data-safety verification matrix](docs/DATA_SAFETY_VERIFICATION.md) maps storage and migration guarantees to automated evidence. Release candidates are evaluated with the [release-readiness checklist](docs/RELEASE_READINESS.md).
 
 Clipboard++ stores its user data under `%APPDATA%\Clipboard++`:
 
@@ -178,7 +178,7 @@ The bundled SQLite Editor detects Clipboard++ `.key` sidecars and opens encrypte
 
 **Settings → Privacy → Encrypted backup & restore** creates a timestamped backup folder using SQLite's online backup API. It does not copy a live database/WAL pair. Each included database receives a fresh AES-256-XTS key protected by current-user Windows DPAPI, and `config.json` is DPAPI-protected inside the same folder. `backup-manifest.json` records the included components without containing clipboard payloads.
 
-Restore first validates the manifest, configuration JSON, database integrity, expected schemas, and DPAPI keys. Clipboard++ then creates a fresh encrypted restore snapshot while the current data remains open and unchanged. On **Restart and restore now**, the staged state is installed before storage initialization. The previous encrypted databases, keys, sidecars, and configuration are retained under `%APPDATA%\Clipboard++\restore-rollback` so a failed or unwanted restore remains recoverable. A staged restore can be canceled before restart.
+Restore first validates the manifest, configuration JSON, database integrity, expected schemas, and DPAPI keys. Clipboard++ then creates a fresh encrypted restore snapshot while the current data remains open and unchanged. On **Restart and restore now**, the staged state is installed before storage initialization. The previous encrypted databases and key sidecars are retained under `%APPDATA%\Clipboard++\restore-rollback`; the previous configuration is retained there as `config.json.dpapi`, protected by DPAPI. This keeps a failed or unwanted restore recoverable without leaving a plaintext rollback configuration. A staged restore can be canceled before restart.
 
 A full backup includes profiles and history, pinned and vault content, native clipboard formats, images, named slots, transforms, paste templates, workflow actions, hotkeys, appearance, filters, popup behavior, and other saved settings.
 

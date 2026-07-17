@@ -657,14 +657,16 @@ void LoadClipboards(const json& root, AppConfig& config) {
 
 namespace ConfigStore {
 
-AppConfig Load() {
-    AppConfig config;
+LoadResult LoadWithStatus() {
+    LoadResult result;
+    AppConfig& config = result.config;
     const std::filesystem::path path = ResolveConfigPath();
     std::ifstream in(path);
     if (!in) {
         EnsureClipboardProfiles(config);
-        return config;
+        return result;
     }
+    result.existed = true;
 
     try {
         json root = json::parse(in, nullptr, true, true);
@@ -694,13 +696,25 @@ AppConfig Load() {
         config.hidePopupOnOutsideClick = root.value("hidePopupOnOutsideClick", config.hidePopupOnOutsideClick);
         config.pasteMoveTarget = std::clamp(root.value("pasteMoveTarget", config.pasteMoveTarget), 0, 2);
         LoadClipboards(root, config);
+    } catch (const std::exception& ex) {
+        result.ok = false;
+        result.error = ex.what();
+        EnsureClipboardProfiles(config);
+        return result;
     } catch (...) {
-        return AppConfig{};
+        result.ok = false;
+        result.error = "unknown configuration parse error";
+        EnsureClipboardProfiles(config);
+        return result;
     }
 
     EnsureClipboardProfiles(config);
 
-    return config;
+    return result;
+}
+
+AppConfig Load() {
+    return LoadWithStatus().config;
 }
 
 bool Save(const AppConfig& config) {

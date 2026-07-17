@@ -630,8 +630,45 @@ int Open(const std::filesystem::path& databasePath, sqlite3** database,
 bool MigratePlaintextDatabase(const std::filesystem::path& databasePath,
                               std::string* error) {
     if (!Register(error)) return false;
-    if (HasKey(databasePath)) return true;
     std::error_code ec;
+    std::filesystem::path temporary = databasePath;
+    temporary += L".encrypted-migration";
+    std::filesystem::path backup = databasePath;
+    backup += L".plaintext-migration-backup";
+
+    // Recover the only destructive migration window: the plaintext source has
+    // been renamed to its rollback path but the encrypted database/key pair was
+    // not completely installed or verified before the process stopped.
+    if (std::filesystem::exists(backup, ec)) {
+        bool installedValid = false;
+        if (HasKey(databasePath) && std::filesystem::exists(databasePath, ec)) {
+            sqlite3* verify = nullptr;
+            installedValid = Open(
+                databasePath, &verify,
+                SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr) == SQLITE_OK &&
+                IntegrityCheck(verify);
+            if (verify) sqlite3_close(verify);
+        }
+        if (installedValid) {
+            std::filesystem::remove(backup, ec);
+            std::filesystem::remove(temporary, ec);
+            RemoveKey(temporary);
+            return true;
+        }
+
+        RemoveSidecars(databasePath);
+        std::filesystem::remove(databasePath, ec);
+        RemoveKey(databasePath);
+        if (!MoveFileExW(backup.c_str(), databasePath.c_str(),
+                         MOVEFILE_WRITE_THROUGH)) {
+            SetError(error, "Could not recover the interrupted plaintext migration rollback");
+            return false;
+        }
+        std::filesystem::remove(temporary, ec);
+        RemoveKey(temporary);
+    }
+
+    if (HasKey(databasePath)) return true;
     if (!std::filesystem::exists(databasePath, ec) ||
         std::filesystem::file_size(databasePath, ec) == 0)
         return CreateKey(databasePath, error);
@@ -650,10 +687,6 @@ bool MigratePlaintextDatabase(const std::filesystem::path& databasePath,
         return false;
     }
 
-    std::filesystem::path temporary = databasePath;
-    temporary += L".encrypted-migration";
-    std::filesystem::path backup = databasePath;
-    backup += L".plaintext-migration-backup";
     std::filesystem::remove(temporary, ec);
     RemoveKey(temporary);
     std::filesystem::remove(backup, ec);

@@ -71,7 +71,8 @@ bool ClipboardDatabase::Open(const std::filesystem::path& path,
         Close();
         return false;
     }
-    if (!Exec("PRAGMA page_size=4096;") ||
+    if (sqlite3_busy_timeout(m_db, 5000) != SQLITE_OK ||
+        !Exec("PRAGMA page_size=4096;") ||
         !Exec("PRAGMA journal_mode=WAL;") ||
         !Exec("PRAGMA synchronous=NORMAL;") ||
         !Exec("PRAGMA foreign_keys=ON;") || !CreateSchema()) {
@@ -755,15 +756,32 @@ bool ClipboardDatabase::SaveCustomAction(CustomActionDefinition& action) {
     return true;
 }
 
-bool ClipboardDatabase::DeleteCustomAction(int64_t actionId) {
+bool ClipboardDatabase::DeleteCustomAction(int64_t actionId, std::string* error) {
     sqlite3_stmt* statement = nullptr;
-    if (!m_db || actionId <= 0 || sqlite3_prepare_v2(m_db,
-            "DELETE FROM custom_actions WHERE action_id=?;",
-            -1, &statement, nullptr) != SQLITE_OK)
+    if (!m_db) {
+        if (error) *error = "The encrypted clipboard database is not open.";
         return false;
+    }
+    if (actionId <= 0) {
+        if (error) *error = "The workflow action has an invalid database ID.";
+        return false;
+    }
+    if (sqlite3_prepare_v2(m_db,
+            "DELETE FROM custom_actions WHERE action_id=?;",
+            -1, &statement, nullptr) != SQLITE_OK) {
+        if (error) *error = sqlite3_errmsg(m_db);
+        return false;
+    }
     sqlite3_bind_int64(statement, 1, actionId);
-    const bool ok = sqlite3_step(statement) == SQLITE_DONE &&
-                    sqlite3_changes(m_db) == 1;
+    const int result = sqlite3_step(statement);
+    const int changes = result == SQLITE_DONE ? sqlite3_changes(m_db) : 0;
+    const bool ok = result == SQLITE_DONE && changes == 1;
+    if (!ok && error) {
+        if (result != SQLITE_DONE)
+            *error = sqlite3_errmsg(m_db);
+        else
+            *error = "No matching workflow action exists in the database.";
+    }
     sqlite3_finalize(statement);
     return ok;
 }

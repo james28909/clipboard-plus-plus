@@ -689,7 +689,8 @@ void MainWindow::DrawHotkeys() {
         ImGui::InputText("##passthrough_capture_preview", previewBuf, sizeof(previewBuf),
                          ImGuiInputTextFlags_ReadOnly);
 
-        if (!passthroughCaptureReady)
+        const bool acceptDisabled = !passthroughCaptureReady;
+        if (acceptDisabled)
             ImGui::BeginDisabled();
         const float captureModalButtonW = uniformButtonWidth({"Accept", "Cancel"});
         if (ImGui::Button("Accept", {captureModalButtonW, 0.0f})) {
@@ -705,7 +706,7 @@ void MainWindow::DrawHotkeys() {
             passthroughPending = {};
             ImGui::CloseCurrentPopup();
         }
-        if (!passthroughCaptureReady)
+        if (acceptDisabled)
             ImGui::EndDisabled();
 
         ImGui::SameLine();

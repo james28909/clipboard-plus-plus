@@ -37,6 +37,12 @@ bool Contains(const std::filesystem::path& path, const std::string& needle) {
     return std::search(bytes.begin(), bytes.end(), needle.begin(), needle.end()) != bytes.end();
 }
 
+std::vector<char> ReadFile(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {};
+    return {std::istreambuf_iterator<char>(input), {}};
+}
+
 bool QueryValue(sqlite3* db, const std::string& id, std::string& value) {
     sqlite3_stmt* statement = nullptr;
     if (sqlite3_prepare_v2(db, "SELECT value FROM secrets WHERE id=?;", -1,
@@ -192,6 +198,38 @@ int main() {
                  "migrated data round-trips");
     if (db) sqlite3_close(db);
 
+    const auto interruptedMigrationPath = directory / "interrupted-migration.db";
+    const auto interruptedRollbackPath = std::filesystem::path(
+        interruptedMigrationPath.wstring() + L".plaintext-migration-backup");
+    const auto interruptedTemporaryPath = std::filesystem::path(
+        interruptedMigrationPath.wstring() + L".encrypted-migration");
+    const std::string interruptedSecret = "interrupted-plaintext-migration-secret";
+    ok &= Expect(CreatePlaintext(interruptedMigrationPath, interruptedSecret),
+                 "interrupted migration plaintext source is created");
+    std::filesystem::rename(interruptedMigrationPath, interruptedRollbackPath, ec);
+    {
+        std::ofstream partial(interruptedTemporaryPath,
+                              std::ios::binary | std::ios::trunc);
+        partial << "partial encrypted replacement";
+    }
+    error.clear();
+    ok &= Expect(EncryptedSqliteVfs::MigratePlaintextDatabase(
+                     interruptedMigrationPath, &error),
+                 "interrupted plaintext migration automatically recovers and retries");
+    ok &= Expect(!std::filesystem::exists(interruptedRollbackPath) &&
+                 !std::filesystem::exists(interruptedTemporaryPath) &&
+                 EncryptedSqliteVfs::HasKey(interruptedMigrationPath),
+                 "successful retry removes migration fragments after verification");
+    db = nullptr;
+    ok &= Expect(EncryptedSqliteVfs::Open(interruptedMigrationPath, &db,
+            SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, &error) == SQLITE_OK,
+                 "recovered migration database reopens");
+    loaded.clear();
+    ok &= Expect(db && QueryValue(db, "legacy", loaded) &&
+                 loaded == interruptedSecret,
+                 "interrupted migration rollback preserves the original rows");
+    if (db) sqlite3_close(db);
+
     const auto backupPath = directory / "encrypted-backup.db";
     error.clear();
     ok &= Expect(EncryptedSqliteVfs::BackupEncryptedDatabase(
@@ -282,8 +320,9 @@ int main() {
                  restoredImage == imageBackupSecret,
                  "restore recovers matching clipboard and image snapshots");
     ok &= Expect(Contains(liveData / "config.json", configBackupSecret) &&
-                 std::filesystem::exists(restored.rollbackPath / "config.json"),
-                 "restore recovers application settings and retains their rollback copy");
+                 std::filesystem::exists(restored.rollbackPath / "config.json.dpapi") &&
+                 !Contains(restored.rollbackPath / "config.json.dpapi", "newer-live-config"),
+                 "restore recovers settings and retains only a DPAPI-protected rollback copy");
     ok &= Expect(!backup_restore::ReadLastRestoreStatus(liveData).empty(),
                  "restore records an actionable startup result");
 
@@ -294,11 +333,51 @@ int main() {
                  backup_restore::CancelPendingRestore(liveData, &cancelError) &&
                  !backup_restore::HasPendingRestore(liveData),
                  "pending restore can be canceled before restart");
+
+    std::filesystem::remove(liveData / "clipboard.db", ec);
+    EncryptedSqliteVfs::RemoveKey(liveData / "clipboard.db");
+    std::filesystem::remove(liveData / "images.db", ec);
+    EncryptedSqliteVfs::RemoveKey(liveData / "images.db");
+    ok &= Expect(CreateProtectedTable(liveData / "clipboard.db", "profiles",
+                                     "interrupted-live-profile") &&
+                 CreateProtectedTable(liveData / "images.db", "images",
+                                     "interrupted-live-image"),
+                 "pre-interruption live databases are created");
+    const backup_restore::Result stagedForInterruption =
+        backup_restore::StageEncryptedRestore(liveData, created.path);
+    _putenv_s("CLIPBOARDPP_TEST_RESTORE_FAIL_AFTER_MOVES", "3");
+    const backup_restore::Result interruptedRestore =
+        backup_restore::ApplyPendingRestore(liveData);
+    _putenv_s("CLIPBOARDPP_TEST_RESTORE_FAIL_AFTER_MOVES", "");
+    std::string recoveredLiveProfile, recoveredLiveImage;
+    const bool profileRecovered = ReadProtectedValue(
+        liveData / "clipboard.db", "profiles", recoveredLiveProfile);
+    const bool imageRecovered = ReadProtectedValue(
+        liveData / "images.db", "images", recoveredLiveImage);
+    const bool interruptionRecovered = stagedForInterruption.ok &&
+                 !interruptedRestore.ok && interruptedRestore.safeToContinue &&
+                 backup_restore::HasPendingRestore(liveData) &&
+                 profileRecovered && imageRecovered &&
+                 recoveredLiveProfile == "interrupted-live-profile" &&
+                 recoveredLiveImage == "interrupted-live-image";
+    if (!interruptionRecovered)
+        std::cerr << "Interrupted restore detail: " << interruptedRestore.message
+                  << ", profile=" << profileRecovered
+                  << ", image=" << imageRecovered << '\n';
+    ok &= Expect(interruptionRecovered,
+                 "interrupted restore rolls both live databases back and remains retryable");
+    const backup_restore::Result retriedRestore =
+        backup_restore::ApplyPendingRestore(liveData);
+    ok &= Expect(retriedRestore.ok &&
+                 !backup_restore::HasPendingRestore(liveData),
+                 "interrupted restore succeeds when retried");
+
     const backup_restore::Result invalidRestore =
         backup_restore::StageEncryptedRestore(liveData, directory / "not-a-backup");
     ok &= Expect(!invalidRestore.ok && !invalidRestore.message.empty(),
                  "invalid restore folders fail without modifying live data");
 
+    const auto databaseBeforeKeyDamage = ReadFile(migrationPath);
     std::filesystem::path keyPath = EncryptedSqliteVfs::KeyPath(migrationPath);
     std::fstream key(keyPath, std::ios::binary | std::ios::in | std::ios::out);
     if (key) {
@@ -315,6 +394,8 @@ int main() {
     ok &= Expect(EncryptedSqliteVfs::Open(migrationPath, &db,
             SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, &error) != SQLITE_OK,
                  "damaged DPAPI key is rejected");
+    ok &= Expect(!error.empty() && ReadFile(migrationPath) == databaseBeforeKeyDamage,
+                 "damaged-key failure is actionable and does not replace the encrypted database");
     if (db) sqlite3_close(db);
 
     std::filesystem::remove_all(directory, ec);

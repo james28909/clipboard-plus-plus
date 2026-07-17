@@ -133,7 +133,7 @@ public:
     bool DeletePasteTemplate(int64_t templateId);
     std::vector<CustomActionDefinition> GetCustomActions() const;
     bool SaveCustomAction(CustomActionDefinition& action);
-    bool DeleteCustomAction(int64_t actionId);
+    bool DeleteCustomAction(int64_t actionId, std::string* error = nullptr);
     bool ImportCustomAction(const std::string& payload, std::string* error = nullptr);
     bool CopyTextToClipboard(const std::string& text);
     bool IsStartWithWindowsEnabled() const;
@@ -293,6 +293,7 @@ private:
     StartupProfiler::TimePoint m_profileMetadataLoadStarted{};
     bool m_safeModeRequested{false};
     bool m_safeMode{false};
+    bool m_configurationWritable{true};
     double m_renderFrameMs{0.0};
     mutable std::deque<std::chrono::steady_clock::time_point> m_clipboardEventTimes;
 

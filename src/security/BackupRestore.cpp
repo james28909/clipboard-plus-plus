@@ -6,6 +6,8 @@
 #include "../../third_party/sqlite/sqlite3.h"
 
 #include <chrono>
+#include <algorithm>
+#include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -408,6 +410,20 @@ Result ApplyPendingRestore(const std::filesystem::path& dataDirectory) {
         : std::vector<std::string>{"clipboard.db"};
     std::vector<std::pair<std::filesystem::path, std::filesystem::path>> oldMoves;
     std::vector<std::pair<std::filesystem::path, std::filesystem::path>> newMoves;
+#ifdef CLIPBOARDPP_TESTING
+    int failAfterMoves = 0;
+    if (const char* value = std::getenv("CLIPBOARDPP_TEST_RESTORE_FAIL_AFTER_MOVES"))
+        failAfterMoves = std::max(0, std::atoi(value));
+    int completedMoves = 0;
+    auto injectedFailure = [&]() {
+        if (failAfterMoves <= 0 || ++completedMoves != failAfterMoves)
+            return false;
+        error = "simulated interrupted restore";
+        return true;
+    };
+#else
+    auto injectedFailure = []() { return false; };
+#endif
     bool moved = true;
     for (const std::string& database : databases) {
         for (const auto& component : Components(database)) {
@@ -416,6 +432,7 @@ Result ApplyPendingRestore(const std::filesystem::path& dataDirectory) {
                 const auto rollback = result.rollbackPath / component;
                 if (!MoveExisting(current, rollback, &error)) { moved = false; break; }
                 oldMoves.emplace_back(rollback, current);
+                if (injectedFailure()) { moved = false; break; }
             }
         }
         if (!moved) break;
@@ -425,6 +442,7 @@ Result ApplyPendingRestore(const std::filesystem::path& dataDirectory) {
             const auto current = dataDirectory / component;
             if (!MoveExisting(staged, current, &error)) { moved = false; break; }
             newMoves.emplace_back(current, staged);
+            if (injectedFailure()) { moved = false; break; }
         }
         if (!moved) break;
     }
@@ -439,14 +457,27 @@ Result ApplyPendingRestore(const std::filesystem::path& dataDirectory) {
                                 restoredConfig, &error);
     std::filesystem::path rollbackConfig;
     bool configInstalled = false;
+    bool configRollbackIncomplete = false;
     if (valid && configIncluded) {
         const auto currentConfig = dataDirectory / "config.json";
-        rollbackConfig = result.rollbackPath / "config.json";
-        if (!MoveExisting(currentConfig, rollbackConfig, &error)) {
+        rollbackConfig = result.rollbackPath / kProtectedConfigName;
+        const bool currentConfigExists = std::filesystem::exists(currentConfig, ec);
+        if (currentConfigExists &&
+            !ProtectConfig(currentConfig, rollbackConfig, &error)) {
+            valid = false;
+        } else if (currentConfigExists &&
+                   !std::filesystem::remove(currentConfig, ec)) {
+            error = "Could not replace the current configuration.";
             valid = false;
         } else if (!WriteBytes(currentConfig, restoredConfig, &error)) {
             std::filesystem::remove(currentConfig, ec);
-            MoveExisting(rollbackConfig, currentConfig, nullptr);
+            if (currentConfigExists) {
+                std::vector<uint8_t> rollbackPlaintext;
+                configRollbackIncomplete =
+                    !UnprotectConfig(rollbackConfig, rollbackPlaintext, nullptr) ||
+                    !WriteBytes(currentConfig, rollbackPlaintext, nullptr);
+                SecureZeroMemory(rollbackPlaintext.data(), rollbackPlaintext.size());
+            }
             valid = false;
         } else {
             configInstalled = true;
@@ -454,11 +485,15 @@ Result ApplyPendingRestore(const std::filesystem::path& dataDirectory) {
         SecureZeroMemory(restoredConfig.data(), restoredConfig.size());
     }
     if (!valid) {
-        bool recovered = true;
+        bool recovered = !configRollbackIncomplete;
         if (configInstalled) {
             std::filesystem::remove(dataDirectory / "config.json", ec);
-            recovered &= MoveExisting(rollbackConfig,
-                                      dataDirectory / "config.json", nullptr);
+            if (std::filesystem::exists(rollbackConfig, ec)) {
+                std::vector<uint8_t> rollbackPlaintext;
+                recovered &= UnprotectConfig(rollbackConfig, rollbackPlaintext, nullptr) &&
+                    WriteBytes(dataDirectory / "config.json", rollbackPlaintext, nullptr);
+                SecureZeroMemory(rollbackPlaintext.data(), rollbackPlaintext.size());
+            }
         }
         for (auto it = newMoves.rbegin(); it != newMoves.rend(); ++it)
             recovered &= MoveExisting(it->first, it->second, nullptr);

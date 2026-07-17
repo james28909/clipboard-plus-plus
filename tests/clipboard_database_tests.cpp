@@ -1,4 +1,6 @@
 #include "../src/clipboard/ClipboardDatabase.h"
+#include "../src/clipboard/ClipboardProfileManager.h"
+#include "../src/app/ConfigStore.h"
 #include "../src/security/EncryptedSqliteVfs.h"
 #include "../src/security/StatePackage.h"
 #include "../third_party/sqlite/sqlite3.h"
@@ -325,6 +327,18 @@ int main(int argc, char** argv) {
                      items[0].formats[1].data.empty(),
                      "format manifest and exact bytes round-trip");
         ok &= Expect(loaded.NextId() == 42, "next history ID round-trips");
+        ClipboardHistory interruptedSave;
+        interruptedSave.LoadSnapshot({MakeItem(99, "uncommitted replacement", false)}, 100);
+        ok &= Expect(database.Begin() &&
+                     database.SaveHistory(first.id, interruptedSave),
+                     "interrupted history save reaches an uncommitted transaction");
+        database.Rollback();
+        ClipboardHistory afterInterruptedSave;
+        found = false;
+        ok &= Expect(database.LoadHistory(first.id, afterInterruptedSave, found) &&
+                     found && afterInterruptedSave.Snapshot().size() == 2 &&
+                     afterInterruptedSave.Snapshot()[0].text == secret,
+                     "rolled-back history save retains the previously committed snapshot");
         std::vector<NamedClipboardSlot> slots;
         ok &= Expect(database.LoadNamedSlots(slots) && slots.size() == 1 &&
                      slots[0].name == "Release signature" &&
@@ -660,6 +674,101 @@ int main(int argc, char** argv) {
                  !state_package::HasPendingConfigurationImport(directory) &&
                  Contains(directory / "config.json", "CONFIG_PACKAGE_SECRET"),
                  "pending configuration applies atomically at startup");
+
+    const auto configMatrixDirectory = directory / "beta-config-matrix";
+    std::filesystem::create_directories(configMatrixDirectory, ec);
+    SetEnvironmentVariableW(L"CLIPBOARDPP_TEST_DATA_DIR",
+                            configMatrixDirectory.wstring().c_str());
+    const std::vector<std::string> supportedBetas = {
+        "0.1.0-beta.1", "0.1.0-beta.2", "0.1.0-beta.3",
+        "0.1.0-beta.4", "0.1.0-beta.5", "0.1.0-beta.6",
+        "0.1.0-beta.7"};
+    for (size_t i = 0; i < supportedBetas.size(); ++i) {
+        const int hotkey = 'A' + static_cast<int>(i);
+        std::ofstream fixture(configMatrixDirectory / "config.json",
+                              std::ios::binary | std::ios::trunc);
+        fixture << "{\n"
+            "  \"version\": 1,\n"
+            "  \"appearance\": {\"theme\": 2, \"fontSize\": 17.0, "
+                "\"customThemeName\": \"Beta theme\"},\n"
+            "  \"hotkeys\": {\"bindings\": [{\"ctrl\": true, "
+                "\"shift\": false, \"alt\": true, \"vkey\": " << hotkey <<
+                ", \"action\": 1, \"data\": 0}]},\n"
+            "  \"images\": {\"captureImages\": false, \"format\": 2},\n"
+            "  \"newItemsAtTop\": false,\n"
+            "  \"appendNewlineAfterPaste\": true,\n"
+            "  \"activeClipboardId\": \"beta-profile\",\n"
+            "  \"clipboards\": [{\"id\": \"default\", \"name\": \"Default\", "
+                "\"createdAt\": \"old\"}, {\"id\": \"beta-profile\", "
+                "\"name\": \"Beta profile\", \"createdAt\": \"old\", "
+                "\"processName\": \"beta.exe\"}],\n"
+            "  \"customFilters\": [{\"id\": \"beta-filter\", "
+                "\"name\": \"Beta filter\", \"pattern\": \"needle\", "
+                "\"mode\": 0, \"target\": 0, \"enabled\": true}]\n"
+            "}\n";
+        fixture.close();
+        const ConfigStore::LoadResult loadedBeta = ConfigStore::LoadWithStatus();
+        const bool hotkeyPreserved = std::any_of(
+            loadedBeta.config.hotkeys.bindings.begin(),
+            loadedBeta.config.hotkeys.bindings.end(),
+            [hotkey](const KeyBinding& binding) {
+                return binding.vkey == static_cast<UINT>(hotkey) &&
+                       binding.ctrl && binding.alt;
+            });
+        ok &= Expect(loadedBeta.ok && loadedBeta.existed &&
+                     loadedBeta.config.activeClipboardId == "beta-profile" &&
+                     loadedBeta.config.clipboards.size() == 2 &&
+                     loadedBeta.config.clipboards[1].processName == "beta.exe" &&
+                     hotkeyPreserved &&
+                     loadedBeta.config.appearance.fontSize == 17.0f &&
+                     loadedBeta.config.images.captureImages == false &&
+                     loadedBeta.config.customFilters.size() == 1 &&
+                     !loadedBeta.config.newItemsAtTop &&
+                     loadedBeta.config.appendNewlineAfterPaste,
+                     ("public beta config upgrades without losing settings: " +
+                      supportedBetas[i]).c_str());
+    }
+    const std::string invalidConfig = "{ invalid configuration; do not overwrite }";
+    {
+        std::ofstream fixture(configMatrixDirectory / "config.json",
+                              std::ios::binary | std::ios::trunc);
+        fixture << invalidConfig;
+    }
+    const ConfigStore::LoadResult invalidLoaded = ConfigStore::LoadWithStatus();
+    ok &= Expect(!invalidLoaded.ok && invalidLoaded.existed &&
+                 !invalidLoaded.error.empty() &&
+                 Contains(configMatrixDirectory / "config.json", invalidConfig),
+                 "invalid configuration is reported and retained for safe-mode recovery");
+    SetEnvironmentVariableW(L"CLIPBOARDPP_TEST_DATA_DIR", nullptr);
+
+    const auto shutdownDirectory = directory / "shutdown-flush";
+    std::filesystem::create_directories(shutdownDirectory, ec);
+    SetEnvironmentVariableW(L"CLIPBOARDPP_TEST_DATA_DIR",
+                            shutdownDirectory.c_str());
+    AppConfig shutdownConfig;
+    shutdownConfig.clipboards = {{"default", "Default", "created", "updated", ""}};
+    shutdownConfig.activeClipboardId = "default";
+    {
+        ClipboardProfileManager manager(
+            shutdownConfig, [] {}, [](const std::string&) {}, [] { return std::string{}; },
+            [](ClipboardHistory*) {});
+        manager.Rebuild();
+        ClipboardHistory* active = manager.ActiveHistory();
+        ok &= Expect(active != nullptr, "shutdown persistence history is available");
+        if (active)
+            active->Push(MakeItem(0, "shutdown-flush-secret", false));
+        // Destruction immediately after the mutation must drain the pending save.
+    }
+    ClipboardDatabase afterShutdown;
+    std::string shutdownError;
+    ClipboardHistory shutdownHistory;
+    bool shutdownFound = false;
+    ok &= Expect(afterShutdown.Open(shutdownDirectory / "clipboard.db", &shutdownError) &&
+                 afterShutdown.LoadHistory("default", shutdownHistory, shutdownFound) &&
+                 shutdownFound && shutdownHistory.Size() == 1 &&
+                 shutdownHistory.Snapshot()[0].text == "shutdown-flush-secret",
+                 "orderly shutdown drains the queued encrypted history save");
+    SetEnvironmentVariableW(L"CLIPBOARDPP_TEST_DATA_DIR", nullptr);
 
     std::filesystem::remove_all(directory, ec);
     if (!ok) return 1;

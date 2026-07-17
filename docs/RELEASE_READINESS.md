@@ -2,6 +2,8 @@
 
 Use this checklist against the exact packaged release candidate. Record the version, commit, Windows build, tester, date, and evidence links. A successful build alone does not pass manual behavior checks.
 
+Automated prerequisite coverage and its limits are recorded in the [data-safety verification matrix](DATA_SAFETY_VERIFICATION.md). Run that suite first, then perform the candidate-specific checks below.
+
 ## Candidate identity
 
 - [ ] `VERSION`, executable file version, product version, About text, tag, release title, and archive names agree.
@@ -61,4 +63,3 @@ Use this checklist against the exact packaged release candidate. Record the vers
 - [ ] Known non-blocking defects are documented with workarounds.
 - [ ] At least one clean machine and one upgrade machine pass the checklist.
 - [ ] Maintainer records final go/no-go approval and preserves the completed checklist with the release artifacts.
-

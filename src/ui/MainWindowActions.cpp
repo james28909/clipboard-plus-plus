@@ -28,6 +28,8 @@ struct ActionEditorState {
     std::string importPayload;
     std::string status;
     SettingsStatus statusKind{SettingsStatus::Muted};
+    int64_t pendingDeleteId{};
+    std::string pendingDeleteLabel;
 };
 
 ActionEditorState& State() {
@@ -437,6 +439,7 @@ void MainWindow::DrawCustomActions() {
                 }
             }
 
+            bool requestDelete = false;
             const std::vector<CustomActionDefinition> actions = app->GetCustomActions();
             if (actions.empty()) {
                 EmptyState("No workflow buttons yet. Create one to transform, route, paste, or launch with selected clipboard data.");
@@ -469,10 +472,44 @@ void MainWindow::DrawCustomActions() {
                         state.statusKind = SettingsStatus::Warning;
                     }
                     ImGui::SameLine();
-                    if (DangerButton("Delete")) app->DeleteCustomAction(action.actionId);
+                    if (DangerButton("Delete")) {
+                        state.pendingDeleteId = action.actionId;
+                        state.pendingDeleteLabel = action.label;
+                        requestDelete = true;
+                    }
                     ImGui::PopID();
                 }
                 EndSettingsTable();
+            }
+
+            if (requestDelete)
+                ImGui::OpenPopup("Delete workflow action?");
+            if (ImGui::BeginPopupModal("Delete workflow action?", nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextUnformatted("Delete this workflow action permanently?");
+                if (!state.pendingDeleteLabel.empty())
+                    ImGui::TextDisabled("%s", state.pendingDeleteLabel.c_str());
+                ImGui::Spacing();
+                if (DangerButton("Delete permanently", 145.0f)) {
+                    std::string deleteError;
+                    const bool deleted =
+                        app->DeleteCustomAction(state.pendingDeleteId, &deleteError);
+                    state.status = deleted
+                        ? "Workflow action deleted."
+                        : "Could not delete the workflow action: " + deleteError;
+                    state.statusKind = deleted
+                        ? SettingsStatus::Success : SettingsStatus::Error;
+                    state.pendingDeleteId = 0;
+                    state.pendingDeleteLabel.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (PaddedButton("Cancel", 90.0f)) {
+                    state.pendingDeleteId = 0;
+                    state.pendingDeleteLabel.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
         } else {
             DrawActionEditor(app, state);

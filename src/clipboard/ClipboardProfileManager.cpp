@@ -387,8 +387,13 @@ bool ClipboardProfileManager::SaveCustomAction(CustomActionDefinition& action) {
     return m_database && m_database->SaveCustomAction(action);
 }
 
-bool ClipboardProfileManager::DeleteCustomAction(int64_t actionId) {
-    return m_database && m_database->DeleteCustomAction(actionId);
+bool ClipboardProfileManager::DeleteCustomAction(int64_t actionId,
+                                                 std::string* error) {
+    if (!m_database) {
+        if (error) *error = "The encrypted clipboard database is unavailable.";
+        return false;
+    }
+    return m_database->DeleteCustomAction(actionId, error);
 }
 
 ClipboardHistory* ClipboardProfileManager::ActiveHistory() const {

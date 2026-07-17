@@ -110,6 +110,14 @@ struct AppConfig {
 };
 
 namespace ConfigStore {
+    struct LoadResult {
+        AppConfig config;
+        bool ok{true};
+        bool existed{false};
+        std::string error;
+    };
+
+    LoadResult LoadWithStatus();
     AppConfig Load();
     bool Save(const AppConfig& config);
     std::filesystem::path Path();
